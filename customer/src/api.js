@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const BASE = 'http://localhost:8080/api'
+const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
 
 ax.interceptors.request.use(cfg => {
@@ -37,12 +37,27 @@ export const api = {
   logout:         () => ax.post('/auth/logout'),
   me:             () => ax.get('/auth/me'),
   updateLocation: d => ax.put('/auth/location', d),
+  totpSetup:      () => ax.post('/auth/totp/setup'),
+  totpEnable:     code => ax.post('/auth/totp/enable', { code }),
+  totpDisable:    code => ax.post('/auth/totp/disable', { code }),
+  registerPush:   token => ax.post('/notifications/register', { token }),
+  testPush:       (title, body, data = null) => ax.post('/notifications/test', { title, body, data }),
 
   // Shops & Products
   getShops:          p => ax.get('/shops', { params: p }),
   getProducts:       p => ax.get('/products', { params: p }),
   getProductReviews: id => ax.get(`/reviews/product/${id}`),
   search:            p => ax.get('/search', { params: p }),
+  searchByImage:     ({ file, lat, lng, radius = 20, category = '', limit = 12 }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (lat !== undefined && lat !== null) fd.append('lat', String(lat))
+    if (lng !== undefined && lng !== null) fd.append('lng', String(lng))
+    if (radius !== undefined && radius !== null) fd.append('radius', String(radius))
+    if (category) fd.append('category', category)
+    fd.append('limit', String(limit))
+    return ax.post('/search/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
   shareProduct:      id => ax.get(`/products/${id}/share`),
 
   // Orders
@@ -53,8 +68,8 @@ export const api = {
   pollStatus:     id => ax.get(`/orders/${id}/status`),
   getDeliveryFee: (shopLat, shopLng, custLat, custLng, subtotal = 0, isPremium = false, weather = null) =>
     ax.get('/delivery-fee', { params: { shopLat, shopLng, custLat, custLng, subtotal, isPremium, weather } }),
-  pricingPreview: (shopId, subtotal, custLat, custLng, weather = null) =>
-    ax.get('/orders/pricing-preview', { params: { shopId, subtotal, custLat, custLng, weather } }),
+  pricingPreview: (shopId, subtotal, custLat, custLng, weather = null, maxRadiusKm = null) =>
+    ax.get('/orders/pricing-preview', { params: { shopId, subtotal, custLat, custLng, weather, maxRadiusKm } }),
   genDeliveryOtp: id => ax.post(`/orders/${id}/delivery-otp/generate`),
   rateRider:      (id, rating) => ax.post(`/orders/${id}/rate-rider`, { rating }),
 

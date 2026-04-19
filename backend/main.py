@@ -1,4 +1,5 @@
-import os, time, math, json, random, urllib.parse, urllib.request, urllib.error, mimetypes, base64
+import os, time, math, json, random, urllib.parse, urllib.request, urllib.error, mimetypes, base64, io, hashlib, contextlib
+import httpx
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,13 +8,57 @@ from sqlalchemy import func, text
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
+from collections import Counter
 from pathlib import Path
 
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageChops
+except Exception:
+    Image = ImageFilter = ImageOps = ImageEnhance = ImageChops = None
+
+try:
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        from rembg import remove as rembg_remove
+except BaseException:
+    rembg_remove = None
+
+try:
+    import faiss
+except Exception:
+    faiss = None
+
+try:
+    import torch
+    from transformers import CLIPModel, CLIPProcessor
+except Exception:
+    torch = None
+    CLIPModel = None
+    CLIPProcessor = None
+
+try:
+    import pyotp
+except Exception:
+    pyotp = None
+
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging
+except Exception:
+    firebase_admin = None
+    credentials = None
+    messaging = None
+
 from database import (Base, engine, get_db, User, Shop, Product, Order, OrderItem,
-                      Review, ReturnRequest, RefreshToken, OTPStore,
-                      RoleEnum, OrderStatusEnum, ReturnStatusEnum)
+                      Review, ReturnRequest, RefreshToken, OTPStore, SettlementInvoice,
+                      SettlementPayment, RoleEnum, OrderStatusEnum, ReturnStatusEnum)
 from auth import (hash_password, verify_password, create_access_token, create_refresh_token,
                   decode_token, get_current_user)
+from config import settings
 from seed import seed_db
 
 Base.metadata.create_all(bind=engine)
@@ -30,6 +75,23 @@ for table_name, column_name, column_sql in [
     ("users", "returns_this_month", "INTEGER DEFAULT 0"),
     ("users", "high_return_user", "BOOLEAN DEFAULT 0"),
     ("users", "cod_enabled", "BOOLEAN DEFAULT 1"),
+    ("users", "totp_secret", "VARCHAR"),
+    ("users", "totp_enabled", "BOOLEAN DEFAULT 0"),
+    ("users", "fcm_token", "VARCHAR"),
+    ("products", "processed_image_url", "VARCHAR"),
+    ("products", "visual_embedding", "TEXT"),
+    ("products", "visual_embedding_model", "VARCHAR DEFAULT 'fallback-histogram-v1'"),
+    ("products", "image_ai_meta", "TEXT DEFAULT '{}'"),
+    ("products", "title", "VARCHAR"),
+    ("products", "product_type", "VARCHAR"),
+    ("products", "color", "VARCHAR"),
+    ("products", "gender", "VARCHAR"),
+    ("products", "fabric", "VARCHAR"),
+    ("products", "pattern", "VARCHAR"),
+    ("products", "fit", "VARCHAR"),
+    ("products", "occasion", "VARCHAR"),
+    ("products", "sleeve_type", "VARCHAR"),
+    ("products", "length", "VARCHAR"),
     ("orders", "base_delivery_fee", "FLOAT DEFAULT 20"),
     ("orders", "distance_fee", "FLOAT DEFAULT 0"),
     ("orders", "surge_fee", "FLOAT DEFAULT 0"),
@@ -51,6 +113,10 @@ for table_name, column_name, column_sql in [
     ("orders", "countdown_alert_level", "VARCHAR DEFAULT 'NONE'"),
     ("orders", "rider_bonus", "FLOAT DEFAULT 0"),
     ("orders", "rider_penalty", "FLOAT DEFAULT 0"),
+    ("orders", "pickup_otp", "VARCHAR"),
+    ("orders", "pickup_otp_used", "BOOLEAN DEFAULT 0"),
+    ("orders", "pickup_otp_generated_at", "DATETIME"),
+    ("orders", "pickup_otp_verified_at", "DATETIME"),
     ("return_requests", "reason_code", "VARCHAR DEFAULT 'OTHER'"),
     ("return_requests", "request_type", "VARCHAR DEFAULT 'refund'"),
     ("return_requests", "evidence_image_url", "VARCHAR"),
@@ -72,28 +138,12 @@ seed_db()
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-def load_env_file(path: Path):
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-load_env_file(Path(".env"))
-load_env_file(Path(__file__).resolve().parent / ".env")
-
-app = FastAPI(title="DOTT API", version="5.0.0")
+app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001","http://localhost:3002",
-                   "http://localhost:3003","http://localhost:3004","http://localhost:5173"],
+    allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
@@ -130,11 +180,28 @@ def haversine(lat1, lng1, lat2, lng2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 BASE_DELIVERY_FEE = 20.0
-DISTANCE_FEE_PER_KM = 5.0
+DISTANCE_FEE_PER_KM = 8.0
 PLATFORM_FEE = 10.0
 FREE_DELIVERY_THRESHOLD = 999.0
 NO_RETURN_BELOW = 300.0
 MAX_RETURNS_PER_MONTH = 3
+MAX_ORDER_DISTANCE_KM = 20.0
+MAX_DISCOVERY_RADIUS_KM = 10.0
+RIDER_PUSH_RADIUS_KM = 10.0
+
+def get_order_distance_limit(requested_radius_km: Optional[float] = None) -> float:
+    if requested_radius_km is None:
+        return MAX_ORDER_DISTANCE_KM
+    return round(max(1.0, min(float(requested_radius_km), MAX_ORDER_DISTANCE_KM)), 2)
+
+def get_discovery_radius_limit(requested_radius_km: Optional[float] = None) -> float:
+    if requested_radius_km is None:
+        return MAX_DISCOVERY_RADIUS_KM
+    try:
+        parsed = float(requested_radius_km)
+    except Exception:
+        parsed = MAX_DISCOVERY_RADIUS_KM
+    return round(max(1.0, min(parsed, MAX_DISCOVERY_RADIUS_KM)), 2)
 DELIVERY_PROMISE_MINUTES = 60
 RIDER_ON_TIME_BONUS = 20.0
 RIDER_DELAY_PENALTY = 10.0
@@ -290,19 +357,280 @@ def send_otp_mock(phone: str, otp: str):
     """In production replace with MSG91 / Twilio / Fast2SMS."""
     print(f"\n{'='*40}\nOTP for {phone}: {otp}\n{'='*40}\n")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-5")
+OPENAI_API_KEY = settings.openai_api_key.strip()
+OPENAI_BASE_URL = settings.openai_base_url
+OPENAI_IMAGE_MODEL = settings.openai_image_model
+PUBLIC_BASE_URL = settings.public_base_url
+IMAGE_CLEANUP_PROVIDER = (settings.image_cleanup_provider or "auto").strip().lower()
+REMOVE_BG_API_KEY = settings.remove_bg_api_key.strip()
+FIREBASE_SERVICE_ACCOUNT_JSON = (getattr(settings, "firebase_service_account_json", "") or "").strip()
+VISUAL_EMBED_MODEL = "clip-vit-base-patch32" if CLIPModel and CLIPProcessor and torch else "fallback-histogram-v1"
+_clip_bundle = None
+
+_firebase_app = None
+def get_firebase_app():
+    global _firebase_app
+    if _firebase_app is not None:
+        return _firebase_app
+    if not firebase_admin or not FIREBASE_SERVICE_ACCOUNT_JSON:
+        return None
+    try:
+        raw = FIREBASE_SERVICE_ACCOUNT_JSON
+        if raw.startswith("{"):
+            cred_dict = json.loads(raw)
+        else:
+            cred_dict = json.loads(base64.b64decode(raw).decode("utf-8"))
+        cred = credentials.Certificate(cred_dict)
+        _firebase_app = firebase_admin.initialize_app(cred)
+        return _firebase_app
+    except Exception:
+        return None
+
+def ensure_totp_available():
+    if not pyotp:
+        raise HTTPException(503, "TOTP provider not available. Install pyotp on the backend.")
+
+def verify_totp(secret: str, code: str) -> bool:
+    ensure_totp_available()
+    if not secret or not code:
+        return False
+    try:
+        return pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1)
+    except Exception:
+        return False
+
+def _safe_push_data(payload: Optional[dict]) -> dict:
+    return {str(k): str(v) for k, v in (payload or {}).items()}
+
+def send_push_to_user(user: Optional[User], title: str, body: str, data: Optional[dict] = None):
+    if not user or not getattr(user, "fcm_token", None):
+        return False
+    app = get_firebase_app()
+    if not app or not messaging:
+        return False
+    try:
+        msg = messaging.Message(
+            token=user.fcm_token,
+            notification=messaging.Notification(title=title, body=body),
+            data=_safe_push_data(data),
+        )
+        messaging.send(msg, app=app)
+        return True
+    except Exception:
+        return False
+
+def send_push_bulk(users: list[User], title: str, body: str, data: Optional[dict] = None):
+    app = get_firebase_app()
+    if not app or not messaging:
+        return 0
+    tokens = [u.fcm_token for u in users if u and getattr(u, "fcm_token", None)]
+    if not tokens:
+        return 0
+    try:
+        msg = messaging.MulticastMessage(
+            tokens=tokens,
+            notification=messaging.Notification(title=title, body=body),
+            data=_safe_push_data(data),
+        )
+        resp = messaging.send_multicast(msg, app=app)
+        return resp.success_count
+    except Exception:
+        return 0
+
+def _order_push_data(o: Order, extra: Optional[dict] = None) -> dict:
+    data = {
+        "type": "order",
+        "orderId": o.id,
+        "orderCode": o.order_code,
+        "status": o.status,
+        "shopId": o.shop_id,
+        "customerId": o.customer_id,
+        "riderId": o.rider_id or "",
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+def _return_push_data(rr: ReturnRequest, extra: Optional[dict] = None) -> dict:
+    data = {
+        "type": "return",
+        "returnId": rr.id,
+        "orderId": rr.order_id,
+        "status": rr.status,
+        "pickupStatus": rr.pickup_status or "",
+        "shopId": rr.shop_id,
+        "customerId": rr.customer_id,
+        "pickupRiderId": rr.pickup_rider_id or "",
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+def _nearby_riders(db: Session, lat: Optional[float], lng: Optional[float], radius_km: float) -> list:
+    if lat is None or lng is None:
+        return []
+    riders = db.query(User).filter(
+        User.role == RoleEnum.RIDER,
+        User.is_online == True,
+        User.lat != None,
+        User.lng != None
+    ).all()
+    nearby = []
+    for r in riders:
+        try:
+            if haversine(lat, lng, r.lat, r.lng) <= radius_km:
+                nearby.append(r)
+        except Exception:
+            continue
+    return nearby
+
+def notify_riders_new_order(db: Session, o: Order):
+    shop = o.shop
+    lat = shop.lat if shop else None
+    lng = shop.lng if shop else None
+    riders = _nearby_riders(db, lat, lng, RIDER_PUSH_RADIUS_KM)
+    if not riders:
+        return 0
+    title = "New order nearby"
+    body = f"Order {o.order_code} is ready to accept."
+    return send_push_bulk(riders, title, body, _order_push_data(o, {"action": "accept_or_reject"}))
+
+def notify_riders_return_pickup(db: Session, rr: ReturnRequest):
+    lat = rr.order.delivery_lat if rr.order else None
+    lng = rr.order.delivery_lng if rr.order else None
+    riders = _nearby_riders(db, lat, lng, RIDER_PUSH_RADIUS_KM)
+    if not riders:
+        return 0
+    title = "Return pickup nearby"
+    body = f"Return pickup requested for order {rr.order.order_code}."
+    return send_push_bulk(riders, title, body, _return_push_data(rr, {"action": "accept_or_reject"}))
+
+def _nearby_customers(db: Session, lat: Optional[float], lng: Optional[float], radius_km: float) -> list:
+    if lat is None or lng is None:
+        return []
+    users = db.query(User).filter(
+        User.role == RoleEnum.CUSTOMER,
+        User.lat != None,
+        User.lng != None
+    ).all()
+    nearby = []
+    for u in users:
+        try:
+            if haversine(lat, lng, u.lat, u.lng) <= radius_km:
+                nearby.append(u)
+        except Exception:
+            continue
+    return nearby
+
+def notify_customers_new_shop(db: Session, shop: Shop):
+    if not shop or shop.lat is None or shop.lng is None:
+        return 0
+    customers = _nearby_customers(db, shop.lat, shop.lng, MAX_DISCOVERY_RADIUS_KM)
+    if not customers:
+        return 0
+    title = "New shop near you"
+    body = f"{shop.name} just opened nearby. Check out new arrivals!"
+    return send_push_bulk(customers, title, body, {"type": "new_shop", "shopId": shop.id, "shopName": shop.name})
+
+def _top_rated_shops(db: Session, lat: float, lng: float, radius_km: float, limit: int = 3) -> list:
+    shops = db.query(Shop).filter(Shop.is_active == True, Shop.is_suspended == False).all()
+    scored = []
+    for s in shops:
+        if s.lat is None or s.lng is None:
+            continue
+        dist = haversine(lat, lng, s.lat, s.lng)
+        if dist > radius_km:
+            continue
+        score = (s.rating or 0.0, s.rating_count or 0, s.total_orders or 0)
+        scored.append((score, s))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [s for _, s in scored[:limit]]
+
+def _top_selling_products(db: Session, lat: float, lng: float, radius_km: float, limit: int = 4) -> list:
+    shops = [s for s in db.query(Shop).filter(Shop.is_active == True, Shop.is_suspended == False).all()
+             if s.lat is not None and s.lng is not None and haversine(lat, lng, s.lat, s.lng) <= radius_km]
+    if not shops:
+        return []
+    shop_ids = [s.id for s in shops]
+    since = datetime.utcnow() - timedelta(days=7)
+    orders = db.query(Order).filter(Order.status == OrderStatusEnum.DELIVERED, Order.shop_id.in_(shop_ids), Order.placed_at >= since).all()
+    if not orders:
+        return []
+    counts = Counter()
+    for o in orders:
+        for item in o.items:
+            counts[item.product_id] += item.qty
+    if not counts:
+        return []
+    top_ids = [pid for pid, _ in counts.most_common(limit)]
+    products = db.query(Product).filter(Product.id.in_(top_ids)).all()
+    prod_by_id = {p.id: p for p in products}
+    return [prod_by_id[pid] for pid in top_ids if pid in prod_by_id]
+
+LOCAL_ZERO_SHOT_LABELS = {
+    "category": [
+        ("Kids Ethnic Wear", "a catalog product photo of girls kids ethnic wear lehenga choli set with dupatta"),
+        ("Dresses", "a catalog product photo of a women's dress or gown"),
+        ("Kurtis", "a catalog product photo of a women's kurti"),
+        ("Sarees", "a catalog product photo of a saree with drape"),
+        ("Shirts", "a catalog product photo of a men's shirt"),
+        ("T-Shirts", "a catalog product photo of a t-shirt"),
+        ("Jeans", "a catalog product photo of jeans"),
+        ("Trousers", "a catalog product photo of trousers or pants"),
+        ("Jackets", "a catalog product photo of a jacket"),
+        ("Accessories", "a catalog product photo of a fashion accessory"),
+    ],
+    "productType": [
+        ("Lehenga Choli (3-piece set)", "a girls lehenga choli set with dupatta"),
+        ("Dress", "a women's long dress"),
+        ("Kurti", "a women's kurti top"),
+        ("Saree", "a saree garment"),
+        ("Shirt", "a men's button down shirt"),
+        ("T-Shirt", "a t-shirt"),
+        ("Jeans", "a pair of jeans"),
+        ("Trousers", "a pair of trousers"),
+        ("Jacket", "a jacket"),
+    ],
+    "pattern": [
+        ("Embroidered", "an embroidered garment with decorative work"),
+        ("Printed", "a printed garment with visible prints"),
+        ("Striped", "a striped garment"),
+        ("Floral", "a floral garment"),
+        ("Plain", "a plain solid-color garment"),
+    ],
+    "gender": [
+        ("Girls", "girls kids fashion clothing"),
+        ("Women", "women fashion clothing"),
+        ("Men", "men fashion clothing"),
+        ("Unisex", "unisex clothing item"),
+    ],
+    "usage": [
+        ("Festive", "festive ethnic occasion wear"),
+        ("Partywear", "partywear fashion clothing"),
+        ("Casual", "casual daily wear clothing"),
+        ("Everyday", "everyday wearable clothing"),
+    ],
+}
 
 PRODUCT_ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
         "name": {"type": "string"},
+        "title": {"type": "string"},
         "productType": {"type": "string"},
         "category": {"type": "string"},
         "brand": {"type": "string"},
         "color": {"type": "string"},
         "material": {"type": "string"},
+        "fabric": {"type": "string"},
+        "pattern": {"type": "string"},
+        "style": {"type": "string"},
+        "gender": {"type": "string"},
+        "usage": {"type": "string"},
+        "fit": {"type": "string"},
+        "occasion": {"type": "string"},
+        "sleeveType": {"type": "string"},
+        "length": {"type": "string"},
         "mrp": {"type": "string"},
         "suggestedPrice": {"type": "string"},
         "description": {"type": "string"},
@@ -310,10 +638,9 @@ PRODUCT_ANALYSIS_SCHEMA = {
         "sizes": {"type": "string"},
         "confidence": {"type": "string"},
         "presentation": {"type": "string"},
-        "title": {"type": "string"},
         "detail": {"type": "string"},
     },
-    "required": ["name", "productType", "category", "brand", "color", "material", "mrp", "suggestedPrice", "description", "tags", "sizes", "confidence", "presentation", "title", "detail"],
+    "required": ["name", "title", "productType", "category", "brand", "color", "material", "fabric", "pattern", "style", "gender", "usage", "fit", "occasion", "sleeveType", "length", "mrp", "suggestedPrice", "description", "tags", "sizes", "confidence", "presentation", "detail"],
     "additionalProperties": False,
 }
 
@@ -374,7 +701,953 @@ def save_image_bytes(user_id: int, image_bytes: bytes, suffix: str = "jpg") -> d
     filepath = UPLOAD_DIR / filename
     with open(filepath, "wb") as f:
         f.write(image_bytes)
-    return {"filename": filename, "url": f"http://localhost:8080/uploads/{filename}"}
+    return {"filename": filename, "url": f"/uploads/{filename}"}
+
+def json_loads_safe(value, fallback):
+    if not value:
+        return fallback
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+def parse_price_hint(value: str) -> str:
+    raw = (value or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return digits or raw
+
+def clean_filename_tokens(filename: str):
+    stem = Path(filename or "").stem.replace("_", " ").replace("-", " ").strip().lower()
+    if not stem:
+        return []
+    blocked = {
+        "screenshot", "img", "image", "photo", "camera", "pic", "picture", "whatsapp",
+        "bing", "google", "www", "jpeg", "jpg", "png", "webp", "upload"
+    }
+    tokens = []
+    for token in stem.split():
+        if token in blocked:
+            continue
+        if token.isdigit():
+            continue
+        if len(token) <= 2:
+            continue
+        tokens.append(token)
+    return tokens
+
+def detect_named_color(crop):
+    thumb = ImageOps.fit(crop.convert("RGB"), (48, 48), method=Image.LANCZOS)
+    pixels = list(thumb.getdata())
+    filtered = []
+    for r, g, b in pixels:
+        if max(r, g, b) < 35:
+            continue
+        if min(r, g, b) > 242:
+            continue
+        filtered.append((r, g, b))
+    if not filtered:
+        filtered = pixels
+    if np is not None:
+        arr = np.asarray(filtered, dtype="float32")
+        mean_r, mean_g, mean_b = arr.mean(axis=0).tolist()
+    else:
+        total = max(1, len(filtered))
+        mean_r = sum(px[0] for px in filtered) / total
+        mean_g = sum(px[1] for px in filtered) / total
+        mean_b = sum(px[2] for px in filtered) / total
+
+    palette = [
+        ("Black", (35, 35, 35)), ("White", (245, 245, 245)), ("Grey", (125, 125, 125)),
+        ("Cream", (236, 228, 202)), ("Beige", (209, 188, 157)), ("Gold", (205, 170, 95)),
+        ("Navy", (38, 56, 110)), ("Blue", (58, 110, 196)), ("Teal", (30, 131, 139)),
+        ("Green", (62, 132, 66)), ("Olive", (107, 121, 52)), ("Yellow", (220, 185, 50)),
+        ("Orange", (217, 120, 47)), ("Red", (180, 55, 63)), ("Pink", (214, 112, 155)),
+        ("Purple", (104, 72, 134)), ("Maroon", (104, 43, 60)), ("Brown", (116, 83, 52)),
+    ]
+    best = "Purple"
+    best_score = float("inf")
+    for name, (pr, pg, pb) in palette:
+        score = (mean_r - pr) ** 2 + (mean_g - pg) ** 2 + (mean_b - pb) ** 2
+        if score < best_score:
+            best = name
+            best_score = score
+    return best
+
+def infer_apparel_labels(presentation: str, bbox, image_size, filename: str):
+    width = max(1, bbox[2] - bbox[0]) if bbox else image_size[0]
+    height = max(1, bbox[3] - bbox[1]) if bbox else image_size[1]
+    ratio = width / height
+    coverage = (width * height) / max(1, image_size[0] * image_size[1])
+    height_ratio = height / max(1, image_size[1])
+    width_ratio = width / max(1, image_size[0])
+    tokens = clean_filename_tokens(filename)
+    token_text = " ".join(tokens)
+    if "saree" in token_text or "sari" in token_text:
+        return {"category": "Sarees", "productType": "saree", "name": "Saree"}
+    if "kurti" in token_text or "kurta" in token_text:
+        return {"category": "Kurtis", "productType": "kurti", "name": "Kurti"}
+    if "dress" in token_text or "gown" in token_text:
+        return {"category": "Dresses", "productType": "dress", "name": "Dress"}
+    if "shirt" in token_text or "tshirt" in token_text or "t-shirt" in token_text:
+        return {"category": "Shirts", "productType": "shirt", "name": "Shirt"}
+    if "jeans" in token_text or "trouser" in token_text or "pants" in token_text:
+        return {"category": "Jeans", "productType": "pants", "name": "Pants"}
+
+    if presentation == "drape":
+        if (width_ratio > 0.58 and height_ratio > 0.82 and coverage > 0.34) or (ratio < 0.68 and height_ratio > 0.78 and coverage > 0.22):
+            return {"category": "Kids", "productType": "lehenga", "name": "Kids Lehenga Set"}
+        if ratio < 0.58 and coverage > 0.28:
+            return {"category": "Kurtis", "productType": "kurti", "name": "Embroidered Kurti"}
+        if ratio < 0.75:
+            return {"category": "Dresses", "productType": "dress", "name": "Long Dress"}
+        return {"category": "Sarees", "productType": "saree", "name": "Saree"}
+    if presentation == "upper":
+        return {"category": "Shirts", "productType": "shirt", "name": "Shirt"}
+    if presentation == "lower":
+        return {"category": "Jeans", "productType": "pants", "name": "Pants"}
+    return {"category": "Fashion", "productType": "apparel", "name": "Fashion Product"}
+
+def infer_basic_product_analysis(filename: str, presentation: str = "fallback", color_name: str = "", bbox=None, image_size=(1000, 1000)) -> dict:
+    labels = infer_apparel_labels(presentation, bbox, image_size, filename)
+    pretty_color = color_name.strip() if color_name else ""
+    product_name = f"{pretty_color} {labels['name']}".strip() if pretty_color else labels["name"]
+    key = presentation if presentation in PRESENTATION_META else infer_presentation_key(" ".join(clean_filename_tokens(filename)))
+    if key == "fallback":
+        key = presentation if presentation in PRESENTATION_META else "fallback"
+    meta = PRESENTATION_META[key]
+    pattern = "plain"
+    style = "everyday"
+    gender = "unisex"
+    usage = "general"
+    if labels["productType"] in {"lehenga", "kurti", "dress", "saree"}:
+        style = "ethnic" if labels["productType"] in {"lehenga", "kurti", "saree"} else "occasion"
+        gender = "girls" if labels["productType"] == "lehenga" and labels["category"] == "Kids" else "women"
+        usage = "festive" if labels["productType"] in {"lehenga", "saree"} else "partywear"
+    elif labels["productType"] in {"shirt", "t-shirt", "jacket", "sweatshirt"}:
+        style = "casual"
+        gender = "men"
+        usage = "everyday"
+    elif labels["productType"] in {"pants", "jeans", "trousers"}:
+        style = "casual"
+        gender = "men"
+        usage = "dailywear"
+    return {
+        "name": product_name,
+        "title": product_name,
+        "productType": labels["productType"],
+        "category": labels["category"],
+        "brand": "",
+        "color": pretty_color,
+        "material": "",
+        "fabric": "",
+        "pattern": pattern,
+        "style": style,
+        "gender": gender,
+        "usage": usage,
+        "fit": "",
+        "occasion": "",
+        "sleeveType": "",
+        "length": "",
+        "mrp": "",
+        "suggestedPrice": "",
+        "description": f"{product_name} prepared for a cleaner e-commerce listing image.",
+        "tags": [labels["productType"], labels["category"].lower(), *( [pretty_color.lower()] if pretty_color else [] ), "fashion", "catalog"],
+        "sizes": "",
+        "confidence": "low",
+        "presentation": key,
+        "badge": meta["badge"],
+        "title": meta["title"],
+        "detail": meta["detail"],
+    }
+
+def normalize_category_name(value: str) -> str:
+    text = (value or "").strip().lower()
+    mapping = {
+        "lehenga": "Lehenga",
+        "kurtis": "Kurti",
+        "kurti": "Kurti",
+        "kurta": "Kurti",
+        "sarees": "Saree",
+        "saree": "Saree",
+        "shirts": "Shirt",
+        "shirt": "Shirt",
+        "jeans": "Jeans",
+        "pants": "Jeans",
+        "trousers": "Jeans",
+        "dresses": "Dress",
+        "dress": "Dress",
+        "fashion": "Fashion",
+    }
+    return mapping.get(text, (value or "Fashion").strip() or "Fashion")
+
+def title_case_words(value: str) -> str:
+    return " ".join(part.capitalize() for part in (value or "").replace("-", " ").split())
+
+def infer_fashion_defaults(category: str, product_type: str, analysis: dict) -> dict:
+    key = (product_type or category or "").strip().lower()
+    color = title_case_words(analysis.get("color") or "Classic")
+    material = (analysis.get("fabric") or analysis.get("material") or "").strip()
+    pattern = title_case_words(analysis.get("pattern") or "")
+    usage = (analysis.get("usage") or analysis.get("occasion") or "").strip().lower()
+    gender = title_case_words(analysis.get("gender") or "")
+    defaults = {
+        "lehenga": {"gender": "Women", "fabric": "Silk Blend", "pattern": "Embroidered", "fit": "Regular", "occasion": "Festival", "sleeveType": "Half Sleeve", "length": "Long", "brand": "DOTT Fashion", "price": "2499"},
+        "kurti": {"gender": "Women", "fabric": "Cotton Blend", "pattern": "Printed", "fit": "Regular", "occasion": "Casual", "sleeveType": "Three Quarter Sleeve", "length": "Long", "brand": "DOTT Fashion", "price": "999"},
+        "saree": {"gender": "Women", "fabric": "Silk Blend", "pattern": "Woven", "fit": "Regular", "occasion": "Festival", "sleeveType": "Not Applicable", "length": "Long", "brand": "DOTT Fashion", "price": "1799"},
+        "shirt": {"gender": "Men", "fabric": "Cotton", "pattern": "Plain", "fit": "Slim", "occasion": "Casual", "sleeveType": "Full Sleeve", "length": "Regular", "brand": "DOTT Classics", "price": "899"},
+        "jeans": {"gender": "Men", "fabric": "Denim", "pattern": "Solid", "fit": "Regular", "occasion": "Casual", "sleeveType": "Not Applicable", "length": "Full Length", "brand": "DOTT Classics", "price": "1299"},
+        "dress": {"gender": "Women", "fabric": "Polyester Blend", "pattern": "Printed", "fit": "Regular", "occasion": "Party", "sleeveType": "Sleeveless", "length": "Midi", "brand": "DOTT Fashion", "price": "1499"},
+        "apparel": {"gender": "Unisex", "fabric": "Cotton Blend", "pattern": "Solid", "fit": "Regular", "occasion": "Casual", "sleeveType": "Regular", "length": "Regular", "brand": "DOTT Fashion", "price": "999"},
+    }
+    preset = defaults.get(key, defaults["apparel"]).copy()
+    if material:
+        preset["fabric"] = title_case_words(material)
+    if pattern:
+        preset["pattern"] = pattern
+    if gender:
+        preset["gender"] = gender
+    if usage in {"festive", "festival"}:
+        preset["occasion"] = "Festival"
+    elif usage in {"partywear", "party"}:
+        preset["occasion"] = "Party"
+    elif usage in {"everyday", "dailywear", "casual"}:
+        preset["occasion"] = "Casual"
+    if key == "shirt" and "dress" in color.lower():
+        preset["gender"] = "Women"
+    return preset
+
+def generate_product_copy(analysis: dict, image_path: str = "") -> dict:
+    product_type = (analysis.get("productType") or analysis.get("category") or "apparel").strip().lower()
+    category = normalize_category_name(analysis.get("category") or analysis.get("productType") or "Fashion")
+    defaults = infer_fashion_defaults(category, product_type, analysis)
+    color = title_case_words(analysis.get("color") or "Classic")
+    fabric = title_case_words(analysis.get("fabric") or analysis.get("material") or defaults["fabric"])
+    pattern = title_case_words(analysis.get("pattern") or defaults["pattern"])
+    fit = title_case_words(analysis.get("fit") or defaults["fit"])
+    occasion = title_case_words(analysis.get("occasion") or analysis.get("usage") or defaults["occasion"])
+    gender = title_case_words(analysis.get("gender") or defaults["gender"])
+    sleeve_type = title_case_words(analysis.get("sleeveType") or defaults["sleeveType"])
+    length = title_case_words(analysis.get("length") or defaults["length"])
+    brand = (analysis.get("brand") or defaults["brand"]).strip()
+    price = parse_price_hint(analysis.get("suggestedPrice") or analysis.get("mrp") or defaults["price"])
+
+    descriptor_parts = [color]
+    if pattern and pattern.lower() not in {"solid", "plain", "regular"}:
+        descriptor_parts.append(pattern)
+    if fabric and fabric.lower() not in {"not applicable"}:
+        descriptor_parts.append(fabric)
+    descriptor = " ".join(dict.fromkeys(part for part in descriptor_parts if part))
+    base_name = title_case_words(analysis.get("name") or category)
+    if base_name.lower() == category.lower():
+        base_name = f"{descriptor} {category}".strip()
+    raw_title = (analysis.get("title") or "").strip()
+    presentation_titles = {meta["title"] for meta in PRESENTATION_META.values()}
+    if raw_title in presentation_titles or any(token in raw_title.lower() for token in ["render", "enhancement", "model fit", "studio"]):
+        raw_title = ""
+    title = (raw_title or f"{descriptor} {category} for {gender}").strip()
+    title = " ".join(title.split())
+
+    description = (
+        f"{title} with a clean catalogue-ready image, {pattern.lower()} finish, "
+        f"{fabric.lower()} feel, and a {fit.lower()} fit. Ideal for {occasion.lower()} use."
+    )
+    tags = []
+    for item in [
+        category, product_type, color, brand, fabric, pattern, fit, gender, occasion,
+        analysis.get("style"), "fashion", "catalogue", "vendor-upload"
+    ]:
+        token = (item or "").strip().lower().replace(" ", "-")
+        if token and token not in tags:
+            tags.append(token)
+    sizes = analysis.get("sizes") or ""
+    return {
+        "category": category,
+        "color": color,
+        "title": title,
+        "name": base_name,
+        "description": description,
+        "tags": tags,
+        "brand": brand,
+        "price": price,
+        "gender": gender,
+        "fabric": fabric,
+        "pattern": pattern,
+        "fit": fit,
+        "occasion": occasion,
+        "sleeveType": sleeve_type,
+        "length": length,
+        "productType": title_case_words(product_type),
+        "sizes": sizes,
+        "image_path": image_path,
+    }
+
+def pil_image_required():
+    if Image is None:
+        raise HTTPException(503, "Pillow is required for image processing on the backend.")
+
+def _clip_required():
+    return CLIPModel is not None and CLIPProcessor is not None and torch is not None
+
+def get_clip_bundle():
+    global _clip_bundle
+    if not _clip_required():
+        return None
+    if _clip_bundle is None:
+        processor = CLIPProcessor.from_pretrained(VISUAL_EMBED_MODEL)
+        model = CLIPModel.from_pretrained(VISUAL_EMBED_MODEL)
+        model.eval()
+        _clip_bundle = (processor, model)
+    return _clip_bundle
+
+def classify_crop_with_clip(image, label_prompts: list[tuple[str, str]], threshold: float = 0.34):
+    clip_bundle = get_clip_bundle()
+    if not clip_bundle or not label_prompts:
+        return None
+    processor, model = clip_bundle
+    labels = [item[0] for item in label_prompts]
+    prompts = [item[1] for item in label_prompts]
+    try:
+        inputs = processor(text=prompts, images=image, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            outputs = model(**inputs)
+            probs = outputs.logits_per_image.softmax(dim=1)[0].detach().cpu().tolist()
+        best_idx = max(range(len(probs)), key=lambda idx: probs[idx])
+        if probs[best_idx] < threshold:
+            return None
+        return {"label": labels[best_idx], "score": float(probs[best_idx])}
+    except Exception:
+        return None
+
+def load_pil_image(image_bytes: bytes):
+    pil_image_required()
+    image = Image.open(io.BytesIO(image_bytes))
+    image.load()
+    return image.convert("RGBA")
+
+def extract_border_palette(rgb_image, depth: int = 10, max_colors: int = 4):
+    width, height = rgb_image.size
+    border = Image.new("RGB", (width * 2 + height * 2, depth), (255, 255, 255))
+    border.paste(rgb_image.crop((0, 0, width, depth)), (0, 0))
+    border.paste(rgb_image.crop((0, height - depth, width, height)), (width, 0))
+    left_strip = rgb_image.crop((0, 0, depth, height)).resize((height, depth), Image.BILINEAR)
+    right_strip = rgb_image.crop((width - depth, 0, width, height)).resize((height, depth), Image.BILINEAR)
+    border.paste(left_strip, (width * 2, 0))
+    border.paste(right_strip, (width * 2 + height, 0))
+    quantized = border.quantize(colors=max(8, max_colors * 3), method=Image.MEDIANCUT)
+    palette = quantized.getpalette() or []
+    colors = quantized.getcolors() or []
+    ranked = []
+    for count, index in sorted(colors, reverse=True):
+        base = index * 3
+        if base + 2 >= len(palette):
+            continue
+        color = tuple(palette[base:base + 3])
+        if color not in ranked:
+            ranked.append(color)
+        if len(ranked) >= max_colors:
+            break
+    return ranked or [(255, 255, 255)]
+
+def fallback_remove_background(image_bytes: bytes):
+    image = load_pil_image(image_bytes)
+    rgb = image.convert("RGB")
+    if np is None:
+        return image, False
+
+    base = ImageOps.contain(rgb, (160, 160), method=Image.LANCZOS)
+    arr = np.asarray(base, dtype="float32")
+    h, w = arr.shape[:2]
+    palette = extract_border_palette(base, depth=max(4, min(base.size) // 18), max_colors=6)
+    palette_arr = np.asarray(palette, dtype="float32")
+    diffs = arr[:, :, None, :] - palette_arr[None, None, :, :]
+    min_dist = np.sqrt((diffs ** 2).sum(axis=3)).min(axis=2)
+    candidate_bg = min_dist < 42
+
+    visited = np.zeros((h, w), dtype=bool)
+    background = np.zeros((h, w), dtype=bool)
+    queue = []
+
+    for x in range(w):
+        queue.append((0, x))
+        queue.append((h - 1, x))
+    for y in range(h):
+        queue.append((y, 0))
+        queue.append((y, w - 1))
+
+    while queue:
+        y, x = queue.pop()
+        if y < 0 or x < 0 or y >= h or x >= w or visited[y, x]:
+            continue
+        visited[y, x] = True
+        if not candidate_bg[y, x]:
+            continue
+        background[y, x] = True
+        queue.extend([(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)])
+
+    subject = (~background).astype("uint8") * 255
+    mask_img = Image.fromarray(subject, mode="L").resize(rgb.size, Image.LANCZOS)
+    mask_img = mask_img.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(2))
+    mask_img = mask_img.point(lambda px: 255 if px > 108 else 0)
+
+    bbox = mask_img.getbbox()
+    if not bbox or (bbox[2] - bbox[0] > rgb.width * 0.96 and bbox[3] - bbox[1] > rgb.height * 0.96):
+        candidate_subject = min_dist > 34
+        visited_comp = np.zeros((h, w), dtype=bool)
+        components = []
+        for sy in range(h):
+            for sx in range(w):
+                if visited_comp[sy, sx] or not candidate_subject[sy, sx]:
+                    continue
+                stack = [(sy, sx)]
+                visited_comp[sy, sx] = True
+                pts = []
+                while stack:
+                    cy, cx = stack.pop()
+                    pts.append((cy, cx))
+                    for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                        if ny < 0 or nx < 0 or ny >= h or nx >= w or visited_comp[ny, nx] or not candidate_subject[ny, nx]:
+                            continue
+                        visited_comp[ny, nx] = True
+                        stack.append((ny, nx))
+                if len(pts) < max(24, (h * w) // 200):
+                    continue
+                ys = [p[0] for p in pts]
+                xs = [p[1] for p in pts]
+                cy = sum(ys) / len(ys)
+                cx = sum(xs) / len(xs)
+                centrality = 1.0 - (((cx - (w / 2)) / max(1, w / 2)) ** 2 + ((cy - (h / 2)) / max(1, h / 2)) ** 2)
+                score = len(pts) * max(0.05, centrality)
+                components.append((score, pts))
+        if components:
+            best_pts = max(components, key=lambda item: item[0])[1]
+            comp_mask = np.zeros((h, w), dtype="uint8")
+            for py, px in best_pts:
+                comp_mask[py, px] = 255
+            mask_img = Image.fromarray(comp_mask, mode="L").resize(rgb.size, Image.LANCZOS)
+            mask_img = mask_img.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(2))
+            mask_img = mask_img.point(lambda px: 255 if px > 96 else 0)
+            bbox = mask_img.getbbox()
+    if not bbox:
+        return image, False
+    if bbox[2] - bbox[0] > rgb.width * 0.97 and bbox[3] - bbox[1] > rgb.height * 0.97:
+        return image, False
+
+    result = image.copy()
+    result.putalpha(mask_img)
+    return result, True
+
+def remove_background_with_model(image_bytes: bytes):
+    if not rembg_remove:
+        return fallback_remove_background(image_bytes)
+    try:
+        output = rembg_remove(image_bytes)
+        return load_pil_image(output), True
+    except Exception:
+        return fallback_remove_background(image_bytes)
+
+def remove_background_with_remove_bg(image_bytes: bytes, filename: str):
+    if not REMOVE_BG_API_KEY:
+        raise HTTPException(503, "REMOVE_BG_API_KEY is not configured on the backend.")
+    media_type = guess_media_type(filename)
+    try:
+        response = httpx.post(
+            "https://api.remove.bg/v1.0/removebg",
+            headers={"X-Api-Key": REMOVE_BG_API_KEY},
+            data={"size": "auto", "format": "png"},
+            files={"image_file": (filename or "product.jpg", image_bytes, media_type)},
+            timeout=180,
+        )
+        response.raise_for_status()
+        return load_pil_image(response.content), True
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        raise HTTPException(502, f"remove.bg request failed: {detail}")
+    except Exception as exc:
+        raise HTTPException(502, f"remove.bg request failed: {exc}")
+
+def remove_background_with_provider(image_bytes: bytes, filename: str):
+    provider = IMAGE_CLEANUP_PROVIDER or "auto"
+    if provider in {"remove_bg", "remove.bg", "auto"} and REMOVE_BG_API_KEY:
+        try:
+            image, ok = remove_background_with_remove_bg(image_bytes, filename)
+            return image, ok, "remove.bg"
+        except HTTPException:
+            if provider not in {"auto"}:
+                raise
+        except Exception:
+            if provider not in {"auto"}:
+                raise
+    image, ok = remove_background_with_model(image_bytes)
+    return image, ok, "local-fallback"
+
+def longest_true_run(flags):
+    best = None
+    start = None
+    for idx, flag in enumerate(flags):
+        if flag and start is None:
+            start = idx
+        elif not flag and start is not None:
+            run = (start, idx - 1)
+            if best is None or (run[1] - run[0]) > (best[1] - best[0]):
+                best = run
+            start = None
+    if start is not None:
+        run = (start, len(flags) - 1)
+        if best is None or (run[1] - run[0]) > (best[1] - best[0]):
+            best = run
+    return best
+
+def refine_bbox_for_garment(image, bbox):
+    if not bbox:
+        return bbox
+    alpha = image.getchannel("A")
+    mask = alpha.point(lambda a: 255 if a > 18 else 0)
+    crop = mask.crop(bbox)
+    if np is not None:
+        arr = np.asarray(crop, dtype="uint8") > 0
+        row_counts = arr.sum(axis=1)
+        col_counts = arr.sum(axis=0)
+    else:
+        row_counts = []
+        col_counts = []
+        for y in range(crop.height):
+            count = 0
+            for x in range(crop.width):
+                if crop.getpixel((x, y)) > 0:
+                    count += 1
+            row_counts.append(count)
+        for x in range(crop.width):
+            count = 0
+            for y in range(crop.height):
+                if crop.getpixel((x, y)) > 0:
+                    count += 1
+            col_counts.append(count)
+
+    if not row_counts or max(row_counts) <= 0:
+        return bbox
+
+    row_peak = max(row_counts)
+    row_threshold = max(6, int(row_peak * 0.26))
+    row_run = longest_true_run([count >= row_threshold for count in row_counts])
+    if not row_run:
+        return bbox
+
+    top, bottom = row_run
+    top = max(0, top - max(8, crop.height // 40))
+    bottom = min(crop.height - 1, bottom + max(10, crop.height // 28))
+
+    trimmed = crop.crop((0, top, crop.width, bottom + 1))
+    if np is not None:
+        trimmed_arr = np.asarray(trimmed, dtype="uint8") > 0
+        col_counts = trimmed_arr.sum(axis=0)
+    else:
+        col_counts = []
+        for x in range(trimmed.width):
+            count = 0
+            for y in range(trimmed.height):
+                if trimmed.getpixel((x, y)) > 0:
+                    count += 1
+            col_counts.append(count)
+
+    col_peak = max(col_counts) if col_counts else 0
+    col_threshold = max(4, int(col_peak * 0.18))
+    col_run = longest_true_run([count >= col_threshold for count in col_counts])
+    if col_run:
+        left, right = col_run
+        left = max(0, left - max(8, trimmed.width // 36))
+        right = min(trimmed.width - 1, right + max(8, trimmed.width // 36))
+    else:
+        left, right = 0, crop.width - 1
+
+    refined = (
+        bbox[0] + left,
+        bbox[1] + top,
+        bbox[0] + right + 1,
+        bbox[1] + bottom + 1,
+    )
+
+    refined_w = refined[2] - refined[0]
+    refined_h = refined[3] - refined[1]
+    original_w = bbox[2] - bbox[0]
+    original_h = bbox[3] - bbox[1]
+    if refined_w < original_w * 0.35 or refined_h < original_h * 0.35:
+        return bbox
+    return refined
+
+def detect_subject_bbox(image):
+    alpha = image.getchannel("A")
+    bbox = alpha.point(lambda a: 255 if a > 18 else 0).getbbox()
+    if bbox:
+        return refine_bbox_for_garment(image, bbox)
+    rgb = image.convert("RGB")
+    bg = Image.new("RGB", rgb.size, (255, 255, 255))
+    diff = ImageOps.autocontrast(ImageChops.difference(rgb, bg))
+    bbox = diff.getbbox() or (0, 0, image.width, image.height)
+    return refine_bbox_for_garment(image, bbox)
+
+def fit_within_box(width: int, height: int, max_width: int, max_height: int):
+    if width <= 0 or height <= 0:
+        return max_width, max_height
+    scale = min(max_width / width, max_height / height)
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+def center_subject_on_canvas(source_image, bbox, canvas_size: int = 1000):
+    subject = source_image.crop(bbox)
+    target_w, target_h = fit_within_box(subject.width, subject.height, int(canvas_size * 0.76), int(canvas_size * 0.76))
+    subject = subject.resize((target_w, target_h), Image.LANCZOS)
+
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
+
+    shadow_alpha = subject.getchannel("A").resize((target_w, target_h), Image.LANCZOS)
+    shadow = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+    shadow.putalpha(shadow_alpha)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(18))
+    shadow_layer = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+
+    paste_x = (canvas_size - target_w) // 2
+    paste_y = max(int(canvas_size * 0.12), (canvas_size - target_h) // 2 - int(canvas_size * 0.02))
+    shadow_y = min(canvas_size - target_h, paste_y + max(18, int(canvas_size * 0.035)))
+    shadow_layer.alpha_composite(shadow, (paste_x, shadow_y))
+
+    canvas = Image.alpha_composite(canvas, shadow_layer)
+    canvas.alpha_composite(subject, (paste_x, paste_y))
+    return canvas, {"x": paste_x, "y": paste_y, "width": target_w, "height": target_h}
+
+def enhancement_quality_ok(image_size, bbox):
+    if not bbox:
+        return False
+    width = max(1, image_size[0])
+    height = max(1, image_size[1])
+    box_w = max(1, bbox[2] - bbox[0])
+    box_h = max(1, bbox[3] - bbox[1])
+    width_ratio = box_w / width
+    height_ratio = box_h / height
+    area_ratio = (box_w * box_h) / max(1, width * height)
+    bottom_ratio = bbox[3] / height
+
+    if width_ratio < 0.26 or height_ratio < 0.24:
+        return False
+    if area_ratio < 0.09:
+        return False
+    if bottom_ratio > 0.96 and width_ratio < 0.58 and height_ratio > 0.72:
+        return False
+    if area_ratio < 0.16 and height_ratio > 0.76:
+        return False
+    return True
+
+def add_soft_stage_background(image):
+    canvas = image.copy()
+    base = Image.new("RGBA", canvas.size, (255, 255, 255, 255))
+
+    # Keep the marketplace background mostly pure white while adding a subtle floor fade.
+    floor = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    for y in range(canvas.height):
+        progress = y / max(1, canvas.height - 1)
+        alpha = 0
+        if progress > 0.58:
+            alpha = int(min(20, ((progress - 0.58) / 0.42) * 20))
+        band = Image.new("RGBA", (canvas.width, 1), (235, 238, 242, alpha))
+        floor.alpha_composite(band, (0, y))
+
+    composed = Image.alpha_composite(base, floor)
+    return Image.alpha_composite(composed, canvas)
+
+def serialize_embedding(vector):
+    return json.dumps([round(float(v), 8) for v in vector])
+
+def deserialize_embedding(raw: str):
+    values = json_loads_safe(raw, [])
+    return [float(v) for v in values] if values else []
+
+def normalize_vector(vector):
+    if not vector:
+        return []
+    denom = math.sqrt(sum(float(v) * float(v) for v in vector))
+    if denom <= 1e-12:
+        return [0.0 for _ in vector]
+    return [float(v) / denom for v in vector]
+
+def cosine_similarity(vec_a, vec_b):
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    return float(sum(a * b for a, b in zip(vec_a, vec_b)))
+
+def compute_visual_embedding(image_bytes: bytes):
+    image = load_pil_image(image_bytes).convert("RGB")
+    clip_bundle = get_clip_bundle()
+    if clip_bundle:
+        processor, model = clip_bundle
+        inputs = processor(images=image, return_tensors="pt")
+        with torch.no_grad():
+            vector = model.get_image_features(**inputs)[0].detach().cpu().tolist()
+        return normalize_vector(vector), VISUAL_EMBED_MODEL
+
+    thumb = ImageOps.fit(image, (64, 64), method=Image.LANCZOS).convert("RGB")
+    histogram = thumb.histogram()
+    if np is not None:
+        arr = np.asarray(thumb, dtype="float32") / 255.0
+        channel_means = arr.mean(axis=(0, 1)).tolist()
+        channel_stds = arr.std(axis=(0, 1)).tolist()
+        flat = arr.reshape(-1, 3)
+        stripe = arr[::8, ::8, :].flatten().tolist()
+    else:
+        pixels = list(thumb.getdata())
+        total = max(1, len(pixels))
+        channel_means = [sum(px[i] for px in pixels) / (255.0 * total) for i in range(3)]
+        channel_stds = [0.0, 0.0, 0.0]
+        stripe = []
+        sample = pixels[::64]
+        for r, g, b in sample:
+            stripe.extend([r / 255.0, g / 255.0, b / 255.0])
+
+    hist_slice = [h / max(1, sum(histogram)) for h in histogram[::4]]
+    vector = hist_slice + channel_means + channel_stds + stripe[:192]
+    return normalize_vector(vector), "fallback-histogram-v1"
+
+def load_local_upload_bytes(image_url: str):
+    if not image_url:
+        return None
+    parsed = urllib.parse.urlparse(image_url)
+    if parsed.scheme in {"http", "https"}:
+        if parsed.netloc and "localhost:8080" not in parsed.netloc and PUBLIC_BASE_URL.split("://")[-1] not in parsed.netloc:
+            return None
+        path = parsed.path
+    else:
+        path = image_url
+    if "/uploads/" in path:
+        filename = path.split("/uploads/")[-1]
+        filepath = UPLOAD_DIR / filename
+        if filepath.exists():
+            return filepath.read_bytes()
+    return None
+
+def local_image_analysis(image_bytes: bytes, filename: str, prepared_image=None):
+    image = prepared_image
+    if image is None:
+        image, _ = remove_background_with_model(image_bytes)
+    bbox = detect_subject_bbox(image)
+    crop = image.crop(bbox).convert("RGB")
+    thumb = ImageOps.fit(crop, (48, 48), method=Image.LANCZOS)
+    if np is not None:
+        arr = np.asarray(thumb, dtype="float32")
+        brightness = float(arr.mean())
+        contrast = float(arr.std())
+    else:
+        pixels = list(thumb.getdata())
+        values = [(r + g + b) / 3.0 for r, g, b in pixels]
+        brightness = sum(values) / max(1, len(values))
+        contrast = 0.0
+    confidence = "high" if bbox and (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > image.width * image.height * 0.18 else "medium"
+    ratio = (bbox[2] - bbox[0]) / max(1, bbox[3] - bbox[1]) if bbox else 1.0
+    width_ratio = (bbox[2] - bbox[0]) / max(1, image.width) if bbox else 1.0
+    height_ratio = (bbox[3] - bbox[1]) / max(1, image.height) if bbox else 1.0
+    presentation = "fallback"
+    if ratio > 1.28:
+        presentation = "lower"
+    elif width_ratio > 0.82 and height_ratio < 0.82:
+        presentation = "upper"
+    elif ratio > 1.05 or (width_ratio > 0.56 and height_ratio < 0.84):
+        presentation = "upper"
+    elif ratio < 0.76 or height_ratio > 0.86:
+        presentation = "drape"
+    color_name = detect_named_color(crop)
+    meta = infer_basic_product_analysis(filename, presentation=presentation, color_name=color_name, bbox=bbox, image_size=image.size)
+    meta["presentation"] = presentation
+    meta.update(PRESENTATION_META[presentation])
+    meta["confidence"] = confidence
+    meta["color"] = color_name
+    analysis_model = "local-heuristic"
+
+    clip_category = classify_crop_with_clip(crop, LOCAL_ZERO_SHOT_LABELS["category"], threshold=0.31)
+    clip_type = classify_crop_with_clip(crop, LOCAL_ZERO_SHOT_LABELS["productType"], threshold=0.31)
+    clip_pattern = classify_crop_with_clip(crop, LOCAL_ZERO_SHOT_LABELS["pattern"], threshold=0.29)
+    clip_gender = classify_crop_with_clip(crop, LOCAL_ZERO_SHOT_LABELS["gender"], threshold=0.28)
+    clip_usage = classify_crop_with_clip(crop, LOCAL_ZERO_SHOT_LABELS["usage"], threshold=0.28)
+    if any([clip_category, clip_type, clip_pattern, clip_gender, clip_usage]):
+        analysis_model = "local-clip-zero-shot"
+
+    if clip_category:
+        meta["category"] = clip_category["label"]
+    if clip_type:
+        meta["productType"] = clip_type["label"]
+    if clip_pattern:
+        meta["pattern"] = clip_pattern["label"].lower()
+    if clip_gender:
+        meta["gender"] = clip_gender["label"].lower()
+    if clip_usage:
+        meta["usage"] = clip_usage["label"].lower()
+
+    if presentation == "drape" and meta["category"] == "Kurtis":
+        meta["sizes"] = "S,M,L,XL"
+        meta["material"] = "Rayon Blend"
+        meta["pattern"] = "embroidered"
+        meta["style"] = "ethnic"
+        meta["gender"] = "women"
+        meta["usage"] = "festive"
+        meta["description"] = f"{color_name} ethnic kurti with a flowy silhouette, festive detailing, and catalogue-ready styling."
+        meta["tags"] = [color_name.lower(), "kurti", "ethnicwear", "women", "festive", "embroidered"]
+    elif presentation == "drape" and meta["productType"] in {"lehenga", "Lehenga Choli (3-piece set)"}:
+        meta["sizes"] = "2Y,4Y,6Y,8Y"
+        meta["material"] = "Net Blend"
+        meta["pattern"] = "embroidered"
+        meta["style"] = "ethnic"
+        meta["gender"] = "girls"
+        meta["usage"] = "festive"
+        if color_name in {"Cream", "Beige", "Gold", "White"}:
+            meta["color"] = "Ivory / Off-White with Gold Accents"
+        meta["category"] = "Kids Ethnic Wear"
+        meta["productType"] = "Lehenga Choli (3-piece set)"
+        meta["name"] = "Girls Embroidered Lehenga Choli Set with Dupatta"
+        meta["description"] = f"{meta['color']} girls embroidered lehenga choli set with dupatta, festive detailing, elegant flare, and a catalogue-ready ethnic look."
+        meta["tags"] = ["girls", "kids-ethnic-wear", "lehenga-choli-set", "dupatta", "festive", "embroidered", meta["color"].lower().replace(' / ', '-').replace(' ', '-')]
+    elif presentation == "drape" and meta["category"] == "Dresses":
+        meta["sizes"] = "S,M,L,XL"
+        meta["material"] = "Viscose Blend"
+        meta["pattern"] = "printed" if contrast > 52 else "plain"
+        meta["style"] = "occasion"
+        meta["gender"] = "women"
+        meta["usage"] = "partywear"
+        meta["description"] = f"{color_name} long dress with a graceful fall, elegant fit, and polished everyday occasion styling."
+        meta["tags"] = [color_name.lower(), "dress", "women", "fashion", "partywear", meta["pattern"]]
+    elif presentation == "upper":
+        meta["sizes"] = "M,L,XL"
+        meta["material"] = "Cotton Blend"
+        meta["pattern"] = "striped" if contrast > 58 else "plain"
+        meta["style"] = "casual"
+        meta["gender"] = "men"
+        meta["usage"] = "everyday"
+        meta["description"] = f"{color_name} casual shirt with a clean button-down profile, everyday comfort, and a polished smart-casual look."
+        meta["tags"] = [color_name.lower(), "shirt", "menswear", "fashion", "casual", meta["pattern"]]
+    elif presentation == "lower":
+        meta["sizes"] = "30,32,34,36"
+        meta["material"] = "Denim Blend"
+        meta["pattern"] = "plain"
+        meta["style"] = "casual"
+        meta["gender"] = "men"
+        meta["usage"] = "dailywear"
+        meta["description"] = f"{color_name} bottom-wear with a structured fit, clean silhouette, and versatile everyday styling."
+        meta["tags"] = [color_name.lower(), "pants", "bottomwear", "fashion", "casual"]
+    meta["detail"] = f"{meta['detail']} Subject auto-centered with soft white-stage enhancement."
+    meta["qualityScore"] = round(min(0.99, max(0.55, (contrast / 90.0) + (brightness / 512.0))), 2)
+    meta["analysisSource"] = "local-model"
+    meta["analysisModel"] = analysis_model
+    return meta
+
+def merge_product_analysis(local_analysis: dict, enriched: dict) -> dict:
+    analysis = dict(local_analysis or {})
+    enriched = enriched or {}
+
+    for key, value in enriched.items():
+        if value in [None, "", [], {}]:
+            continue
+        analysis[key] = value
+
+    # Keep strong local color/category cues when the AI output is weak or generic.
+    if local_analysis.get("color"):
+        enriched_color = (enriched.get("color") or "").strip().lower()
+        if not enriched_color or enriched_color in {"unknown", "multi", "mixed", "multiple"}:
+            analysis["color"] = local_analysis["color"]
+
+    if local_analysis.get("category"):
+        enriched_category = (enriched.get("category") or "").strip().lower()
+        if not enriched_category or enriched_category in {"fashion", "apparel", "clothing"}:
+            analysis["category"] = local_analysis["category"]
+
+    if local_analysis.get("productType"):
+        enriched_type = (enriched.get("productType") or "").strip().lower()
+        if not enriched_type or enriched_type in {"fashion", "apparel", "product"}:
+            analysis["productType"] = local_analysis["productType"]
+
+    if local_analysis.get("material") and not enriched.get("material"):
+        analysis["material"] = local_analysis["material"]
+
+    for key in ("pattern", "style", "gender", "usage"):
+        if local_analysis.get(key) and not enriched.get(key):
+            analysis[key] = local_analysis[key]
+
+    if local_analysis.get("tags") and not enriched.get("tags"):
+        analysis["tags"] = local_analysis["tags"]
+
+    analysis["processingMode"] = local_analysis.get("processingMode", analysis.get("processingMode", "local-fallback"))
+    return analysis
+
+def process_product_image(image_bytes: bytes, filename: str):
+    image, bg_removed, cleanup_provider = remove_background_with_provider(image_bytes, filename)
+    bbox = detect_subject_bbox(image)
+    if not enhancement_quality_ok(image.size, bbox):
+        raise HTTPException(422, "Enhanced crop quality was not good enough. Use the original image or crop the garment more tightly.")
+    canvas, placement = center_subject_on_canvas(image, bbox, 1000)
+    final = add_soft_stage_background(canvas).convert("RGB")
+    output = io.BytesIO()
+    final.save(output, format="JPEG", quality=92, optimize=True)
+    analysis = local_image_analysis(image_bytes, filename, prepared_image=image)
+    analysis["backgroundRemoved"] = bg_removed
+    analysis["canvasSize"] = 1000
+    analysis["placement"] = placement
+    analysis["processingMode"] = cleanup_provider if bg_removed else "local-fallback"
+    return output.getvalue(), analysis
+
+def index_product_visual_embedding(product: Product):
+    source_url = getattr(product, "processed_image_url", None) or product.image_url
+    image_bytes = load_local_upload_bytes(source_url)
+    if not image_bytes:
+        return False
+    vector, model_name = compute_visual_embedding(image_bytes)
+    product.visual_embedding = serialize_embedding(vector)
+    product.visual_embedding_model = model_name
+    return True
+
+def build_visual_candidates(db: Session, lat: Optional[float] = None, lng: Optional[float] = None,
+                            radius: Optional[float] = 20.0, category: Optional[str] = None):
+    query = db.query(Product).filter(Product.is_active == True)
+    if category:
+        query = query.filter(Product.category.ilike(f"%{category}%"))
+    products = query.all()
+    bounded_radius = get_discovery_radius_limit(radius)
+    candidates = []
+    for product in products:
+        if lat is not None and lng is not None and product.shop and product.shop.lat and product.shop.lng:
+            distance = haversine(lat, lng, product.shop.lat, product.shop.lng)
+            if bounded_radius is not None and distance > bounded_radius:
+                continue
+        else:
+            distance = None
+        candidates.append((product, distance))
+    return candidates
+
+def rank_visual_matches(query_vector, candidates, limit: int = 12):
+    scored = []
+    vectors = []
+    indexed_rows = []
+    for product, distance in candidates:
+        stored = deserialize_embedding(getattr(product, "visual_embedding", None))
+        if not stored:
+            if not index_product_visual_embedding(product):
+                continue
+            stored = deserialize_embedding(getattr(product, "visual_embedding", None))
+        if not stored:
+            continue
+        score = cosine_similarity(query_vector, stored)
+        scored.append((product, distance, score))
+        vectors.append(stored)
+        indexed_rows.append((product, distance))
+
+    if faiss and vectors and np is not None:
+        matrix = np.asarray(vectors, dtype="float32")
+        q = np.asarray([query_vector], dtype="float32")
+        index = faiss.IndexFlatIP(matrix.shape[1])
+        index.add(matrix)
+        scores, ids = index.search(q, min(limit, len(indexed_rows)))
+        ordered = []
+        for score, idx in zip(scores[0], ids[0]):
+            if idx < 0:
+                continue
+            product, distance = indexed_rows[int(idx)]
+            ordered.append((product, distance, float(score)))
+        return ordered
+
+    scored.sort(key=lambda row: row[2], reverse=True)
+    return scored[:limit]
 
 def infer_presentation_key(text: str) -> str:
     value = (text or "").lower()
@@ -390,13 +1663,19 @@ def analyze_product_image_with_openai(image_bytes: bytes, filename: str) -> dict
     media_type = guess_media_type(filename)
     image_url = f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
     prompt = (
-        "Analyze this product photo for e-commerce listing preparation. "
-        "Also extract e-commerce product fields for auto-fill: name, category, brand, color, material, mrp, suggestedPrice, description, tags, and sizes. "
-        "Identify the product type and choose exactly one presentation mode from: upper, drape, lower, fallback. "
-        "Use upper for shirts/t-shirts/tops/upper wear on a realistic male model. "
-        "Use drape for sarees/dresses/female drape garments on a realistic female model. "
-        "Use lower for pants/jeans/trousers/lower-body garments on a lower-body model. "
-        "Use fallback if the product type is unclear or not suitable for model fitting. "
+        "Analyze this product photo for accurate e-commerce auto-fill. "
+        "Return the best possible structured identification for the actual visible product, not a generic fallback. "
+        "Extract: name, category, productType, brand, color, material, mrp, suggestedPrice, description, tags, sizes, confidence, presentation, title, detail. "
+        "Choose category from this set when relevant: Kids, Dresses, Kurtis, Kurtas, Sarees, Shirts, T-Shirts, Jeans, Trousers, Jackets, Sweatshirts, Skirts, Accessories, Fashion. "
+        "Choose productType with specific apparel names such as lehenga, dress, kurti, kurta, saree, shirt, t-shirt, jeans, trousers, jacket. "
+        "For kids ethnicwear, prefer specific labels like kids lehenga set rather than generic fashion product. "
+        "For light garments, distinguish cream, beige, off-white, white, and gold carefully; do not default to grey unless the garment is clearly grey. "
+        "Use the visible garment itself as the source of truth, not the filename. "
+        "Identify the product presentation and choose exactly one from: upper, drape, lower, fallback. "
+        "Use upper for shirts/t-shirts/tops/upper wear. "
+        "Use drape for lehenga, saree, dress, kurti, gown, or other draped garments. "
+        "Use lower for pants/jeans/trousers/lower-body garments. "
+        "Use fallback only if the product type is genuinely unclear. "
         "Return strict JSON only."
     )
     payload = {
@@ -436,6 +1715,10 @@ def analyze_product_image_with_openai(image_bytes: bytes, filename: str) -> dict
         "brand": result.get("brand", ""),
         "color": result.get("color", ""),
         "material": result.get("material", ""),
+        "pattern": result.get("pattern", ""),
+        "style": result.get("style", ""),
+        "gender": result.get("gender", ""),
+        "usage": result.get("usage", ""),
         "mrp": result.get("mrp", ""),
         "suggestedPrice": result.get("suggestedPrice", ""),
         "description": result.get("description", ""),
@@ -447,6 +1730,24 @@ def analyze_product_image_with_openai(image_bytes: bytes, filename: str) -> dict
         "title": result.get("title") or meta["title"],
         "detail": result.get("detail") or meta["detail"],
     }
+
+def get_best_product_analysis(image_bytes: bytes, filename: str, local_analysis: dict):
+    if not OPENAI_API_KEY:
+        local = dict(local_analysis or {})
+        local["analysisSource"] = local.get("analysisSource", "local-model")
+        local["analysisIssue"] = ""
+        return local
+    try:
+        enriched = analyze_product_image_with_openai(image_bytes, filename)
+        analysis = merge_product_analysis(local_analysis, enriched)
+        analysis["analysisSource"] = "openai"
+        analysis["analysisIssue"] = ""
+        return analysis
+    except Exception as exc:
+        local = dict(local_analysis or {})
+        local["analysisSource"] = local.get("analysisSource", "local-model")
+        local["analysisIssue"] = str(exc)
+        return local
 
 def build_image_edit_prompt(analysis: dict) -> str:
     base = (
@@ -515,6 +1816,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str; password: str
     lat: Optional[float]=None; lng: Optional[float]=None
+    totpCode: Optional[str] = None
 
 class PhoneRegisterRequest(BaseModel):
     name: str; phone: str; pin: str
@@ -525,6 +1827,7 @@ class PhoneRegisterRequest(BaseModel):
 class PhoneLoginRequest(BaseModel):
     phone: str; pin: str
     lat: Optional[float]=None; lng: Optional[float]=None
+    totpCode: Optional[str] = None
 
 class RiderLocationPing(BaseModel):
     lat: float; lng: float
@@ -535,12 +1838,39 @@ class RefreshRequest(BaseModel):
 class LocationUpdate(BaseModel):
     lat: float; lng: float
 
+class TotpVerifyRequest(BaseModel):
+    code: str
+
+class PushTokenRequest(BaseModel):
+    token: str
+
+class PushTestRequest(BaseModel):
+    title: str
+    body: str
+    data: Optional[dict] = None
+
+class AdminNearbyPushRequest(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    lat: float
+    lng: float
+    radiusKm: Optional[float] = None
+    includeTopRated: Optional[bool] = True
+    includeTopSelling: Optional[bool] = True
+    includeOpenShops: Optional[bool] = True
+    limit: Optional[int] = 3
+
 class PaymentDetailsUpdate(BaseModel):
     bankAccount:   Optional[str] = None
     bankIfsc:      Optional[str] = None
     bankName:      Optional[str] = None
     upiId:         Optional[str] = None
     paymentMethod: Optional[str] = "upi"  # "bank" or "upi"
+
+class RiderCodSettlementPay(BaseModel):
+    amount: Optional[float] = None
+    method: Optional[str] = "upi"
+    note: Optional[str] = None
 
 class ShopCreate(BaseModel):
     name: str; description: Optional[str]=None; category: str; address: str
@@ -561,18 +1891,36 @@ class ShopUpdate(BaseModel):
 class ProductCreate(BaseModel):
     name: str; description: Optional[str]=None; price: float
     category: Optional[str]=None; imageUrl: Optional[str]=None
+    processedImageUrl: Optional[str]=None
+    title: Optional[str]=None
+    productType: Optional[str]=None
+    color: Optional[str]=None
     images: Optional[str]="[]"
     colors: Optional[str]="[]"
     brand: Optional[str]=None; material: Optional[str]=None
+    fabric: Optional[str]=None; gender: Optional[str]=None
+    pattern: Optional[str]=None; fit: Optional[str]=None
+    occasion: Optional[str]=None; sleeveType: Optional[str]=None
+    length: Optional[str]=None
     tags: Optional[str]="[]"
+    imageAiMeta: Optional[str]="{}"
     stock: Optional[int]=10; isVeg: Optional[bool]=True
     hasSizes: Optional[bool]=False; sizes: Optional[str]="[]"
 
 class ProductUpdate(BaseModel):
     name: Optional[str]=None; price: Optional[float]=None; description: Optional[str]=None
     category: Optional[str]=None; imageUrl: Optional[str]=None
+    processedImageUrl: Optional[str]=None
+    title: Optional[str]=None
+    productType: Optional[str]=None
+    color: Optional[str]=None
     images: Optional[str]=None; colors: Optional[str]=None
-    brand: Optional[str]=None; material: Optional[str]=None; tags: Optional[str]=None
+    brand: Optional[str]=None; material: Optional[str]=None
+    fabric: Optional[str]=None; gender: Optional[str]=None
+    pattern: Optional[str]=None; fit: Optional[str]=None
+    occasion: Optional[str]=None; sleeveType: Optional[str]=None
+    length: Optional[str]=None; tags: Optional[str]=None
+    imageAiMeta: Optional[str]=None
     isActive: Optional[bool]=None; stock: Optional[int]=None; isVeg: Optional[bool]=None
     hasSizes: Optional[bool]=None; sizes: Optional[str]=None
 
@@ -584,9 +1932,13 @@ class OrderCreate(BaseModel):
     deliveryLat: Optional[float]=None; deliveryLng: Optional[float]=None
     paymentMethod: Optional[str]="cod"; promoCode: Optional[str]=None; notes: Optional[str]=None
     weather: Optional[str]=None
+    deliveryRadiusKm: Optional[float]=None
 
 class StatusUpdate(BaseModel):
     status: OrderStatusEnum; riderId: Optional[int]=None
+
+class PickupOtpVerifyRequest(BaseModel):
+    otp: str
 
 class ReviewCreate(BaseModel):
     productId: int; orderId: int; rating: int; comment: Optional[str]=None
@@ -616,7 +1968,9 @@ def user_dict(u: User, dist=None):
          "subscriptionPlan":getattr(u, "subscription_plan", "standard"),
          "returnsThisMonth":getattr(u, "returns_this_month", 0),
          "highReturnUser":getattr(u, "high_return_user", False),
-         "codEnabled":getattr(u, "cod_enabled", True)}
+         "codEnabled":getattr(u, "cod_enabled", True),
+         "totpEnabled": bool(getattr(u, "totp_enabled", False)),
+         "hasPushToken": bool(getattr(u, "fcm_token", None))}
     if dist is not None: d["distanceKm"] = round(dist, 1)
     return d
 
@@ -647,8 +2001,19 @@ def product_dict(p: Product, include_reviews=False):
     total_stock = sum(s.get("stock",0) for s in sizes_list) if (p.has_sizes and sizes_list) else p.stock
     d = {"id":p.id,"shopId":p.shop_id,"name":p.name,"description":p.description,
          "price":p.price,"category":p.category,"imageUrl":p.image_url,
+         "title":getattr(p, "title", None),
+         "productType":getattr(p, "product_type", None),
+         "color":getattr(p, "color", None),
          "images":images_list,"colors":colors_list,
-         "brand":getattr(p,'brand',None),"material":getattr(p,'material',None),"tags":tags_list,
+         "brand":getattr(p,'brand',None),"material":getattr(p,'material',None),
+         "fabric":getattr(p,'fabric',None),"gender":getattr(p,'gender',None),
+         "pattern":getattr(p,'pattern',None),"fit":getattr(p,'fit',None),
+         "occasion":getattr(p,'occasion',None),"sleeveType":getattr(p,'sleeve_type',None),
+         "length":getattr(p,'length',None),"tags":tags_list,
+         "processedImageUrl":getattr(p, "processed_image_url", None),
+         "imageAiMeta":json_loads_safe(getattr(p, "image_ai_meta", "{}"), {}),
+         "visualIndexed":bool(getattr(p, "visual_embedding", None)),
+         "visualEmbeddingModel":getattr(p, "visual_embedding_model", None),
          "stock":total_stock,"isActive":p.is_active,"isVeg":p.is_veg,
          "hasSizes":p.has_sizes,"sizes":sizes_list,
          "avgRating": round(sum(r.rating for r in p.reviews)/len(p.reviews),1) if p.reviews else 0,
@@ -717,6 +2082,10 @@ def order_dict(o: Order):
                 "lat":o.shop.lat,"lng":o.shop.lng,"phone":o.shop.phone,**(shop_ret or {})} if o.shop else None,
         "rider":{"id":o.rider.id,"name":o.rider.name,"phone":o.rider.phone} if o.rider else None,
         "riderId":o.rider_id,
+        "pickupOtpRequired": o.status == OrderStatusEnum.PACKING and bool(o.rider_id),
+        "pickupOtpGeneratedAt": o.pickup_otp_generated_at.isoformat() if getattr(o, "pickup_otp_generated_at", None) else None,
+        "pickupOtpVerified": bool(getattr(o, "pickup_otp_used", False)),
+        "pickupOtpVerifiedAt": o.pickup_otp_verified_at.isoformat() if getattr(o, "pickup_otp_verified_at", None) else None,
         "items":[{"id":i.id,"productId":i.product_id,"name":i.name,
                   "price":i.price,"qty":i.qty,"size":i.size,"imageUrl":i.image_url} for i in o.items],
         "returnRequest": ret,
@@ -812,6 +2181,11 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.password, user.password):
         raise HTTPException(401, "Invalid credentials")
     if user.is_blocked: raise HTTPException(403, "Account is blocked")
+    if getattr(user, "totp_enabled", False):
+        if not req.totpCode:
+            raise HTTPException(401, "TOTP code required")
+        if not verify_totp(getattr(user, "totp_secret", ""), req.totpCode):
+            raise HTTPException(401, "Invalid TOTP code")
     if req.lat and req.lng: user.lat = req.lat; user.lng = req.lng; db.commit()
     return build_auth(user, db)
 
@@ -830,6 +2204,82 @@ def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)
 
 @app.get("/api/auth/me")
 def me(user: User = Depends(get_current_user)): return user_dict(user)
+
+@app.post("/api/auth/totp/setup")
+def totp_setup(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_totp_available()
+    secret = getattr(user, "totp_secret", None) or pyotp.random_base32()
+    user.totp_secret = secret
+    user.totp_enabled = False
+    db.commit()
+    account_label = user.email or user.phone or f"user-{user.id}"
+    otpauth = pyotp.totp.TOTP(secret).provisioning_uri(name=account_label, issuer_name="DOTT")
+    return {"secret": secret, "otpAuthUrl": otpauth}
+
+@app.post("/api/auth/totp/enable")
+def totp_enable(body: TotpVerifyRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not getattr(user, "totp_secret", None):
+        raise HTTPException(400, "TOTP is not set up yet")
+    if not verify_totp(user.totp_secret, body.code):
+        raise HTTPException(400, "Invalid TOTP code")
+    user.totp_enabled = True
+    db.commit()
+    return {"enabled": True}
+
+@app.post("/api/auth/totp/disable")
+def totp_disable(body: TotpVerifyRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if getattr(user, "totp_enabled", False) and not verify_totp(getattr(user, "totp_secret", ""), body.code):
+        raise HTTPException(400, "Invalid TOTP code")
+    user.totp_enabled = False
+    db.commit()
+    return {"enabled": False}
+
+@app.post("/api/notifications/register")
+def register_push_token(body: PushTokenRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    token = body.token.strip()
+    if len(token) < 20:
+        raise HTTPException(400, "Invalid push token")
+    user.fcm_token = token
+    db.commit()
+    return {"ok": True}
+
+@app.post("/api/notifications/test")
+def test_push(body: PushTestRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.fcm_token:
+        raise HTTPException(400, "No push token registered")
+    app = get_firebase_app()
+    if not app or not messaging:
+        raise HTTPException(503, "Firebase push is not configured on the backend")
+    msg = messaging.Message(
+        token=user.fcm_token,
+        notification=messaging.Notification(title=body.title, body=body.body),
+        data={k: str(v) for k,v in (body.data or {}).items()},
+    )
+    resp = messaging.send(msg, app=app)
+    return {"ok": True, "messageId": resp}
+
+@app.post("/api/admin/notifications/nearby-highlights")
+def admin_nearby_highlights(body: AdminNearbyPushRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    radius = get_discovery_radius_limit(body.radiusKm)
+    customers = _nearby_customers(db, body.lat, body.lng, radius)
+    if not customers:
+        return {"sent": 0, "shops": 0, "products": 0}
+    shops = _top_rated_shops(db, body.lat, body.lng, radius, limit=body.limit or 3) if body.includeTopRated else []
+    products = _top_selling_products(db, body.lat, body.lng, radius, limit=body.limit or 3) if body.includeTopSelling else []
+    if body.includeOpenShops:
+        shops = [s for s in shops if s.is_open]
+    title = body.title or "Near you now"
+    body_text = body.body or "Top shops and popular products near your area."
+    data = {
+        "type": "nearby_highlights",
+        "radiusKm": radius,
+        "shopIds": ",".join([str(s.id) for s in shops]),
+        "productIds": ",".join([str(p.id) for p in products]),
+    }
+    sent = send_push_bulk(customers, title, body_text, data)
+    return {"sent": sent, "shops": len(shops), "products": len(products)}
 
 @app.post("/api/auth/phone/check")
 def phone_check(data: dict, db: Session = Depends(get_db)):
@@ -862,6 +2312,11 @@ def phone_login(req: PhoneLoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.pin, user.password):
         raise HTTPException(401, "Wrong number or PIN")
     if user.is_blocked: raise HTTPException(403, "Account blocked")
+    if getattr(user, "totp_enabled", False):
+        if not req.totpCode:
+            raise HTTPException(401, "TOTP code required")
+        if not verify_totp(getattr(user, "totp_secret", ""), req.totpCode):
+            raise HTTPException(401, "Invalid TOTP code")
     if req.lat and req.lng: user.lat = req.lat; user.lng = req.lng; db.commit()
     return build_auth(user, db)
 
@@ -895,11 +2350,15 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(get_cu
         raise HTTPException(400, "Image too large. Max 5 MB.")
     with open(filepath, "wb") as f:
         f.write(contents)
-    url = f"http://localhost:8080/uploads/{filename}"
+    url = f"/uploads/{filename}"
     return {"url": url, "filename": filename}
 
 @app.post("/api/upload/product-image-transform")
-async def upload_product_image_transform(file: UploadFile = File(...), user: User = Depends(get_current_user)):
+async def upload_product_image_transform(
+    file: UploadFile = File(...),
+    enhanceImage: bool = Form(True),
+    user: User = Depends(get_current_user),
+):
     if not file.content_type.startswith("image/"):
         raise HTTPException(400, "File must be an image")
     contents = await file.read()
@@ -907,29 +2366,163 @@ async def upload_product_image_transform(file: UploadFile = File(...), user: Use
         raise HTTPException(400, "Image too large. Max 8 MB.")
 
     original_saved = save_image_bytes(user.id, contents, "jpg")
-    if not OPENAI_API_KEY:
-        fallback = {
-            "productType": "",
-            "category": "",
-            "confidence": "low",
-            "presentation": "fallback",
-            "badge": PRESENTATION_META["fallback"]["badge"],
-            "title": PRESENTATION_META["fallback"]["title"],
-            "detail": "OPENAI_API_KEY is not configured, so the original uploaded image is being used.",
-        }
-        return {
-            "originalUrl": original_saved["url"],
-            "transformedUrl": original_saved["url"],
-            "analysis": fallback,
-        }
-
-    analysis = analyze_product_image_with_openai(contents, file.filename or "product.jpg")
-    transformed_bytes = transform_product_image_with_openai(contents, file.filename or "product.jpg", analysis)
-    transformed_saved = save_image_bytes(user.id, transformed_bytes, "png")
+    enhancement_rejected = False
+    if enhanceImage:
+        try:
+            transformed_bytes, local_analysis = process_product_image(contents, file.filename or "product.jpg")
+            transformed_saved = save_image_bytes(user.id, transformed_bytes, "jpg")
+        except HTTPException as exc:
+            if exc.status_code != 422:
+                raise
+            enhancement_rejected = True
+            local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
+            local_analysis["backgroundRemoved"] = False
+            local_analysis["canvasSize"] = None
+            local_analysis["placement"] = None
+            local_analysis["processingMode"] = "rejected-fallback"
+            transformed_saved = original_saved
+    else:
+        local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
+        local_analysis["backgroundRemoved"] = False
+        local_analysis["canvasSize"] = None
+        local_analysis["placement"] = None
+        local_analysis["processingMode"] = "analyze-only"
+        transformed_saved = original_saved
+    analysis = get_best_product_analysis(contents, file.filename or "product.jpg", local_analysis)
+    autofill = generate_product_copy(analysis, transformed_saved["url"])
+    analysis = {
+        **analysis,
+        **autofill,
+        "title": autofill["title"],
+        "name": autofill["name"],
+        "category": autofill["category"],
+        "color": autofill["color"],
+        "brand": autofill["brand"],
+        "description": autofill["description"],
+        "tags": autofill["tags"],
+        "suggestedPrice": autofill["price"],
+        "gender": autofill["gender"],
+        "fabric": autofill["fabric"],
+        "pattern": autofill["pattern"],
+        "fit": autofill["fit"],
+        "occasion": autofill["occasion"],
+        "sleeveType": autofill["sleeveType"],
+        "length": autofill["length"],
+        "productType": autofill["productType"],
+        "image_path": autofill["image_path"],
+    }
     return {
         "originalUrl": original_saved["url"],
         "transformedUrl": transformed_saved["url"],
         "analysis": analysis,
+        "autofill": autofill,
+        "analysisSource": analysis.get("analysisSource", "local-fallback"),
+        "analysisIssue": analysis.get("analysisIssue", ""),
+        "imageEdited": bool(enhanceImage and not enhancement_rejected),
+        "enhancementRejected": enhancement_rejected,
+    }
+
+@app.post("/api/upload/product-image-transform/bulk")
+async def upload_product_images_transform_bulk(
+    files: List[UploadFile] = File(...),
+    enhanceImage: bool = Form(True),
+    user: User = Depends(get_current_user),
+):
+    if not files:
+        raise HTTPException(400, "Upload at least one image.")
+    if len(files) > 20:
+        raise HTTPException(400, "Bulk upload supports up to 20 images at a time.")
+
+    items = []
+    for file in files:
+        item = {
+            "filename": file.filename or "product.jpg",
+            "contentType": file.content_type or "",
+        }
+        try:
+            if not (file.content_type or "").startswith("image/"):
+                raise HTTPException(400, "File must be an image")
+
+            contents = await file.read()
+            if len(contents) > 8 * 1024 * 1024:
+                raise HTTPException(400, "Image too large. Max 8 MB.")
+
+            original_saved = save_image_bytes(user.id, contents, "jpg")
+            enhancement_rejected = False
+            if enhanceImage:
+                try:
+                    transformed_bytes, local_analysis = process_product_image(contents, file.filename or "product.jpg")
+                    transformed_saved = save_image_bytes(user.id, transformed_bytes, "jpg")
+                except HTTPException as exc:
+                    if exc.status_code != 422:
+                        raise
+                    enhancement_rejected = True
+                    local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
+                    local_analysis["backgroundRemoved"] = False
+                    local_analysis["canvasSize"] = None
+                    local_analysis["placement"] = None
+                    local_analysis["processingMode"] = "rejected-fallback"
+                    transformed_saved = original_saved
+            else:
+                local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
+                local_analysis["backgroundRemoved"] = False
+                local_analysis["canvasSize"] = None
+                local_analysis["placement"] = None
+                local_analysis["processingMode"] = "analyze-only"
+                transformed_saved = original_saved
+            analysis = get_best_product_analysis(contents, file.filename or "product.jpg", local_analysis)
+            autofill = generate_product_copy(analysis, transformed_saved["url"])
+            analysis = {
+                **analysis,
+                **autofill,
+                "title": autofill["title"],
+                "name": autofill["name"],
+                "category": autofill["category"],
+                "color": autofill["color"],
+                "brand": autofill["brand"],
+                "description": autofill["description"],
+                "tags": autofill["tags"],
+                "suggestedPrice": autofill["price"],
+                "gender": autofill["gender"],
+                "fabric": autofill["fabric"],
+                "pattern": autofill["pattern"],
+                "fit": autofill["fit"],
+                "occasion": autofill["occasion"],
+                "sleeveType": autofill["sleeveType"],
+                "length": autofill["length"],
+                "productType": autofill["productType"],
+                "image_path": autofill["image_path"],
+            }
+
+            item.update({
+                "status": "ok",
+                "originalUrl": original_saved["url"],
+                "transformedUrl": transformed_saved["url"],
+                "analysis": analysis,
+                "autofill": autofill,
+                "analysisSource": analysis.get("analysisSource", "local-fallback"),
+                "analysisIssue": analysis.get("analysisIssue", ""),
+                "imageEdited": bool(enhanceImage and not enhancement_rejected),
+                "enhancementRejected": enhancement_rejected,
+            })
+        except HTTPException as exc:
+            item.update({
+                "status": "error",
+                "error": exc.detail,
+            })
+        except Exception:
+            item.update({
+                "status": "error",
+                "error": "Processing failed for this image.",
+            })
+        items.append(item)
+
+    success_count = len([item for item in items if item["status"] == "ok"])
+    return {
+        "items": items,
+        "total": len(items),
+        "succeeded": success_count,
+        "failed": len(items) - success_count,
     }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -966,9 +2559,14 @@ def get_shops(category: Optional[str]=None, search: Optional[str]=None,
     if category: q = q.filter(Shop.category == category)
     if search:   q = q.filter(Shop.name.ilike(f"%{search}%"))
     result = []
+    bounded_radius = get_discovery_radius_limit(radius)
     for s in q.all():
         dist = haversine(lat, lng, s.lat, s.lng) if (lat and lng) else None
-        if dist is not None and s.lat and s.lng and dist > radius: continue
+        if lat is not None and lng is not None:
+            if s.lat is None or s.lng is None:
+                continue
+            if dist is not None and dist > bounded_radius:
+                continue
         result.append(shop_dict(s, dist))
     result.sort(key=lambda x: x.get("distanceKm", 9999))
     return result
@@ -990,6 +2588,10 @@ def create_shop(body: ShopCreate, user: User = Depends(get_current_user), db: Se
                 accepts_returns=body.acceptsReturns, return_days=body.returnDays,
                 return_policy_note=body.returnPolicyNote, is_open=True, is_active=True)
     db.add(shop); db.commit(); db.refresh(shop)
+    try:
+        notify_customers_new_shop(db, shop)
+    except Exception:
+        pass
     return shop_dict(shop)
 
 @app.put("/api/shops/{shop_id}")
@@ -1021,8 +2623,9 @@ def get_products(shopId: Optional[int]=None, lat: Optional[float]=None,
     if shopId: q = q.filter(Product.shop_id == shopId)
     products = q.all()
     if lat and lng and not shopId:
+        bounded_radius = get_discovery_radius_limit(radius)
         nearby_ids = {s.id for s in db.query(Shop).filter(Shop.is_active==True,Shop.is_suspended==False).all()
-                      if not s.lat or not s.lng or haversine(lat, lng, s.lat, s.lng) <= radius}
+                      if s.lat is not None and s.lng is not None and haversine(lat, lng, s.lat, s.lng) <= bounded_radius}
         products = [p for p in products if p.shop_id in nearby_ids]
     return [product_dict(p) for p in products]
 
@@ -1042,13 +2645,19 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 def add_product(body: ProductCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
     if not shop: raise HTTPException(400, "Create a shop first")
-    p = Product(shop_id=shop.id, name=body.name[:100], description=body.description,
+    p = Product(shop_id=shop.id, name=body.name[:100], title=(body.title or body.name)[:160], description=body.description,
                 price=body.price, category=body.category, image_url=body.imageUrl,
+                product_type=body.productType, color=body.color,
                 images=body.images or "[]", colors=body.colors or "[]",
                 brand=body.brand, material=body.material, tags=body.tags or "[]",
+                fabric=body.fabric, gender=body.gender, pattern=body.pattern, fit=body.fit,
+                occasion=body.occasion, sleeve_type=body.sleeveType, length=body.length,
+                processed_image_url=body.processedImageUrl, image_ai_meta=body.imageAiMeta or "{}",
                 stock=body.stock, is_veg=body.isVeg if body.isVeg is not None else True,
                 has_sizes=body.hasSizes or False, sizes=body.sizes or "[]")
     db.add(p); db.commit(); db.refresh(p)
+    if index_product_visual_embedding(p):
+        db.commit(); db.refresh(p)
     return product_dict(p)
 
 @app.put("/api/products/{product_id}")
@@ -1059,15 +2668,24 @@ def update_product(product_id: int, body: ProductUpdate,
     shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
     if not shop or p.shop_id != shop.id: raise HTTPException(403)
     for attr, col in [("name","name"),("price","price"),("description","description"),
-                       ("category","category"),("imageUrl","image_url"),("isVeg","is_veg"),("sizes","sizes"),
-                       ("images","images"),("colors","colors"),("brand","brand"),("material","material"),("tags","tags")]:
+                       ("title","title"),("productType","product_type"),("color","color"),
+                       ("category","category"),("imageUrl","image_url"),("processedImageUrl", "processed_image_url"),
+                       ("isVeg","is_veg"),("sizes","sizes"),
+                       ("images","images"),("colors","colors"),("brand","brand"),("material","material"),
+                       ("fabric","fabric"),("gender","gender"),("pattern","pattern"),("fit","fit"),
+                       ("occasion","occasion"),("sleeveType","sleeve_type"),("length","length"),
+                       ("tags","tags"), ("imageAiMeta", "image_ai_meta")]:
         val = getattr(body, attr, None)
         if val is not None: setattr(p, col, val)
     if body.isActive is not None: p.is_active = body.isActive
     if body.stock is not None:    p.stock = body.stock
     if body.hasSizes is not None: p.has_sizes = body.hasSizes
     if body.imageUrl == '': p.image_url = None
+    if body.processedImageUrl == '': p.processed_image_url = None
     db.commit(); db.refresh(p)
+    if any(getattr(body, field, None) is not None for field in ["imageUrl", "processedImageUrl", "images", "colors"]):
+        if index_product_visual_embedding(p):
+            db.commit(); db.refresh(p)
     return product_dict(p)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1107,6 +2725,9 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
     km = haversine(shop.lat, shop.lng, body.deliveryLat, body.deliveryLng)
     if km == 9999: km = 3.0   # default 3km if coords missing
     km = round(km, 2)
+    allowed_km = get_order_distance_limit(body.deliveryRadiusKm)
+    if body.deliveryLat is not None and body.deliveryLng is not None and km > allowed_km:
+        raise HTTPException(400, f"This shop is outside your local delivery range. NearNow only allows ordering within {allowed_km:g} km.")
     pricing = compute_pricing(subtotal, km, getattr(user, "is_premium", False), body.weather)
     delivery_fee = pricing["deliveryFee"]
     rider_earn   = calc_rider_earning(km)
@@ -1136,6 +2757,12 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
     wa_url = build_whatsapp_url(order, shop, user, "\n".join(items_text_lines))
     result["vendorWhatsappUrl"] = wa_url
     result["shopWhatsappMode"] = shop.whatsapp_mode
+    try:
+        send_push_to_user(user, "Order placed", f"Your order {order.order_code} was placed successfully.", _order_push_data(order))
+        if shop and shop.owner:
+            send_push_to_user(shop.owner, "New order received", f"New order {order.order_code} from {user.name}.", _order_push_data(order))
+    except Exception:
+        pass
     return result
 
 @app.get("/api/orders/my")
@@ -1161,7 +2788,13 @@ def vendor_accept(order_id: int, user: User = Depends(get_current_user), db: Ses
     o.status = OrderStatusEnum.CONFIRMED
     o.confirmed_at = datetime.utcnow()
     start_delivery_countdown(o, o.confirmed_at)
-    db.commit(); db.refresh(o); return order_dict(o)
+    db.commit(); db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Order confirmed", f"Order {o.order_code} has been confirmed.", _order_push_data(o))
+        notify_riders_new_order(db, o)
+    except Exception:
+        pass
+    return order_dict(o)
 
 @app.post("/api/orders/{order_id}/reject")
 def vendor_reject(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1170,7 +2803,13 @@ def vendor_reject(order_id: int, user: User = Depends(get_current_user), db: Ses
     shop = db.query(Shop).filter(Shop.owner_id == user.id, Shop.id == o.shop_id).first()
     if not shop: raise HTTPException(403)
     if o.status != OrderStatusEnum.PENDING: raise HTTPException(400)
-    o.status = OrderStatusEnum.CANCELLED; db.commit(); db.refresh(o); return order_dict(o)
+    o.status = OrderStatusEnum.CANCELLED
+    db.commit(); db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Order cancelled", f"Order {o.order_code} was cancelled by the shop.", _order_push_data(o))
+    except Exception:
+        pass
+    return order_dict(o)
 
 @app.get("/api/orders/rider/available")
 def rider_available(lat: Optional[float]=None, lng: Optional[float]=None, radius: Optional[float]=8.0,
@@ -1187,12 +2826,20 @@ def rider_available(lat: Optional[float]=None, lng: Optional[float]=None, radius
 
 @app.post("/api/orders/{order_id}/rider-accept")
 def rider_accept(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if user.role != RoleEnum.RIDER: raise HTTPException(403)
+    if user.role != RoleEnum.RIDER:
+        raise HTTPException(403, "Only rider accounts can accept delivery orders")
     o = db.query(Order).filter(Order.id == order_id).first()
     if not o: raise HTTPException(404)
     if o.status != OrderStatusEnum.CONFIRMED or o.rider_id: raise HTTPException(400, "Order not available")
     o.rider_id = user.id; o.status = OrderStatusEnum.PACKING
-    db.commit(); db.refresh(o); return order_dict(o)
+    db.commit(); db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Rider assigned", f"{user.name} is preparing your order.", _order_push_data(o))
+        if o.shop and o.shop.owner:
+            send_push_to_user(o.shop.owner, "Rider assigned", f"Rider {user.name} accepted order {o.order_code}.", _order_push_data(o))
+    except Exception:
+        pass
+    return order_dict(o)
 
 @app.get("/api/orders/rider/active")
 def rider_active(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1223,13 +2870,19 @@ def update_status(order_id: int, body: StatusUpdate,
                 raise HTTPException(400, "Order must be CONFIRMED before preparing")
             if not o.rider_id:
                 raise HTTPException(400, "⏳ Waiting for a rider to accept first. You can start preparing only after a rider accepts the delivery.")
+            o.pickup_otp = None
+            o.pickup_otp_used = False
+            o.pickup_otp_generated_at = None
+            o.pickup_otp_verified_at = None
         else:
             raise HTTPException(403, "Vendors can only mark order as Preparing. All delivery updates are handled by the rider.")
 
     elif user.role == RoleEnum.RIDER:
-        # Rider can move: PACKING→PICKED_UP→OUT_FOR_DELIVERY→DELIVERED
+        # Rider can move: PICKED_UP→OUT_FOR_DELIVERY→DELIVERED
         if o.rider_id and o.rider_id != user.id: raise HTTPException(403, "This delivery is assigned to another rider")
-        allowed_rider = [OrderStatusEnum.PICKED_UP, OrderStatusEnum.OUT_FOR_DELIVERY, OrderStatusEnum.DELIVERED]
+        if body.status == OrderStatusEnum.PICKED_UP:
+            raise HTTPException(400, "Vendor pickup OTP is required before marking this order as picked up")
+        allowed_rider = [OrderStatusEnum.OUT_FOR_DELIVERY, OrderStatusEnum.DELIVERED]
         if body.status not in allowed_rider:
             raise HTTPException(403, "Riders can only update: Picked Up → Out for Delivery → Delivered")
 
@@ -1249,7 +2902,19 @@ def update_status(order_id: int, body: StatusUpdate,
         o.countdown_alert_level = timer["alertLevel"]
     if body.status == OrderStatusEnum.DELIVERED:
         finalize_delivery_timing(o)
-    db.commit(); db.refresh(o); return order_dict(o)
+    db.commit(); db.refresh(o)
+    try:
+        if body.status == OrderStatusEnum.PACKING:
+            send_push_to_user(o.customer, "Order is being prepared", f"Shop started preparing order {o.order_code}.", _order_push_data(o))
+        elif body.status == OrderStatusEnum.OUT_FOR_DELIVERY:
+            send_push_to_user(o.customer, "Out for delivery", f"Order {o.order_code} is on the way.", _order_push_data(o))
+        elif body.status == OrderStatusEnum.DELIVERED:
+            send_push_to_user(o.customer, "Delivered", f"Order {o.order_code} was delivered.", _order_push_data(o))
+            if o.shop and o.shop.owner:
+                send_push_to_user(o.shop.owner, "Order delivered", f"Order {o.order_code} has been delivered.", _order_push_data(o))
+    except Exception:
+        pass
+    return order_dict(o)
 
 @app.put("/api/orders/{order_id}/cancel")
 def cancel_order(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1258,9 +2923,84 @@ def cancel_order(order_id: int, user: User = Depends(get_current_user), db: Sess
     if user.role == RoleEnum.CUSTOMER:
         if o.customer_id != user.id: raise HTTPException(403)
         if o.status != OrderStatusEnum.PENDING: raise HTTPException(400, "Cannot cancel at this stage")
-    o.status = OrderStatusEnum.CANCELLED; db.commit(); db.refresh(o); return order_dict(o)
+    o.status = OrderStatusEnum.CANCELLED
+    db.commit(); db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Order cancelled", f"Order {o.order_code} was cancelled.", _order_push_data(o))
+        if o.shop and o.shop.owner:
+            send_push_to_user(o.shop.owner, "Order cancelled", f"Order {o.order_code} was cancelled by the customer.", _order_push_data(o))
+    except Exception:
+        pass
+    return order_dict(o)
 
 # ═══════════════════════════════════════════════════════════════════
+@app.post("/api/orders/{order_id}/pickup-otp/generate")
+def generate_pickup_otp(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role not in [RoleEnum.OWNER, RoleEnum.ADMIN]:
+        raise HTTPException(403)
+    o = db.query(Order).filter(Order.id == order_id).first()
+    if not o:
+        raise HTTPException(404)
+    if user.role == RoleEnum.OWNER:
+        shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
+        if not shop or o.shop_id != shop.id:
+            raise HTTPException(403)
+    if o.status != OrderStatusEnum.PACKING:
+        raise HTTPException(400, "Pickup OTP can only be generated after preparation starts")
+    if not o.rider_id:
+        raise HTTPException(400, "Assign a rider before generating the pickup OTP")
+    otp = generate_otp()
+    o.pickup_otp = otp
+    o.pickup_otp_used = False
+    o.pickup_otp_generated_at = datetime.utcnow()
+    o.pickup_otp_verified_at = None
+    db.commit()
+    return {"otp": otp, "message": "Share this OTP with the rider at pickup time"}
+
+@app.get("/api/orders/{order_id}/pickup-otp")
+def get_pickup_otp(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    o = db.query(Order).filter(Order.id == order_id).first()
+    if not o:
+        raise HTTPException(404)
+    if user.role == RoleEnum.OWNER:
+        shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
+        if not shop or o.shop_id != shop.id:
+            raise HTTPException(403)
+    elif user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    if not o.pickup_otp or o.pickup_otp_used:
+        raise HTTPException(404, "No active pickup OTP found")
+    return {
+        "otp": o.pickup_otp,
+        "generatedAt": o.pickup_otp_generated_at.isoformat() if o.pickup_otp_generated_at else None,
+    }
+
+@app.post("/api/orders/{order_id}/pickup-otp/verify")
+def verify_pickup_otp(order_id: int, body: PickupOtpVerifyRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER:
+        raise HTTPException(403)
+    o = db.query(Order).filter(Order.id == order_id).first()
+    if not o or o.rider_id != user.id:
+        raise HTTPException(403)
+    if o.status != OrderStatusEnum.PACKING:
+        raise HTTPException(400, "Order is not ready for pickup verification")
+    if not o.pickup_otp or o.pickup_otp_used:
+        raise HTTPException(400, "Vendor has not generated an active pickup OTP yet")
+    if o.pickup_otp != body.otp.strip():
+        raise HTTPException(400, "Wrong pickup OTP")
+    o.pickup_otp_used = True
+    o.pickup_otp_verified_at = datetime.utcnow()
+    o.status = OrderStatusEnum.PICKED_UP
+    timer = order_timer_snapshot(o)
+    o.countdown_alert_level = timer["alertLevel"]
+    db.commit()
+    db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Order picked up", f"Rider picked up order {o.order_code}.", _order_push_data(o))
+    except Exception:
+        pass
+    return order_dict(o)
+
 # REVIEWS
 # ═══════════════════════════════════════════════════════════════════
 @app.post("/api/reviews", status_code=201)
@@ -1375,6 +3115,12 @@ def request_return(body: ReturnCreate, user: User = Depends(get_current_user), d
     if user.high_return_user:
         user.cod_enabled = False
     db.add(rr); db.commit(); db.refresh(rr)
+    try:
+        send_push_to_user(user, "Return requested", f"Return requested for order {order.order_code}.", _return_push_data(rr))
+        if shop and shop.owner:
+            send_push_to_user(shop.owner, "Return requested", f"Return requested for order {order.order_code}.", _return_push_data(rr))
+    except Exception:
+        pass
     return {"ok": True, "returnId": rr.id, "status": rr.status, "returnFee": rr.return_fee, "refundAmount": rr.refund_amount, "policyDecision": rr.policy_decision}
 
 @app.get("/api/returns/my")
@@ -1416,6 +3162,16 @@ def update_return(return_id: int, body: ReturnVendorUpdate,
         rr.order.refund_status = "REFUNDED"
     rr.updated_at = datetime.utcnow()
     db.commit()
+    try:
+        if body.status == ReturnStatusEnum.APPROVED:
+            send_push_to_user(rr.customer, "Return pickup scheduled", f"Return approved for order {rr.order.order_code}. A rider will be assigned soon.", _return_push_data(rr))
+            notify_riders_return_pickup(db, rr)
+        elif body.status == ReturnStatusEnum.REJECTED:
+            send_push_to_user(rr.customer, "Return rejected", f"Return rejected for order {rr.order.order_code}.", _return_push_data(rr))
+        elif body.status == ReturnStatusEnum.REFUNDED:
+            send_push_to_user(rr.customer, "Refund processed", f"Refund processed for order {rr.order.order_code}.", _return_push_data(rr))
+    except Exception:
+        pass
     return {"ok": True, "status": rr.status}
 
 @app.get("/api/returns/rider/available")
@@ -1469,6 +3225,12 @@ def accept_return_pickup(return_id: int, user: User = Depends(get_current_user),
     rr.pickup_status = "RIDER_ACCEPTED"
     rr.updated_at = datetime.utcnow()
     db.commit()
+    try:
+        send_push_to_user(rr.customer, "Return pickup accepted", f"Rider accepted pickup for order {rr.order.order_code}.", _return_push_data(rr))
+        if rr.shop and rr.shop.owner:
+            send_push_to_user(rr.shop.owner, "Return pickup accepted", f"Rider accepted return pickup for order {rr.order.order_code}.", _return_push_data(rr))
+    except Exception:
+        pass
     return {"ok": True, "pickupStatus": rr.pickup_status}
 
 @app.put("/api/returns/{return_id}/pickup-status")
@@ -1488,6 +3250,13 @@ def update_return_pickup_status(return_id: int, body: dict, user: User = Depends
         rr.status = ReturnStatusEnum.PICKED_UP
         rr.pickup_completed_at = datetime.utcnow()
     db.commit()
+    try:
+        if next_status == "PICKED_UP":
+            send_push_to_user(rr.customer, "Return picked up", f"Return picked up for order {rr.order.order_code}.", _return_push_data(rr))
+        elif next_status == "COMPLETED":
+            send_push_to_user(rr.customer, "Return completed", f"Return completed for order {rr.order.order_code}.", _return_push_data(rr))
+    except Exception:
+        pass
     return {"ok": True, "pickupStatus": rr.pickup_status}
 
 @app.get("/api/returns/rider/active")
@@ -1520,6 +3289,88 @@ def active_return_pickups(user: User = Depends(get_current_user), db: Session = 
 # ═══════════════════════════════════════════════════════════════════
 # RIDERS  (distance-based earnings)
 # ═══════════════════════════════════════════════════════════════════
+def _company_payout_details(db: Session):
+    admin_user = db.query(User).filter(User.role == RoleEnum.ADMIN).order_by(User.id.asc()).first()
+    if not admin_user:
+        return {
+            "companyName": "DOTT Marketplace",
+            "contactPhone": "",
+            "upiId": "",
+            "bankAccount": "",
+            "bankIfsc": "",
+            "bankName": "",
+        }
+    phone = admin_user.phone or ""
+    upi_id = (admin_user.upi_id or "").strip()
+    if not upi_id:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if digits:
+            upi_id = f"{digits}@upi"
+    return {
+        "companyName": admin_user.name or "DOTT Marketplace",
+        "contactPhone": phone,
+        "upiId": upi_id,
+        "bankAccount": admin_user.bank_account or "",
+        "bankIfsc": admin_user.bank_ifsc or "",
+        "bankName": admin_user.bank_name or "",
+    }
+
+def rider_cod_settlement_summary(db: Session, rider: User):
+    cod_orders = db.query(Order).filter(
+        Order.rider_id == rider.id,
+        Order.status == OrderStatusEnum.DELIVERED,
+        func.lower(Order.payment_method) == "cod",
+    ).order_by(Order.delivered_at.desc()).all()
+    total_collected = round(sum(
+        (o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0))
+        for o in cod_orders
+    ), 2)
+
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_collected = round(sum(
+        (o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0))
+        for o in cod_orders if o.delivered_at and o.delivered_at >= today_start
+    ), 2)
+
+    payments = db.query(SettlementPayment).filter(
+        SettlementPayment.entity_type == "rider_cod",
+        SettlementPayment.user_id == rider.id,
+    ).order_by(SettlementPayment.payment_date.desc()).all()
+
+    settled_amount = round(sum(
+        (p.amount or 0.0) for p in payments if (p.payment_status or "PAID").upper() != "FAILED"
+    ), 2)
+    today_settled = round(sum(
+        (p.amount or 0.0) for p in payments
+        if p.payment_date and p.payment_date >= today_start and (p.payment_status or "PAID").upper() != "FAILED"
+    ), 2)
+    pending_amount = round(max(total_collected - settled_amount, 0.0), 2)
+
+    return {
+        "totalCollected": total_collected,
+        "settledAmount": settled_amount,
+        "pendingAmount": pending_amount,
+        "todayCollected": today_collected,
+        "todaySettled": today_settled,
+        "totalCodOrders": len(cod_orders),
+        "companyAccount": _company_payout_details(db),
+        "recentCodOrders": [{
+            "orderId": o.id,
+            "orderCode": o.order_code,
+            "amount": round((o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0)), 2),
+            "customerName": o.customer.name if o.customer else "",
+            "deliveredAt": o.delivered_at.isoformat() if o.delivered_at else None,
+        } for o in cod_orders[:12]],
+        "paymentHistory": [{
+            "id": p.id,
+            "amount": round(p.amount or 0.0, 2),
+            "paymentStatus": p.payment_status or "PAID",
+            "method": (p.notes or "UPI").split(" via ")[-1] if " via " in (p.notes or "") else "UPI",
+            "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
+            "notes": p.notes or "",
+        } for p in payments[:20]],
+    }
+
 @app.post("/api/riders/status")
 def set_rider_status(body: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     user.is_online = body.get("isOnline", False); db.commit()
@@ -1531,22 +3382,42 @@ def update_rider_location(body: LocationUpdate, user: User = Depends(get_current
     return {"ok": True}
 
 @app.get("/api/riders/earnings")
-def rider_earnings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    now = datetime.utcnow()
+def rider_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[str] = None,
+                   endDate: Optional[str] = None,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    sync_settlement_invoices(db)
+    applied_range, start, end = parse_dashboard_range(rangeKey, startDate, endDate)
+
     def calc(since):
-        rows = db.query(Order).filter(Order.rider_id==user.id,
-                                      Order.status==OrderStatusEnum.DELIVERED,
-                                      Order.delivered_at>=since).all()
-        return {"trips":len(rows),
-                "earned":round(sum(o.rider_earning for o in rows), 1),
-                "totalKm":round(sum(o.delivery_km or 0 for o in rows), 1)}
-    return {"today":  calc(now.replace(hour=0,minute=0,second=0)),
-            "week":   calc(now-timedelta(days=7)),
-            "month":  calc(now-timedelta(days=30)),
-            "allTime":calc(datetime(2000,1,1))}
+        rows = db.query(Order).filter(
+            Order.rider_id == user.id,
+            Order.status == OrderStatusEnum.DELIVERED,
+            Order.delivered_at >= since,
+        ).all()
+        return {
+            "trips": len(rows),
+            "earned": round(sum(o.rider_earning for o in rows), 1),
+            "totalKm": round(sum(o.delivery_km or 0 for o in rows), 1),
+        }
+
+    summary = settlement_summary_for_entity(db, "rider", user.id, start, end)
+    summary.update({
+        "today": calc(datetime.utcnow().replace(hour=0, minute=0, second=0)),
+        "week": calc(datetime.utcnow() - timedelta(days=7)),
+        "month": calc(datetime.utcnow() - timedelta(days=30)),
+        "allTime": calc(datetime(2000, 1, 1)),
+        "filters": {
+            "rangeKey": applied_range,
+            "startDate": start.date().isoformat(),
+            "endDate": end.date().isoformat(),
+            "cycleDays": SETTLEMENT_CYCLE_DAYS,
+        },
+    })
+    return summary
 
 @app.get("/api/riders/history")
 def rider_history(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    sync_settlement_invoices(db)
     orders = db.query(Order).filter(Order.rider_id==user.id, Order.status==OrderStatusEnum.DELIVERED)\
                .order_by(Order.delivered_at.desc()).limit(50).all()
     return [{"id":o.id,"orderCode":o.order_code,"shopName":o.shop.name,
@@ -1554,6 +3425,46 @@ def rider_history(user: User = Depends(get_current_user), db: Session = Depends(
              "deliveryKm":round(o.delivery_km or 0,1),
              "earning":round(o.rider_earning,1),
              "deliveredAt":o.delivered_at.isoformat() if o.delivered_at else None} for o in orders]
+
+@app.get("/api/riders/cod-settlement")
+def rider_cod_settlement(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER:
+        raise HTTPException(403, "Rider access only")
+    return rider_cod_settlement_summary(db, user)
+
+@app.post("/api/riders/cod-settlement/pay")
+def rider_cod_settlement_pay(body: RiderCodSettlementPay, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER:
+        raise HTTPException(403, "Rider access only")
+    summary = rider_cod_settlement_summary(db, user)
+    pending = round(float(summary.get("pendingAmount", 0.0) or 0.0), 2)
+    amount = round(float(body.amount if body.amount is not None else pending), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be greater than zero")
+    if amount > pending:
+        raise HTTPException(400, "Amount cannot exceed pending COD settlement")
+    method = (body.method or "upi").strip().lower()
+    company = summary.get("companyAccount", {})
+    destination = company.get("upiId") or company.get("bankAccount") or "company account"
+    note = (body.note or f"COD settlement via {method.upper()} to {destination}").strip()
+    payment = SettlementPayment(
+        invoice_id=None,
+        entity_type="rider_cod",
+        user_id=user.id,
+        shop_id=None,
+        amount=amount,
+        payment_status="PAID",
+        payment_date=datetime.utcnow(),
+        notes=note,
+    )
+    db.add(payment)
+    db.commit()
+    return {
+        "ok": True,
+        "amount": amount,
+        "method": method,
+        "summary": rider_cod_settlement_summary(db, user),
+    }
 
 # ═══════════════════════════════════════════════════════════════════
 # ANALYTICS
@@ -1724,16 +3635,23 @@ def get_delivery_fee(shopLat: float, shopLng: float, custLat: float, custLng: fl
 
 @app.get("/api/orders/pricing-preview")
 def pricing_preview(shopId: int, subtotal: float, custLat: Optional[float] = None, custLng: Optional[float] = None,
-                    weather: Optional[str] = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+                    weather: Optional[str] = None, maxRadiusKm: Optional[float] = None,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     shop = db.query(Shop).filter(Shop.id == shopId).first()
     if not shop:
         raise HTTPException(404, "Shop not found")
     km = haversine(shop.lat, shop.lng, custLat, custLng)
     if km == 9999:
         km = 3.0
-    pricing = compute_pricing(subtotal, round(km, 2), getattr(user, "is_premium", False), weather)
+    km = round(km, 2)
+    allowed_km = get_order_distance_limit(maxRadiusKm)
+    if custLat is not None and custLng is not None and km > allowed_km:
+        raise HTTPException(400, f"This shop is outside your local delivery range. NearNow only allows ordering within {allowed_km:g} km.")
+    pricing = compute_pricing(subtotal, km, getattr(user, "is_premium", False), weather)
     pricing["premiumEligible"] = getattr(user, "is_premium", False)
     pricing["freeDeliveryThreshold"] = FREE_DELIVERY_THRESHOLD
+    pricing["maxOrderDistanceKm"] = allowed_km
+    pricing["orderAllowed"] = True
     return pricing
 
 @app.get("/")
@@ -1824,12 +3742,66 @@ def admin_verify_shop(shop_id: int, body: dict, user: User = Depends(get_current
     db.add(VerifiedSeller(shop_id=shop_id, badge_type=badge)); db.commit()
     return {"ok": True, "badgeType": badge}
 
+@app.post("/api/products/reindex-visual")
+def reindex_visual_catalog(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role not in [RoleEnum.VENDOR, RoleEnum.ADMIN]:
+        raise HTTPException(403)
+    query = db.query(Product)
+    if user.role == RoleEnum.VENDOR:
+        shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
+        if not shop:
+            raise HTTPException(400, "Create a shop first")
+        query = query.filter(Product.shop_id == shop.id)
+    products = query.all()
+    indexed = 0
+    for product in products:
+        if index_product_visual_embedding(product):
+            indexed += 1
+    db.commit()
+    return {"ok": True, "indexed": indexed, "total": len(products), "model": VISUAL_EMBED_MODEL}
+
 # ── SMART SEARCH ─────────────────────────────────────────────────
+@app.post("/api/search/image")
+async def search_by_image(file: UploadFile = File(...), lat: Optional[float] = Form(None),
+                          lng: Optional[float] = Form(None), radius: Optional[float] = Form(20.0),
+                          category: Optional[str] = Form(None), limit: Optional[int] = Form(12),
+                          db: Session = Depends(get_db)):
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File must be an image")
+    contents = await file.read()
+    if len(contents) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Image too large. Max 8 MB.")
+
+    query_vector, model_name = compute_visual_embedding(contents)
+    candidates = build_visual_candidates(db, lat=lat, lng=lng, radius=get_discovery_radius_limit(radius), category=category)
+    matches = rank_visual_matches(query_vector, candidates, limit=min(max(limit or 12, 1), 24))
+    db.commit()
+
+    results = []
+    for product, distance, score in matches:
+        item = product_dict(product)
+        item["visualScore"] = round(float(score), 4)
+        item["shopName"] = product.shop.name if product.shop else None
+        item["shopRating"] = product.shop.rating if product.shop else 0
+        item["shopVerified"] = db.query(VerifiedSeller).filter(VerifiedSeller.shop_id == product.shop_id).first() is not None
+        if distance is not None:
+            item["distanceKm"] = round(distance, 1)
+        results.append(item)
+
+    preview_saved = save_image_bytes(0, contents, "jpg")
+    return {
+        "results": results,
+        "total": len(results),
+        "queryImageUrl": preview_saved["url"],
+        "model": model_name,
+        "fallbackMode": model_name != "clip-vit-base-patch32",
+    }
+
 @app.get("/api/search")
 def smart_search(q: str, lat: Optional[float]=None, lng: Optional[float]=None,
                  category: Optional[str]=None, minPrice: Optional[float]=None,
                  maxPrice: Optional[float]=None, minRating: Optional[float]=None,
-                 sortBy: Optional[str]="relevance",
+                 sortBy: Optional[str]="relevance", radius: Optional[float]=None,
                  db: Session = Depends(get_db)):
     pq = db.query(Product).filter(Product.is_active == True)
     if q:
@@ -1846,11 +3818,12 @@ def smart_search(q: str, lat: Optional[float]=None, lng: Optional[float]=None,
     if maxPrice:  pq = pq.filter(Product.price <= maxPrice)
     products = pq.all()
     results = []
+    bounded_radius = get_discovery_radius_limit(radius)
     for p in products:
         dist = None
         if lat and lng and p.shop:
             dist = haversine(lat, lng, p.shop.lat, p.shop.lng)
-        if dist is not None and dist > 20: continue
+        if dist is not None and dist > bounded_radius: continue
         d = product_dict(p)
         d["shopName"] = p.shop.name if p.shop else None
         d["shopRating"] = p.shop.rating if p.shop else 0
@@ -2016,6 +3989,12 @@ def verify_delivery_otp(order_id: int, body: dict, user: User = Depends(get_curr
     d.is_used = True
     o.status = OrderStatusEnum.DELIVERED; o.delivered_at = datetime.utcnow()
     db.commit()
+    try:
+        send_push_to_user(o.customer, "Delivered", f"Order {o.order_code} was delivered.", _order_push_data(o))
+        if o.shop and o.shop.owner:
+            send_push_to_user(o.shop.owner, "Order delivered", f"Order {o.order_code} has been delivered.", _order_push_data(o))
+    except Exception:
+        pass
     return {"ok": True, "message": "Delivery confirmed ✓"}
 
 # ── ORDER CANCELLATION WITH REASON ───────────────────────────────
@@ -2028,6 +4007,12 @@ def cancel_order_v2(order_id: int, body: dict, user: User = Depends(get_current_
     o.status = OrderStatusEnum.CANCELLED
     o.notes = (o.notes or "") + f"\n[CANCELLED] Reason: {body.get('reason','No reason given')}"
     db.commit(); db.refresh(o)
+    try:
+        send_push_to_user(o.customer, "Order cancelled", f"Order {o.order_code} was cancelled.", _order_push_data(o))
+        if o.shop and o.shop.owner:
+            send_push_to_user(o.shop.owner, "Order cancelled", f"Order {o.order_code} was cancelled by the customer.", _order_push_data(o))
+    except Exception:
+        pass
     return order_dict(o)
 
 # ── ORDER REAL-TIME POLL (lightweight) ────────────────────────────
@@ -2088,7 +4073,349 @@ def verify_requests(user: User = Depends(get_current_user), db: Session = Depend
              "owner": s.owner.name if s.owner else None} for s in shops]
 
 # ── ADMIN: COMMISSION SETTINGS ────────────────────────────────────
-_commission_rate = {"platform_fee_flat": 10, "reseller_pct": 10, "rider_base": 20}
+_commission_rate = {
+    "platform_fee_flat": 10,
+    "reseller_pct": 10,
+    "rider_base": 20,
+    "vendor_commission_pct": 0,
+}
+
+SETTLEMENT_CYCLE_DAYS = 2
+
+def parse_dashboard_range(range_key: Optional[str], start_date: Optional[str], end_date: Optional[str]):
+    now = datetime.utcnow()
+    key = (range_key or "last2days").lower()
+    if key == "daily":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif key == "custom" and start_date and end_date:
+        start = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        end = now
+        start = now - timedelta(days=SETTLEMENT_CYCLE_DAYS)
+        key = "last2days"
+    return key, start, end
+
+def settlement_cycle_bounds(dt: datetime):
+    start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    epoch = datetime(2024, 1, 1)
+    cycle_index = max(0, (start - epoch).days // SETTLEMENT_CYCLE_DAYS)
+    cycle_start = epoch + timedelta(days=cycle_index * SETTLEMENT_CYCLE_DAYS)
+    cycle_end = cycle_start + timedelta(days=SETTLEMENT_CYCLE_DAYS) - timedelta(microseconds=1)
+    cycle_key = cycle_start.strftime("%Y%m%d")
+    return cycle_key, cycle_start, cycle_end
+
+def vendor_merchandise_total(order: Order) -> float:
+    items_total = round(sum((item.price or 0.0) * (item.qty or 0) for item in (order.items or [])), 2)
+    if items_total > 0:
+        return items_total
+    return round(order.subtotal or 0.0, 2)
+
+def invoice_status(invoice: SettlementInvoice):
+    pending = round(max((invoice.net_payable or 0.0) - (invoice.paid_amount or 0.0), 0.0), 2)
+    if pending <= 0:
+        return "PAID"
+    if (invoice.paid_amount or 0.0) > 0:
+        return "PARTIAL"
+    return "PENDING"
+
+def sync_settlement_invoices(db: Session):
+    delivered_orders = db.query(Order).filter(
+        Order.status == OrderStatusEnum.DELIVERED,
+        Order.delivered_at != None,
+    ).all()
+    grouped = {}
+    for order in delivered_orders:
+        cycle_key, period_start, period_end = settlement_cycle_bounds(order.delivered_at)
+        if order.shop and order.shop.owner_id:
+            vendor_key = ("vendor", order.shop.owner_id, order.shop_id, cycle_key)
+            grouped.setdefault(vendor_key, {
+                "entity_type": "vendor",
+                "user_id": order.shop.owner_id,
+                "shop_id": order.shop_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "orders": [],
+            })["orders"].append(order)
+        if order.rider_id:
+            rider_key = ("rider", order.rider_id, None, cycle_key)
+            grouped.setdefault(rider_key, {
+                "entity_type": "rider",
+                "user_id": order.rider_id,
+                "shop_id": None,
+                "period_start": period_start,
+                "period_end": period_end,
+                "orders": [],
+            })["orders"].append(order)
+
+    for (entity_type, user_id, shop_id, cycle_key), meta in grouped.items():
+        rows = meta["orders"]
+        order_ids = sorted({o.id for o in rows})
+        invoice = db.query(SettlementInvoice).filter(
+            SettlementInvoice.entity_type == entity_type,
+            SettlementInvoice.user_id == user_id,
+            SettlementInvoice.cycle_key == cycle_key,
+        ).first()
+
+        if entity_type == "vendor":
+            total_sales = round(sum(vendor_merchandise_total(o) for o in rows), 2)
+            commission_pct = float(_commission_rate.get("vendor_commission_pct", 0))
+            commission_amount = round(total_sales * commission_pct / 100.0, 2)
+            gross_earnings = total_sales
+            net_payable = round(total_sales - commission_amount, 2)
+        else:
+            total_sales = round(sum((o.total or 0.0) for o in rows), 2)
+            commission_pct = 0.0
+            commission_amount = 0.0
+            gross_earnings = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            net_payable = gross_earnings
+
+        if not invoice:
+            invoice = SettlementInvoice(
+                entity_type=entity_type,
+                user_id=user_id,
+                shop_id=shop_id,
+                period_start=meta["period_start"],
+                period_end=meta["period_end"],
+                cycle_key=cycle_key,
+            )
+            db.add(invoice)
+            db.flush()
+
+        invoice.shop_id = shop_id
+        invoice.period_start = meta["period_start"]
+        invoice.period_end = meta["period_end"]
+        invoice.total_orders = len(order_ids)
+        invoice.total_sales = total_sales
+        invoice.commission_pct = commission_pct
+        invoice.commission_amount = commission_amount
+        invoice.gross_earnings = gross_earnings
+        invoice.net_payable = net_payable
+        invoice.order_ids_json = json.dumps(order_ids)
+        invoice.pending_amount = round(max(net_payable - (invoice.paid_amount or 0.0), 0.0), 2)
+        invoice.status = invoice_status(invoice)
+        invoice.updated_at = datetime.utcnow()
+    db.commit()
+
+def invoice_dict(invoice: SettlementInvoice):
+    return {
+        "id": invoice.id,
+        "entityType": invoice.entity_type,
+        "userId": invoice.user_id,
+        "shopId": invoice.shop_id,
+        "periodStart": invoice.period_start.isoformat() if invoice.period_start else None,
+        "periodEnd": invoice.period_end.isoformat() if invoice.period_end else None,
+        "cycleKey": invoice.cycle_key,
+        "totalOrders": invoice.total_orders,
+        "totalSales": round(invoice.total_sales or 0.0, 2),
+        "commissionPct": round(invoice.commission_pct or 0.0, 2),
+        "commissionAmount": round(invoice.commission_amount or 0.0, 2),
+        "grossEarnings": round(invoice.gross_earnings or 0.0, 2),
+        "netPayable": round(invoice.net_payable or 0.0, 2),
+        "paidAmount": round(invoice.paid_amount or 0.0, 2),
+        "pendingAmount": round(invoice.pending_amount or 0.0, 2),
+        "status": invoice.status,
+        "createdAt": invoice.created_at.isoformat() if invoice.created_at else None,
+        "updatedAt": invoice.updated_at.isoformat() if invoice.updated_at else None,
+    }
+
+def settlement_summary_for_entity(db: Session, entity_type: str, user_id: int, start: datetime, end: datetime, shop_id: Optional[int] = None):
+    query = db.query(SettlementInvoice).filter(
+        SettlementInvoice.entity_type == entity_type,
+        SettlementInvoice.user_id == user_id,
+        SettlementInvoice.period_start <= end,
+        SettlementInvoice.period_end >= start,
+    )
+    if shop_id is not None:
+        query = query.filter(SettlementInvoice.shop_id == shop_id)
+    invoices = query.order_by(SettlementInvoice.period_start.desc()).all()
+
+    payments_query = db.query(SettlementPayment).filter(
+        SettlementPayment.entity_type == entity_type,
+        SettlementPayment.user_id == user_id,
+        SettlementPayment.payment_date >= start,
+        SettlementPayment.payment_date <= end,
+    )
+    if shop_id is not None:
+        payments_query = payments_query.filter(SettlementPayment.shop_id == shop_id)
+    payments = payments_query.order_by(SettlementPayment.payment_date.desc()).all()
+
+    total_orders = sum(i.total_orders or 0 for i in invoices)
+    total_sales = round(sum(i.total_sales or 0.0 for i in invoices), 2)
+    gross_earnings = round(sum(i.gross_earnings or 0.0 for i in invoices), 2)
+    commission_amount = round(sum(i.commission_amount or 0.0 for i in invoices), 2)
+    net_payable = round(sum(i.net_payable or 0.0 for i in invoices), 2)
+    paid_amount = round(sum(i.paid_amount or 0.0 for i in invoices), 2)
+    pending_amount = round(sum(i.pending_amount or 0.0 for i in invoices), 2)
+
+    return {
+        "totalOrders": total_orders,
+        "totalSales": total_sales,
+        "grossEarnings": gross_earnings,
+        "commissionPct": round(invoices[0].commission_pct, 2) if invoices else float(_commission_rate.get("vendor_commission_pct", 0) if entity_type == "vendor" else 0),
+        "commissionAmount": commission_amount,
+        "netPayable": net_payable,
+        "paidAmount": paid_amount,
+        "pendingAmount": pending_amount,
+        "earningsPerDelivery": round((gross_earnings / total_orders), 2) if total_orders else 0.0,
+        "invoiceCount": len(invoices),
+        "invoices": [invoice_dict(i) for i in invoices],
+        "paymentHistory": [{
+            "id": p.id,
+            "invoiceId": p.invoice_id,
+            "entityType": p.entity_type,
+            "userId": p.user_id,
+            "shopId": p.shop_id,
+            "amount": round(p.amount or 0.0, 2),
+            "paymentStatus": p.payment_status,
+            "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
+            "periodStart": p.period_start.isoformat() if p.period_start else None,
+            "periodEnd": p.period_end.isoformat() if p.period_end else None,
+            "notes": p.notes or "",
+        } for p in payments],
+    }
+
+def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
+    vendor_invoices = db.query(SettlementInvoice).filter(
+        SettlementInvoice.entity_type == "vendor",
+        SettlementInvoice.period_start <= end,
+        SettlementInvoice.period_end >= start,
+    ).all()
+    rider_invoices = db.query(SettlementInvoice).filter(
+        SettlementInvoice.entity_type == "rider",
+        SettlementInvoice.period_start <= end,
+        SettlementInvoice.period_end >= start,
+    ).all()
+    payment_history = db.query(SettlementPayment).filter(
+        SettlementPayment.payment_date >= start,
+        SettlementPayment.payment_date <= end,
+    ).order_by(SettlementPayment.payment_date.desc()).all()
+
+    by_vendor = {}
+    for invoice in vendor_invoices:
+        existing = by_vendor.get(invoice.user_id)
+        is_newer = (
+            existing is None
+            or (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
+            or (
+                (invoice.period_start or datetime.min) == (existing["periodStart"] or datetime.min)
+                and invoice.id > existing["latestInvoiceId"]
+            )
+        )
+        if is_newer:
+            by_vendor[invoice.user_id] = {
+                "vendorId": invoice.user_id,
+                "shopId": invoice.shop_id,
+                "vendorName": invoice.user.name if invoice.user else "Vendor",
+                "shopName": invoice.shop.name if invoice.shop else "Shop",
+                "totalOrders": invoice.total_orders or 0,
+                "totalSales": invoice.total_sales or 0.0,
+                "commissionPct": invoice.commission_pct or float(_commission_rate.get("vendor_commission_pct", 0)),
+                "commissionAmount": invoice.commission_amount or 0.0,
+                "netPayable": invoice.net_payable or 0.0,
+                "paidAmount": invoice.paid_amount or 0.0,
+                "pendingAmount": invoice.pending_amount or 0.0,
+                "invoiceCount": 1,
+                "latestInvoiceId": invoice.id,
+                "periodStart": invoice.period_start,
+                "status": "PENDING",
+            }
+
+    by_rider = {}
+    for invoice in rider_invoices:
+        existing = by_rider.get(invoice.user_id)
+        is_newer = (
+            existing is None
+            or (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
+            or (
+                (invoice.period_start or datetime.min) == (existing["periodStart"] or datetime.min)
+                and invoice.id > existing["latestInvoiceId"]
+            )
+        )
+        if is_newer:
+            by_rider[invoice.user_id] = {
+                "riderId": invoice.user_id,
+                "riderName": invoice.user.name if invoice.user else "Rider",
+                "totalDeliveries": invoice.total_orders or 0,
+                "earningsPerDelivery": 0.0,
+                "totalEarnings": invoice.gross_earnings or 0.0,
+                "paidAmount": invoice.paid_amount or 0.0,
+                "pendingAmount": invoice.pending_amount or 0.0,
+                "invoiceCount": 1,
+                "latestInvoiceId": invoice.id,
+                "periodStart": invoice.period_start,
+                "status": "PENDING",
+            }
+
+    vendors = []
+    for row in by_vendor.values():
+        row["totalSales"] = round(row["totalSales"], 2)
+        row["commissionAmount"] = round(row["commissionAmount"], 2)
+        row["netPayable"] = round(row["netPayable"], 2)
+        row["paidAmount"] = round(row["paidAmount"], 2)
+        row["pendingAmount"] = round(row["pendingAmount"], 2)
+        row["status"] = "PAID" if row["pendingAmount"] <= 0 else ("PARTIAL" if row["paidAmount"] > 0 else "PENDING")
+        row.pop("periodStart", None)
+        vendors.append(row)
+
+    riders = []
+    for row in by_rider.values():
+        row["totalEarnings"] = round(row["totalEarnings"], 2)
+        row["paidAmount"] = round(row["paidAmount"], 2)
+        row["pendingAmount"] = round(row["pendingAmount"], 2)
+        row["earningsPerDelivery"] = round(row["totalEarnings"] / row["totalDeliveries"], 2) if row["totalDeliveries"] else 0.0
+        row["status"] = "PAID" if row["pendingAmount"] <= 0 else ("PARTIAL" if row["paidAmount"] > 0 else "PENDING")
+        row.pop("periodStart", None)
+        riders.append(row)
+
+    return {
+        "vendors": sorted(vendors, key=lambda item: item["pendingAmount"], reverse=True),
+        "riders": sorted(riders, key=lambda item: item["pendingAmount"], reverse=True),
+        "vendorInvoices": [invoice_dict(i) for i in sorted(vendor_invoices, key=lambda item: item.period_start, reverse=True)],
+        "riderInvoices": [invoice_dict(i) for i in sorted(rider_invoices, key=lambda item: item.period_start, reverse=True)],
+        "paymentHistory": [{
+            "id": p.id,
+            "invoiceId": p.invoice_id,
+            "entityType": p.entity_type,
+            "userId": p.user_id,
+            "userName": p.user.name if p.user else "",
+            "shopName": p.shop.name if p.shop else None,
+            "amount": round(p.amount or 0.0, 2),
+            "paymentStatus": p.payment_status,
+            "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
+            "periodStart": p.period_start.isoformat() if p.period_start else None,
+            "periodEnd": p.period_end.isoformat() if p.period_end else None,
+            "notes": p.notes or "",
+        } for p in payment_history],
+    }
+
+def mark_invoice_paid(db: Session, invoice_id: int, note: str = ""):
+    invoice = db.query(SettlementInvoice).filter(SettlementInvoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    amount = round(invoice.pending_amount or 0.0, 2)
+    if amount <= 0:
+        return invoice
+    invoice.paid_amount = round((invoice.paid_amount or 0.0) + amount, 2)
+    invoice.pending_amount = 0.0
+    invoice.status = "PAID"
+    invoice.updated_at = datetime.utcnow()
+    db.add(SettlementPayment(
+        invoice_id=invoice.id,
+        entity_type=invoice.entity_type,
+        user_id=invoice.user_id,
+        shop_id=invoice.shop_id,
+        amount=amount,
+        payment_status="PAID",
+        payment_date=datetime.utcnow(),
+        period_start=invoice.period_start,
+        period_end=invoice.period_end,
+        notes=note or f"Marked as paid from admin {invoice.entity_type} settlement dashboard",
+    ))
+    db.commit()
+    db.refresh(invoice)
+    return invoice
 
 @app.get("/api/admin/commission")
 def get_commission(user: User = Depends(get_current_user)):
@@ -2100,6 +4427,31 @@ def set_commission(body: dict, user: User = Depends(get_current_user)):
     if user.role != RoleEnum.ADMIN: raise HTTPException(403)
     _commission_rate.update({k: v for k,v in body.items() if k in _commission_rate})
     return _commission_rate
+
+@app.get("/api/admin/settlements")
+def admin_settlements(rangeKey: Optional[str] = "last2days", startDate: Optional[str] = None,
+                      endDate: Optional[str] = None,
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    sync_settlement_invoices(db)
+    applied_range, start, end = parse_dashboard_range(rangeKey, startDate, endDate)
+    payload = admin_settlement_dashboard(db, start, end)
+    payload["filters"] = {
+        "rangeKey": applied_range,
+        "startDate": start.date().isoformat(),
+        "endDate": end.date().isoformat(),
+        "cycleDays": SETTLEMENT_CYCLE_DAYS,
+    }
+    return payload
+
+@app.post("/api/admin/settlements/invoices/{invoice_id}/pay")
+def admin_mark_invoice_paid(invoice_id: int, body: Optional[dict] = None,
+                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    invoice = mark_invoice_paid(db, invoice_id, (body or {}).get("note", ""))
+    return {"ok": True, "invoice": invoice_dict(invoice)}
 
 # ── ADMIN: CSV EXPORT ─────────────────────────────────────────────
 import csv, io
@@ -2167,20 +4519,34 @@ def clone_product(product_id: int, user: User = Depends(get_current_user), db: S
 
 # ── VENDOR: EARNINGS SUMMARY ──────────────────────────────────────
 @app.get("/api/vendor/earnings")
-def vendor_earnings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def vendor_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[str] = None,
+                    endDate: Optional[str] = None,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
     if not shop: raise HTTPException(404)
+    sync_settlement_invoices(db)
+    applied_range, start, end = parse_dashboard_range(rangeKey, startDate, endDate)
     delivered = db.query(Order).filter(Order.shop_id == shop.id, Order.status == OrderStatusEnum.DELIVERED).all()
-    total_revenue = sum(o.subtotal for o in delivered)
-    total_platform = len(delivered) * 10  # ₹10 platform fee
+    total_revenue = round(sum(vendor_merchandise_total(o) for o in delivered), 2)
+    total_platform = round(sum(vendor_merchandise_total(o) * (float(_commission_rate.get("vendor_commission_pct", 0)) / 100.0) for o in delivered), 2)
     net_earnings = total_revenue - total_platform
     this_month = [o for o in delivered if o.delivered_at and o.delivered_at.month == datetime.utcnow().month]
-    return {
-        "totalOrders": len(delivered), "totalRevenue": round(total_revenue, 2),
-        "platformFees": total_platform, "netEarnings": round(net_earnings, 2),
-        "thisMonth": {"orders": len(this_month), "revenue": round(sum(o.subtotal for o in this_month), 2)},
-        "pendingPayout": round(net_earnings * 0.1, 2)  # placeholder 10% pending
-    }
+    summary = settlement_summary_for_entity(db, "vendor", user.id, start, end, shop_id=shop.id)
+    summary.update({
+        "totalOrders": len(delivered),
+        "totalRevenue": round(total_revenue, 2),
+        "platformFees": total_platform,
+        "netEarnings": round(net_earnings, 2),
+        "thisMonth": {"orders": len(this_month), "revenue": round(sum(vendor_merchandise_total(o) for o in this_month), 2)},
+        "pendingPayout": summary["pendingAmount"],
+        "filters": {
+            "rangeKey": applied_range,
+            "startDate": start.date().isoformat(),
+            "endDate": end.date().isoformat(),
+            "cycleDays": SETTLEMENT_CYCLE_DAYS,
+        },
+    })
+    return summary
 
 # ── VENDOR: REPLY TO REVIEW ────────────────────────────────────────
 @app.post("/api/reviews/{review_id}/reply")

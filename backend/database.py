@@ -3,9 +3,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import enum
+from config import settings
 
-DATABASE_URL = "sqlite:///./dott.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = settings.database_url
+engine_kwargs = {"pool_pre_ping": True}
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -63,6 +67,9 @@ class User(Base):
     returns_this_month = Column(Integer, default=0)
     high_return_user = Column(Boolean, default=False)
     cod_enabled    = Column(Boolean, default=True)
+    totp_secret    = Column(String, nullable=True)
+    totp_enabled   = Column(Boolean, default=False)
+    fcm_token      = Column(String, nullable=True)
 
 class OTPStore(Base):
     __tablename__ = "otp_store"
@@ -111,15 +118,29 @@ class Product(Base):
     id          = Column(Integer, primary_key=True, index=True)
     shop_id     = Column(Integer, ForeignKey("shops.id"), nullable=False)
     name        = Column(String, nullable=False)
+    title       = Column(String)
     description = Column(Text)
     price       = Column(Float, nullable=False)
     category    = Column(String)
+    product_type = Column(String)
+    color       = Column(String)
     image_url   = Column(String)        # primary / default image
     images      = Column(Text, default="[]")   # JSON: [url1, url2, ...]  extra angles
     colors      = Column(Text, default="[]")   # JSON: [{name,hex,imageUrl,images:[]}]
     brand       = Column(String)
     material    = Column(String)
+    fabric      = Column(String)
+    gender      = Column(String)
+    pattern     = Column(String)
+    fit         = Column(String)
+    occasion    = Column(String)
+    sleeve_type = Column(String)
+    length      = Column(String)
     tags        = Column(Text, default="[]")   # JSON: ["tag1","tag2"]
+    processed_image_url = Column(String)
+    visual_embedding    = Column(Text)
+    visual_embedding_model = Column(String, default="fallback-histogram-v1")
+    image_ai_meta       = Column(Text, default="{}")
     stock       = Column(Integer, default=10)
     sizes       = Column(Text, default="[]")
     has_sizes   = Column(Boolean, default=False)
@@ -170,6 +191,10 @@ class Order(Base):
     countdown_alert_level = Column(String, default="NONE")
     rider_bonus      = Column(Float, default=0.0)
     rider_penalty    = Column(Float, default=0.0)
+    pickup_otp       = Column(String)
+    pickup_otp_used  = Column(Boolean, default=False)
+    pickup_otp_generated_at = Column(DateTime)
+    pickup_otp_verified_at = Column(DateTime)
     placed_at        = Column(DateTime, default=datetime.utcnow)
     confirmed_at     = Column(DateTime)
     delivered_at     = Column(DateTime)
@@ -324,3 +349,44 @@ class RiderRating(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     rider      = relationship("User", foreign_keys=[rider_id])
     customer   = relationship("User", foreign_keys=[customer_id])
+
+class SettlementInvoice(Base):
+    __tablename__ = "settlement_invoices"
+    id                = Column(Integer, primary_key=True, index=True)
+    entity_type       = Column(String, nullable=False, index=True)   # vendor / rider
+    user_id           = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    shop_id           = Column(Integer, ForeignKey("shops.id"), nullable=True, index=True)
+    period_start      = Column(DateTime, nullable=False, index=True)
+    period_end        = Column(DateTime, nullable=False, index=True)
+    cycle_key         = Column(String, nullable=False, index=True)
+    total_orders      = Column(Integer, default=0)
+    total_sales       = Column(Float, default=0.0)
+    commission_pct    = Column(Float, default=0.0)
+    commission_amount = Column(Float, default=0.0)
+    gross_earnings    = Column(Float, default=0.0)
+    net_payable       = Column(Float, default=0.0)
+    paid_amount       = Column(Float, default=0.0)
+    pending_amount    = Column(Float, default=0.0)
+    status            = Column(String, default="PENDING")  # PENDING / PARTIAL / PAID
+    order_ids_json    = Column(Text, default="[]")
+    created_at        = Column(DateTime, default=datetime.utcnow)
+    updated_at        = Column(DateTime, default=datetime.utcnow)
+    user              = relationship("User", foreign_keys=[user_id])
+    shop              = relationship("Shop", foreign_keys=[shop_id])
+
+class SettlementPayment(Base):
+    __tablename__ = "settlement_payments"
+    id                = Column(Integer, primary_key=True, index=True)
+    invoice_id        = Column(Integer, ForeignKey("settlement_invoices.id"), nullable=True, index=True)
+    entity_type       = Column(String, nullable=False, index=True)   # vendor / rider
+    user_id           = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    shop_id           = Column(Integer, ForeignKey("shops.id"), nullable=True, index=True)
+    amount            = Column(Float, default=0.0)
+    payment_status    = Column(String, default="PAID")
+    payment_date      = Column(DateTime, default=datetime.utcnow, index=True)
+    period_start      = Column(DateTime, nullable=True)
+    period_end        = Column(DateTime, nullable=True)
+    notes             = Column(Text, default="")
+    invoice           = relationship("SettlementInvoice", foreign_keys=[invoice_id])
+    user              = relationship("User", foreign_keys=[user_id])
+    shop              = relationship("Shop", foreign_keys=[shop_id])

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 
-const BASE = 'http://localhost:8080/api'
+const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_admin_access')
@@ -29,51 +29,323 @@ ax.interceptors.response.use(r => r, async err => {
 
 const api = {
   login:          d      => ax.post('/auth/login', d),
-  me:             ()     => ax.get('/auth/me'),
-  logout:         ()     => ax.post('/auth/logout'),
-  stats:          ()     => ax.get('/admin/stats'),
-  revenue:        ()     => ax.get('/admin/revenue'),
-  users:          ()     => ax.get('/admin/users'),
-  blockUser:      (id,v) => ax.patch(`/admin/users/${id}/block`, { isBlocked: v }),
-  shops:          ()     => ax.get('/admin/shops'),
-  suspendShop:    (id,v) => ax.patch(`/admin/shops/${id}/suspend`, { isSuspended: v }),
-  verifyShop:     (id,badge) => ax.post(`/admin/shops/${id}/verify`, { badgeType: badge }),
-  verifyRequests: ()     => ax.get('/admin/verify-requests'),
-  orders:         p      => ax.get('/admin/orders', { params: p }),
-  returns:        ()     => ax.get('/admin/returns'),
-  // Promo codes
-  listPromos:     ()     => ax.get('/admin/promo'),
-  createPromo:    d      => ax.post('/admin/promo', d),
-  togglePromo:    id     => ax.patch(`/admin/promo/${id}/toggle`),
-  // Commission
-  getCommission:  ()     => ax.get('/admin/commission'),
-  setCommission:  d      => ax.put('/admin/commission', d),
-  // CSV export (window.open triggers download)
-  exportOrders:   ()     => { window.open(`${BASE}/admin/export/orders?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
-  exportUsers:    ()     => { window.open(`${BASE}/admin/export/users?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
+  me:             ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().user) : ax.get('/auth/me'),
+  logout:         ()     => isAdminDemoMode() ? demoResponse({ ok: true }) : ax.post('/auth/logout'),
+  stats:          ()     => isAdminDemoMode() ? demoResponse(getDemoAdminStats(getDemoAdminDb())) : ax.get('/admin/stats'),
+  revenue:        ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().revenue) : ax.get('/admin/revenue'),
+  users:          ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().users) : ax.get('/admin/users'),
+  blockUser:      (id,v) => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.users = db.users.map(u => u.id === id ? { ...u, isBlocked: v } : u)
+      saveDemoAdminDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.patch(`/admin/users/${id}/block`, { isBlocked: v })
+  },
+  shops:          ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().shops) : ax.get('/admin/shops'),
+  suspendShop:    (id,v) => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.shops = db.shops.map(s => s.id === id ? { ...s, isSuspended: v } : s)
+      saveDemoAdminDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.patch(`/admin/shops/${id}/suspend`, { isSuspended: v })
+  },
+  verifyShop:     (id,badge) => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.shops = db.shops.map(s => s.id === id ? { ...s, isVerified: true, badgeType: badge } : s)
+      db.verifyRequests = db.verifyRequests.filter(r => r.shopId !== id)
+      saveDemoAdminDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.post(`/admin/shops/${id}/verify`, { badgeType: badge })
+  },
+  verifyRequests: ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().verifyRequests) : ax.get('/admin/verify-requests'),
+  orders:         p      => isAdminDemoMode() ? demoResponse(getDemoAdminDb().orders) : ax.get('/admin/orders', { params: p }),
+  returns:        ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().returns) : ax.get('/admin/returns'),
+  listPromos:     ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().promos) : ax.get('/admin/promo'),
+  createPromo:    d      => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      const next = { id: `promo-${Date.now()}`, ...d, isActive: true }
+      db.promos.unshift(next)
+      saveDemoAdminDb(db)
+      return demoResponse(next)
+    }
+    return ax.post('/admin/promo', d)
+  },
+  togglePromo:    id     => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.promos = db.promos.map(p => p.id === id ? { ...p, isActive: !p.isActive } : p)
+      saveDemoAdminDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.patch(`/admin/promo/${id}/toggle`)
+  },
+  getCommission:  ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().commission) : ax.get('/admin/commission'),
+  setCommission:  d      => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.commission = { ...db.commission, ...d }
+      saveDemoAdminDb(db)
+      return demoResponse(db.commission)
+    }
+    return ax.put('/admin/commission', d)
+  },
+  settlements:    p      => isAdminDemoMode() ? demoResponse(getDemoAdminDb().settlements) : ax.get('/admin/settlements', { params: p }),
+  payInvoice:     (id,d) => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      const vendorInvoice = (db.settlements.vendorInvoices || []).find(item => item.id === id || item.latestInvoiceId === id)
+      const riderInvoice = (db.settlements.riderInvoices || []).find(item => item.id === id || item.latestInvoiceId === id)
+      const method = (d?.method || 'upi').toUpperCase()
+      if (vendorInvoice && Number(vendorInvoice.pendingAmount || 0) > 0) {
+        db.settlements.history = [
+          {
+            id: `pay-${Date.now()}`,
+            entityType: 'vendor',
+            userName: vendorInvoice.vendorName,
+            shopName: vendorInvoice.shopName,
+            amount: Number(vendorInvoice.pendingAmount || 0),
+            paymentMethod: method,
+            invoiceId: id,
+            paymentDate: new Date().toISOString(),
+          },
+          ...(db.settlements.history || []),
+        ]
+      }
+      if (riderInvoice && Number(riderInvoice.pendingAmount || 0) > 0) {
+        db.settlements.history = [
+          {
+            id: `pay-${Date.now() + 1}`,
+            entityType: 'rider',
+            userName: riderInvoice.riderName,
+            amount: Number(riderInvoice.pendingAmount || 0),
+            paymentMethod: method,
+            invoiceId: id,
+            paymentDate: new Date().toISOString(),
+          },
+          ...(db.settlements.history || []),
+        ]
+      }
+      const applyPaid = (items) => items.map(item => item.id === id || item.latestInvoiceId === id ? { ...item, pendingAmount: 0, paidAmount: (item.paidAmount || 0) + (item.pendingAmount || 0), status: 'PAID' } : item)
+      db.settlements.vendorInvoices = applyPaid(db.settlements.vendorInvoices)
+      db.settlements.riderInvoices = applyPaid(db.settlements.riderInvoices)
+      saveDemoAdminDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.post(`/admin/settlements/invoices/${id}/pay`, d || {})
+  },
+  exportOrders:   ()     => { if (isAdminDemoMode()) { toast('Demo orders export ready', 'success'); return } window.open(`${BASE}/admin/export/orders?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
+  exportUsers:    ()     => { if (isAdminDemoMode()) { toast('Demo users export ready', 'success'); return } window.open(`${BASE}/admin/export/users?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
 }
+
+const DEMO_ADMIN_MODE = false
+const DEMO_ADMIN_MODE_KEY = 'dott_admin_demo_mode'
+const DEMO_ADMIN_DB_KEY = 'dott_admin_demo_db'
+const demoResponse = (data) => Promise.resolve({ data })
+const isAdminDemoMode = () => (DEMO_ADMIN_MODE && localStorage.getItem(DEMO_ADMIN_MODE_KEY) === '1')
+
+function createDemoAdminDb() {
+  const now = Date.now()
+  const users = [
+    { id: 'admin-1', name: 'Sai Admin', email: 'admin@dott.in', role: 'ADMIN', isBlocked: false },
+    { id: 'cust-1', name: 'Sai Kumar', email: 'sai@gmail.com', role: 'CUSTOMER', isBlocked: false },
+    { id: 'cust-2', name: 'Bhavana', email: 'bhavana@gmail.com', role: 'CUSTOMER', isBlocked: false },
+    { id: 'vend-1', name: 'Rahul Vendor', email: 'rahul@dott.in', role: 'OWNER', isBlocked: false },
+    { id: 'vend-2', name: 'Anita Store', email: 'anita@shops.in', role: 'OWNER', isBlocked: false },
+    { id: 'vend-3', name: 'Sai Hub', email: 'saihub@shops.in', role: 'OWNER', isBlocked: false },
+    { id: 'rid-1', name: 'Ramesh Rider', email: 'ramesh@dott.in', role: 'RIDER', isOnline: true, isBlocked: false },
+    { id: 'rid-2', name: 'Kiran Rider', email: 'kiran@dott.in', role: 'RIDER', isOnline: false, isBlocked: false },
+    { id: 'rid-3', name: 'Sai Rider', email: 'sairider@dott.in', role: 'RIDER', isOnline: true, isBlocked: false, phone: '6303142328', lat: 17.436, lng: 78.392 },
+  ]
+  const shops = [
+    { id: 'shop-1', ownerId: 'vend-1', ownerName: 'Rahul Vendor', name: 'NearNow Fashion Hub', address: 'Banjara Hills, Hyderabad', city: 'Hyderabad', phone: '9012345678', isOpen: true, isSuspended: false, isVerified: true, badgeType: 'VERIFIED', category: 'Fashion', rating: 4.6, ratingCount: 118, totalOrders: 42, deliveryTime: 26, minOrder: 299, acceptsReturns: true, returnDays: 7 },
+    { id: 'shop-2', ownerId: 'vend-2', ownerName: 'Anita Store', name: 'Skyline Dresses', address: 'Madhapur, Hyderabad', city: 'Hyderabad', phone: '9123456780', isOpen: true, isSuspended: false, isVerified: false, badgeType: null, category: 'Dresses', rating: 4.4, ratingCount: 61, totalOrders: 23, deliveryTime: 30, minOrder: 349, acceptsReturns: true, returnDays: 5 },
+    { id: 'shop-3', ownerId: 'vend-3', ownerName: 'Sai Hub', name: 'Sai Style Hub', address: 'Kukatpally, Hyderabad', city: 'Hyderabad', phone: '6303142328', isOpen: true, isSuspended: false, isVerified: true, badgeType: 'VERIFIED', category: 'Fashion', rating: 4.8, ratingCount: 92, totalOrders: 37, deliveryTime: 22, minOrder: 249, acceptsReturns: true, returnDays: 7 },
+  ]
+  const orders = [
+    { id: 'ord-1', orderCode: 'NN1201', status: 'PENDING', total: 999, paymentMethod: 'COD', customerName: 'Sai Kumar', shopName: 'NearNow Fashion Hub', riderName: 'Unassigned', createdAt: new Date(now - 1000 * 60 * 20).toISOString() },
+    { id: 'ord-2', orderCode: 'NN1202', status: 'CONFIRMED', total: 1299, paymentMethod: 'ONLINE', customerName: 'Bhavana', shopName: 'Skyline Dresses', riderName: 'Ramesh Rider', createdAt: new Date(now - 1000 * 60 * 55).toISOString() },
+    { id: 'ord-3', orderCode: 'NN1203', status: 'OUT_FOR_DELIVERY', total: 899, paymentMethod: 'ONLINE', customerName: 'Asha', shopName: 'NearNow Fashion Hub', riderName: 'Ramesh Rider', createdAt: new Date(now - 1000 * 60 * 80).toISOString() },
+    { id: 'ord-4', orderCode: 'NN1204', status: 'DELIVERED', total: 1499, paymentMethod: 'ONLINE', customerName: 'Kiran', shopName: 'Skyline Dresses', riderName: 'Kiran Rider', createdAt: new Date(now - 1000 * 60 * 180).toISOString() },
+    { id: 'ord-5', orderCode: 'NN1205', status: 'CONFIRMED', total: 1099, paymentMethod: 'ONLINE', customerName: 'Sai Kumar', shopName: 'Sai Style Hub', riderName: 'Sai Rider', createdAt: new Date(now - 1000 * 60 * 35).toISOString() },
+  ]
+  const returns = [
+    { id: 'ret-1', orderCode: 'NN1188', customerName: 'Priya', shopName: 'NearNow Fashion Hub', status: 'REQUESTED', reason: 'Size issue', refundAmount: 999 },
+    { id: 'ret-2', orderCode: 'NN1182', customerName: 'Anil', shopName: 'Skyline Dresses', status: 'APPROVED', reason: 'Price issue', refundAmount: 1199 },
+    { id: 'ret-3', orderCode: 'NN1180', customerName: 'Sai Kumar', shopName: 'Sai Style Hub', status: 'REFUNDED', reason: 'Quality issue', refundAmount: 899 },
+  ]
+  const promos = [
+    { id: 'promo-1', code: 'WELCOME50', discountType: 'FLAT', discountValue: 50, isActive: true },
+    { id: 'promo-2', code: 'SKY10', discountType: 'PERCENT', discountValue: 10, isActive: false },
+  ]
+  const verifyRequests = [
+    { id: 'vr-1', shopId: 'shop-2', shopName: 'Skyline Dresses', ownerName: 'Anita Store', badgeType: 'VERIFIED', createdAt: new Date(now - 1000 * 60 * 90).toISOString() },
+  ]
+  const revenue = {
+    total: 46890,
+    today: 2498,
+    daily: [
+      { day: 'Mon', revenue: 3400 },
+      { day: 'Tue', revenue: 5800 },
+      { day: 'Wed', revenue: 4100 },
+      { day: 'Thu', revenue: 6900 },
+      { day: 'Fri', revenue: 7200 },
+      { day: 'Sat', revenue: 8800 },
+      { day: 'Sun', revenue: 10690 },
+    ],
+  }
+  const settlements = {
+    vendorInvoices: [
+      { id: 'inv-v1', entityType: 'vendor', vendorId: 'vend-1', vendorName: 'Rahul Vendor', shopName: 'NearNow Fashion Hub', totalOrders: 24, totalSales: 24890, commissionPct: 0, commissionAmount: 0, netPayable: 24890, paidAmount: 18000, pendingAmount: 6890, status: 'PARTIAL', periodStart: '2026-04-01', periodEnd: '2026-04-05', latestInvoiceId: 'inv-v1' },
+      { id: 'inv-v2', entityType: 'vendor', vendorId: 'vend-2', vendorName: 'Anita Store', shopName: 'Skyline Dresses', totalOrders: 16, totalSales: 17990, commissionPct: 0, commissionAmount: 0, netPayable: 17990, paidAmount: 17990, pendingAmount: 0, status: 'PAID', periodStart: '2026-04-01', periodEnd: '2026-04-05', latestInvoiceId: 'inv-v2' },
+      { id: 'inv-v3', entityType: 'vendor', vendorId: 'vend-3', vendorName: 'Sai Hub', shopName: 'Sai Style Hub', totalOrders: 19, totalSales: 19340, commissionPct: 0, commissionAmount: 0, netPayable: 19340, paidAmount: 11000, pendingAmount: 8340, status: 'PARTIAL', periodStart: '2026-04-01', periodEnd: '2026-04-05', latestInvoiceId: 'inv-v3' },
+    ],
+    riderInvoices: [
+      { id: 'inv-r1', entityType: 'rider', riderId: 'rid-1', riderName: 'Ramesh Rider', totalDeliveries: 18, earningsPerDelivery: 82, totalEarnings: 1476, paidAmount: 900, pendingAmount: 576, status: 'PARTIAL', latestInvoiceId: 'inv-r1', periodStart: '2026-04-01', periodEnd: '2026-04-05' },
+      { id: 'inv-r2', entityType: 'rider', riderId: 'rid-2', riderName: 'Kiran Rider', totalDeliveries: 11, earningsPerDelivery: 75, totalEarnings: 825, paidAmount: 825, pendingAmount: 0, status: 'PAID', latestInvoiceId: 'inv-r2', periodStart: '2026-04-01', periodEnd: '2026-04-05' },
+      { id: 'inv-r3', entityType: 'rider', riderId: 'rid-3', riderName: 'Sai Rider', totalDeliveries: 14, earningsPerDelivery: 80, totalEarnings: 1120, paidAmount: 700, pendingAmount: 420, status: 'PARTIAL', latestInvoiceId: 'inv-r3', periodStart: '2026-04-01', periodEnd: '2026-04-05' },
+    ],
+    history: [
+      { id: 'pay-1', entityType: 'vendor', userName: 'Rahul Vendor', shopName: 'NearNow Fashion Hub', amount: 18000, paymentDate: new Date(now - 1000 * 60 * 60 * 8).toISOString() },
+      { id: 'pay-2', entityType: 'rider', userName: 'Kiran Rider', amount: 825, paymentDate: new Date(now - 1000 * 60 * 60 * 20).toISOString() },
+      { id: 'pay-3', entityType: 'vendor', userName: 'Sai Hub', shopName: 'Sai Style Hub', amount: 11000, paymentDate: new Date(now - 1000 * 60 * 60 * 14).toISOString() },
+    ],
+  }
+  const commission = {
+    platform_fee_flat: 10,
+    reseller_pct: 5,
+    rider_base: 20,
+    vendor_commission_pct: 0,
+  }
+  return {
+    user: users[0],
+    users,
+    shops,
+    orders,
+    returns,
+    promos,
+    verifyRequests,
+    revenue,
+    settlements,
+    commission,
+  }
+}
+
+function getDemoAdminDb() {
+  try {
+    const raw = localStorage.getItem(DEMO_ADMIN_DB_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      const seeded = createDemoAdminDb()
+      const merged = {
+        ...seeded,
+        ...parsed,
+        users: [...seeded.users.filter(seed => !(parsed.users || []).some(item => item.id === seed.id)), ...(parsed.users || [])],
+        shops: [...seeded.shops.filter(seed => !(parsed.shops || []).some(item => item.id === seed.id)), ...(parsed.shops || [])].map(shop => ({
+          isOpen: true,
+          city: 'Hyderabad',
+          phone: 'Not added',
+          ratingCount: 0,
+          totalOrders: 0,
+          deliveryTime: 25,
+          minOrder: 199,
+          acceptsReturns: true,
+          returnDays: 7,
+          ...shop,
+        })),
+        orders: [...seeded.orders.filter(seed => !(parsed.orders || []).some(item => item.id === seed.id)), ...(parsed.orders || [])],
+        returns: [...seeded.returns.filter(seed => !(parsed.returns || []).some(item => item.id === seed.id)), ...(parsed.returns || [])],
+        verifyRequests: [...seeded.verifyRequests.filter(seed => !(parsed.verifyRequests || []).some(item => item.id === seed.id)), ...(parsed.verifyRequests || [])],
+        settlements: {
+          ...seeded.settlements,
+          ...(parsed.settlements || {}),
+          vendorInvoices: [...seeded.settlements.vendorInvoices.filter(seed => !((parsed.settlements?.vendorInvoices) || []).some(item => item.id === seed.id)), ...((parsed.settlements?.vendorInvoices) || [])].map((invoice) => {
+            const totalSales = Number(invoice.totalSales || 0)
+            const paidAmount = Number(invoice.paidAmount || 0)
+            return {
+              ...invoice,
+              commissionPct: 0,
+              commissionAmount: 0,
+              netPayable: totalSales,
+              pendingAmount: Math.max(0, totalSales - paidAmount),
+            }
+          }),
+          riderInvoices: [...seeded.settlements.riderInvoices.filter(seed => !((parsed.settlements?.riderInvoices) || []).some(item => item.id === seed.id)), ...((parsed.settlements?.riderInvoices) || [])],
+          history: [...seeded.settlements.history.filter(seed => !((parsed.settlements?.history) || []).some(item => item.id === seed.id)), ...((parsed.settlements?.history) || [])],
+        },
+      }
+      localStorage.setItem(DEMO_ADMIN_DB_KEY, JSON.stringify(merged))
+      return merged
+    }
+  } catch {}
+  const seeded = createDemoAdminDb()
+  localStorage.setItem(DEMO_ADMIN_DB_KEY, JSON.stringify(seeded))
+  return seeded
+}
+
+function saveDemoAdminDb(db) {
+  localStorage.setItem(DEMO_ADMIN_DB_KEY, JSON.stringify(db))
+}
+
+function getDemoAdminStats(db) {
+  const customers = db.users.filter(u => u.role === 'CUSTOMER').length
+  const vendors = db.users.filter(u => u.role === 'OWNER').length
+  const riders = db.users.filter(u => u.role === 'RIDER').length
+  const pendingOrders = db.orders.filter(o => o.status === 'PENDING').length
+  const activeOrders = db.orders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status)).length
+  const todayRevenue = db.orders.filter(o => o.status !== 'CANCELLED').reduce((sum, o) => sum + Number(o.total || 0), 0)
+  return {
+    users: db.users.length,
+    customers,
+    vendors,
+    riders,
+    orders: db.orders.length,
+    activeOrders,
+    pendingOrders,
+    todayOrders: 2,
+    todayRevenue,
+    revenue: db.revenue.total,
+    onlineRiders: db.users.filter(u => u.role === 'RIDER' && u.isOnline).length,
+    blockedUsers: db.users.filter(u => u.isBlocked).length,
+    newToday: 3,
+    newThisWeek: 11,
+  }
+}
+
+const ADMIN_AUTH_IMAGES = [
+  'https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1503341455253-b2e723bb3dbb?auto=format&fit=crop&w=900&q=80',
+]
 
 /* ─── CSS ─────────────────────────────────────────────────── */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --primary:#6c47ff;--primary-d:#5535e0;--primary-l:rgba(108,71,255,.1);
-  --green:#16a34a;--green-l:#dcfce7;--green-t:#15803d;
-  --red:#ef4444;--red-l:#fee2e2;--red-t:#b91c1c;
-  --amber:#f59e0b;--amber-l:#fef9c3;--amber-t:#92400e;
-  --blue:#3b82f6;--blue-l:#dbeafe;--blue-t:#1d4ed8;
-  --orange:#f97316;--orange-l:#fff7ed;--orange-t:#c2410c;
-  --purple:#8b5cf6;--purple-l:#ede9fe;--purple-t:#6d28d9;
-  --bg:#f4f2ff;--surface:#fff;--border:#e8e4ff;--border2:#f0eeff;
-  --text:#1e1b3a;--muted:#6b7280;
+  --primary:#1d6fb8;--primary-d:#0f4c81;--primary-l:rgba(29,111,184,.14);
+  --green:#4aa8ff;--green-l:#eaf6ff;--green-t:#1d73b9;
+  --red:#2387e8;--red-l:#edf7ff;--red-t:#196dbd;
+  --amber:#8ecbff;--amber-l:#eaf6ff;--amber-t:#1d73b9;
+  --blue:#4aa8ff;--blue-l:#eaf6ff;--blue-t:#1d73b9;
+  --orange:#4aa8ff;--orange-l:#eaf6ff;--orange-t:#1d73b9;
+  --purple:#4aa8ff;--purple-l:#eaf6ff;--purple-t:#1d73b9;
+  --bg:#eef7ff;--surface:#fff;--border:#cfe6fb;--border2:#e8f4ff;
+  --text:#12324d;--muted:#5f7d96;
   --font:'Plus Jakarta Sans',sans-serif;--body:'Inter',sans-serif;
-  --sh-sm:0 1px 4px rgba(108,71,255,.08);
-  --sh:0 4px 20px rgba(108,71,255,.12);
-  --sh-lg:0 12px 40px rgba(108,71,255,.18);
+  --sh-sm:0 1px 4px rgba(42,116,189,.08);
+  --sh:0 8px 28px rgba(42,116,189,.12);
+  --sh-lg:0 18px 48px rgba(42,116,189,.18);
   --r:14px;--r-sm:10px;--r-lg:20px;
 }
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--body)}
+html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);color:var(--text);font-family:var(--body)}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#c4b8ff;border-radius:4px}
 
@@ -90,6 +362,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 @keyframes countUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 @keyframes ripple{0%{transform:scale(0);opacity:.5}100%{transform:scale(3);opacity:0}}
+@keyframes authDrift{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(0,-18px,0)}}
+@keyframes authScroll{0%{transform:translateY(0)}100%{transform:translateY(-50%)}}
 
 .fade-up{animation:fadeUp .38s cubic-bezier(.22,1,.36,1) both}
 .fade-in{animation:fadeIn .28s ease both}
@@ -102,32 +376,32 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 
 /* ── SIDEBAR ── */
 .sidebar{
-  width:256px;background:linear-gradient(180deg,#1e1b3a 0%,#2d2a5e 100%);
+  width:256px;background:linear-gradient(180deg,#0f4c81 0%,#1d6fb8 58%,#4aa8ff 100%);
   display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:100;
-  overflow-y:auto;overflow-x:hidden;
+  overflow-y:auto;overflow-x:hidden;border-right:1px solid rgba(255,255,255,.55);
 }
 .sidebar::-webkit-scrollbar{width:0}
 .sb-logo{padding:24px 20px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
 .sb-logo .brand{font-family:var(--font);font-weight:900;font-size:24px;color:#fff;letter-spacing:-.5px}
-.sb-logo .brand span{color:#a78bfa}
+.sb-logo .brand span{color:#eaf6ff}
 .sb-logo .tag{font-size:10px;color:rgba(255,255,255,.3);font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-top:3px}
 .sb-section{padding:16px 12px 0}
 .sb-section-label{font-size:9px;font-weight:800;color:rgba(255,255,255,.22);text-transform:uppercase;letter-spacing:1.4px;padding:10px 8px 5px}
 .sb-item{
   display:flex;align-items:center;gap:11px;padding:11px 12px;
-  border-radius:12px;cursor:pointer;color:rgba(255,255,255,.55);
+  border-radius:12px;cursor:pointer;color:rgba(255,255,255,.74);
   font-family:var(--font);font-size:13px;font-weight:600;
   transition:.2s;position:relative;margin-bottom:2px;
 }
-.sb-item:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.9)}
-.sb-item.active{background:rgba(108,71,255,.3);color:#c4b8ff}
-.sb-item.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:65%;background:#a78bfa;border-radius:0 3px 3px 0}
+.sb-item:hover{background:rgba(255,255,255,.14);color:#fff}
+.sb-item.active{background:rgba(255,255,255,.24);color:#fff;box-shadow:0 10px 24px rgba(11,59,99,.22)}
+.sb-item.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:65%;background:#fff;border-radius:0 3px 3px 0}
 .sb-item svg{width:18px;height:18px;flex-shrink:0;opacity:.8}
 .sb-item.active svg{opacity:1}
 .sb-badge{margin-left:auto;font-size:10px;font-weight:900;padding:2px 7px;border-radius:100px;min-width:18px;text-align:center}
 .sb-bottom{padding:14px 12px 20px;border-top:1px solid rgba(255,255,255,.07);margin-top:auto}
-.sb-admin-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);margin-bottom:10px}
-.sb-avatar{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#6c47ff,#a78bfa);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff;flex-shrink:0}
+.sb-admin-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);margin-bottom:10px}
+.sb-avatar{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#4aa8ff,#8fd0ff);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff;flex-shrink:0}
 
 /* ── MAIN ── */
 .main{margin-left:256px;flex:1;display:flex;flex-direction:column;min-height:100vh}
@@ -145,9 +419,16 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 
 /* ── PAGE ── */
 .page{padding:28px;animation:fadeIn .3s ease}
-.page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:26px;gap:12px}
-.page-title{font-family:var(--font);font-size:24px;font-weight:900;color:var(--text)}
-.page-sub{color:var(--muted);font-size:13px;margin-top:4px}
+.page-header{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  background:linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%);
+  border:1px solid rgba(74,168,255,.55);border-radius:16px;padding:14px 16px;margin-bottom:16px;
+  box-shadow:0 14px 30px rgba(29,111,184,.28);
+}
+.page-title{font-family:var(--font);font-size:24px;font-weight:900;color:#fff}
+.page-sub{color:rgba(255,255,255,.86);font-size:13px;margin-top:4px}
+.page-header .btn-ghost{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.35)}
+.page-header .btn-ghost:hover{background:rgba(255,255,255,.24);color:#fff;border-color:rgba(255,255,255,.45)}
 
 /* ── STAT CARDS ── */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px}
@@ -193,14 +474,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 18px;border-radius:10px;border:none;cursor:pointer;font-family:var(--font);font-weight:700;font-size:13px;transition:.22s;position:relative;overflow:hidden;white-space:nowrap}
 .btn:active{transform:scale(.97)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-primary{background:linear-gradient(135deg,#6c47ff,#8b5cf6);color:#fff;box-shadow:0 4px 14px rgba(108,71,255,.3)}
-.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(108,71,255,.4)}
-.btn-success{background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff}
+.btn-primary{background:linear-gradient(135deg,#1d6fb8,#4aa8ff);color:#fff;box-shadow:0 8px 20px rgba(29,111,184,.34)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 12px 26px rgba(29,111,184,.42)}
+.btn-success{background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff}
 .btn-success:hover{transform:translateY(-1px)}
-.btn-danger{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff}
+.btn-danger{background:linear-gradient(135deg,#52b0ff,#2387e8);color:#fff}
 .btn-danger:hover{transform:translateY(-1px)}
-.btn-ghost{background:var(--surface);color:var(--text);border:1.5px solid var(--border)}
-.btn-ghost:hover{border-color:var(--primary);color:var(--primary)}
+.btn-ghost{background:var(--surface);color:#1d6fb8;border:1.5px solid rgba(29,111,184,.28)}
+.btn-ghost:hover{border-color:#1d6fb8;color:#0f4c81;background:#edf7ff}
 .btn-sm{padding:6px 12px;font-size:12px;border-radius:8px}
 .btn-icon{width:34px;height:34px;padding:0;border-radius:9px}
 
@@ -217,24 +498,46 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 /* ── TOGGLE ── */
 .toggle{width:42px;height:23px;border-radius:12px;border:none;cursor:pointer;position:relative;transition:.25s;flex-shrink:0}
 .toggle::after{content:'';position:absolute;width:17px;height:17px;border-radius:50%;background:#fff;top:3px;transition:.25s;box-shadow:0 1px 4px rgba(0,0,0,.2)}
-.toggle.on{background:var(--green)}.toggle.on::after{left:22px}
+.toggle.on{background:var(--primary)}.toggle.on::after{left:22px}
 .toggle.off{background:#d1d5db}.toggle.off::after{left:3px}
 
 /* ── CHART BAR ── */
 .bar-chart{display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 4px}
 .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}
-.bar-fill{width:100%;background:linear-gradient(180deg,#8b5cf6,#6c47ff);border-radius:6px 6px 0 0;transition:height .6s cubic-bezier(.22,1,.36,1);min-height:4px;position:relative;cursor:pointer}
-.bar-fill:hover{background:linear-gradient(180deg,#a78bfa,#7c3aed);transform:scaleY(1.03);transform-origin:bottom}
+.bar-fill{width:100%;background:linear-gradient(180deg,#8ecbff,#4aa8ff);border-radius:6px 6px 0 0;transition:height .6s cubic-bezier(.22,1,.36,1);min-height:4px;position:relative;cursor:pointer}
+.bar-fill:hover{background:linear-gradient(180deg,#b9ddff,#69bbff);transform:scaleY(1.03);transform-origin:bottom}
 .bar-fill::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1e1b3a;color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;white-space:nowrap;opacity:0;transition:.15s;pointer-events:none}
 .bar-fill:hover::after{opacity:1}
 .bar-label{font-size:10px;color:var(--muted);font-weight:700;text-align:center}
 .bar-val{font-size:10px;font-weight:800;color:var(--primary)}
 
 /* ── AUTH ── */
-.auth-page{min-height:100vh;display:flex;background:#1e1b3a;position:relative;overflow:hidden}
-.auth-bg-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(108,71,255,.25) 1px,transparent 1px);background-size:28px 28px;animation:bgMove 10s linear infinite;pointer-events:none}
+.auth-page{min-height:100vh;display:flex;background:radial-gradient(circle at top left,rgba(255,255,255,.32),transparent 28%),radial-gradient(circle at bottom right,rgba(234,246,255,.24),transparent 30%),linear-gradient(135deg,#8fd0ff 0%,#63b7ff 35%,#4aa8ff 100%);position:relative;overflow:hidden}
+.auth-page::before{content:'';position:absolute;inset:-10%;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.18),transparent 22%),radial-gradient(circle at 80% 30%,rgba(255,255,255,.12),transparent 18%),radial-gradient(circle at 60% 80%,rgba(255,255,255,.12),transparent 20%);animation:authDrift 18s ease-in-out infinite;pointer-events:none}
+.auth-page::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,0) 28%,rgba(18,50,77,.08));pointer-events:none}
+.auth-bg-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(255,255,255,.28) 1px,transparent 1px);background-size:28px 28px;animation:bgMove 10s linear infinite;pointer-events:none;opacity:.55}
 .auth-glow{position:absolute;border-radius:50%;pointer-events:none}
 .auth-form-wrap{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;width:100%;padding:24px}
+.auth-scene{position:absolute;inset:0;display:grid;grid-template-columns:1fr 420px 1fr;gap:24px;padding:32px;pointer-events:none}
+.auth-column{position:relative;overflow:hidden;border-radius:32px;min-height:calc(100vh - 64px);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.24);box-shadow:0 22px 50px rgba(42,116,189,.16);backdrop-filter:blur(12px)}
+.auth-column::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.18),rgba(255,255,255,.02) 26%,rgba(74,168,255,.08));pointer-events:none}
+.auth-column-track{display:grid;gap:18px;padding:18px;animation:authScroll 26s linear infinite}
+.auth-card-image{height:240px;border-radius:24px;background-size:cover;background-position:center;box-shadow:0 18px 36px rgba(18,50,77,.24);position:relative;overflow:hidden;transform:translateZ(0)}
+.auth-card-image::before{content:'';position:absolute;inset:auto 14px 14px 14px;height:44px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.3),rgba(255,255,255,.08));backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.28)}
+.auth-card-image::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(18,50,77,.2) 68%,rgba(18,50,77,.34))}
+.auth-card-image.small{height:170px}
+.auth-card-image.tall{height:290px}
+.auth-card-label{position:absolute;left:28px;bottom:26px;z-index:2;color:#fff;text-shadow:0 4px 20px rgba(0,0,0,.18)}
+.auth-card-label strong{display:block;font-family:var(--font);font-size:14px;font-weight:800}
+.auth-card-label span{display:block;font-size:11px;opacity:.86;margin-top:2px}
+.auth-center-hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;margin-bottom:20px;animation:authDrift 7s ease-in-out infinite}
+.auth-hero-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:999px;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.28);color:#fff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:18px;backdrop-filter:blur(12px)}
+.auth-panel{background:rgba(255,255,255,.92);border:1px solid rgba(255,255,255,.56);border-radius:30px;padding:26px;backdrop-filter:blur(18px);animation:scaleIn .4s cubic-bezier(.22,1,.36,1);box-shadow:0 26px 70px rgba(42,116,189,.22);position:relative;overflow:hidden}
+.auth-panel::before{content:'';position:absolute;inset:0 0 auto 0;height:92px;background:linear-gradient(180deg,rgba(234,246,255,.92),rgba(234,246,255,0));pointer-events:none}
+.auth-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
+.auth-mini-stat{padding:12px;border-radius:16px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.24);backdrop-filter:blur(10px);color:#fff;text-align:left}
+.auth-mini-stat strong{display:block;font-family:var(--font);font-size:18px;margin-bottom:3px}
+.auth-mobile-strip{display:none}
 
 /* ── MODAL ── */
 .modal-overlay{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .2s ease;backdrop-filter:blur(4px)}
@@ -260,10 +563,73 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--b
 
 /* ── STATUS MAP ── */
 .status-pill{padding:4px 12px;border-radius:100px;font-size:11px;font-weight:800;font-family:var(--font)}
+.responsive-grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.responsive-split{display:grid;grid-template-columns:1.25fr 1fr;gap:18px;align-items:start}
+.stack-grid{display:grid;gap:18px}
+.responsive-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.responsive-grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;font-size:13px}
+.sett-table{display:grid;gap:0}
+.sett-head,.sett-row{display:grid;grid-template-columns:1.4fr .7fr .9fr 1fr .9fr .9fr 1fr;gap:12px;align-items:center}
+.sett-head{padding:0 0 10px;border-bottom:1px solid var(--border2);margin-bottom:8px}
+.sett-row{padding:12px 0;border-bottom:1px solid var(--border2)}
+.sett-row:last-child{border-bottom:none}
+.topbar-welcome{font-size:12px;color:var(--muted)}
 
 /* ── RESPONSIVE ── */
 @media(max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:768px){.sidebar{width:70px}.sb-item span,.sb-section-label,.sb-logo .brand,.sb-logo .tag,.sb-admin-card div{display:none}.main{margin-left:70px}.stats-grid{grid-template-columns:1fr 1fr}.two-col{grid-template-columns:1fr}}
+@media(max-width:900px){
+  .layout{display:block}
+  .auth-page{background:linear-gradient(180deg,#8fd0ff 0%,#4aa8ff 34%,#ffffff 34%)}
+  .auth-scene{grid-template-columns:1fr;gap:0;padding:14px}
+  .auth-column{display:none}
+  .auth-center-hero{margin-bottom:14px}
+  .auth-mini-grid{grid-template-columns:1fr 1fr}
+  .auth-panel{padding:20px;border-radius:24px}
+  .auth-mobile-strip{display:flex;gap:10px;overflow:auto;padding:0 2px 14px;scrollbar-width:none}
+  .auth-mobile-strip::-webkit-scrollbar{display:none}
+  .auth-mobile-card{min-width:120px;height:94px;border-radius:18px;background-size:cover;background-position:center;box-shadow:0 10px 24px rgba(18,50,77,.18);position:relative;overflow:hidden}
+  .auth-mobile-card::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(18,50,77,.24))}
+  .sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;height:auto;border-right:none;border-top:1px solid rgba(74,168,255,.18);background:rgba(255,255,255,.97);backdrop-filter:blur(18px)}
+  .sb-logo,.sb-section-label,.sb-admin-card{display:none}
+  .sb-section{padding:10px 12px 0;display:flex;overflow-x:auto;gap:8px}
+  .sb-item{flex:0 0 auto;min-width:74px;justify-content:center;flex-direction:column;gap:5px;padding:9px 12px;border-radius:16px;background:#f4faff;color:var(--muted);border:1px solid var(--border);font-size:10px;text-align:center}
+  .sb-item.active{background:linear-gradient(180deg,#dff1ff,#c9e7ff);color:var(--primary-d)}
+  .sb-item.active::before{display:none}
+  .sb-bottom{display:flex;gap:8px;padding:10px 12px 14px;border-top:none;margin-top:0}
+  .main{margin-left:0;padding-bottom:98px}
+  .topbar{padding:14px 16px;height:auto;min-height:64px;align-items:flex-start;gap:10px;flex-wrap:wrap}
+  .topbar-right{width:100%;justify-content:space-between;flex-wrap:wrap}
+  .page{padding:18px 14px}
+  .page-header{flex-direction:column}
+  .stats-grid,.two-col,.three-col{grid-template-columns:1fr}
+  .responsive-grid-4,.responsive-grid-3,.responsive-grid-2,.responsive-split,.info-grid{grid-template-columns:1fr}
+  .stack-grid{gap:14px}
+  .sett-head{display:none}
+  .sett-row{grid-template-columns:1fr;gap:6px;padding:14px 0}
+  .sett-row > span{display:block}
+  .table-wrap{overflow-x:auto}
+  .table-head,.table-row{display:block!important}
+  .table-head > *,.table-row > *{display:block;padding:4px 0}
+  .modal{padding:22px 18px}
+}
+@media(max-width:560px){
+  .table-toolbar{padding:14px}
+  .table-head,.table-row{padding:12px 14px}
+  .search-input{min-width:0;width:100%}
+  .btn{width:100%}
+  .topbar,.page,.modal{padding-left:12px;padding-right:12px}
+  .topbar-welcome{display:none}
+  .sb-item{min-width:68px;padding:8px 10px}
+  .sb-item span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .page-title{font-size:22px}
+  .stat-card,.card{padding:16px}
+  .auth-form-wrap{padding:16px 12px 24px}
+  .auth-mini-grid{grid-template-columns:1fr}
+  .auth-panel{padding:18px}
+  .auth-mobile-strip{padding-bottom:12px}
+  .auth-mobile-card{min-width:108px;height:82px}
+}
 `
 
 /* ── STATUS COLORS ── */
@@ -313,6 +679,11 @@ function AuthPage({ onSuccess }) {
   const [pass, setPass] = useState('password123')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const enterDemoAdmin = () => {
+    localStorage.setItem(DEMO_ADMIN_MODE_KEY, '1')
+    const db = getDemoAdminDb()
+    onSuccess(db.user)
+  }
 
   const submit = async () => {
     setErr(''); setLoading(true)
@@ -329,46 +700,83 @@ function AuthPage({ onSuccess }) {
   return (
     <div className="auth-page">
       <div className="auth-bg-dots" />
-      <div className="auth-glow" style={{ top: '-20%', left: '-10%', width: '60%', height: '70%', background: 'radial-gradient(circle,rgba(108,71,255,.15),transparent 70%)' }} />
-      <div className="auth-glow" style={{ bottom: '-20%', right: '-10%', width: '50%', height: '60%', background: 'radial-gradient(circle,rgba(167,139,250,.1),transparent 70%)' }} />
+      <div className="auth-glow" style={{ top: '-20%', left: '-10%', width: '60%', height: '70%', background: 'radial-gradient(circle,rgba(255,255,255,.22),transparent 70%)' }} />
+      <div className="auth-glow" style={{ bottom: '-20%', right: '-10%', width: '50%', height: '60%', background: 'radial-gradient(circle,rgba(234,246,255,.24),transparent 70%)' }} />
+      <div className="auth-scene">
+        <div className="auth-column">
+          <div className="auth-column-track">
+            {[0,1,2,3,0,2].map((idx, i) => (
+              <div key={`left-${i}`} className={`auth-card-image ${i % 3 === 0 ? 'tall' : i % 2 === 0 ? 'small' : ''}`} style={{ backgroundImage: `url(${ADMIN_AUTH_IMAGES[idx]})` }}>
+                <div className="auth-card-label">
+                  <strong>{['Live Shop View', 'Rider Network', 'Order Snapshot', 'Style Feed'][idx]}</strong>
+                  <span>{['Background scene', 'Delivery visibility', 'Settlement tracking', 'Marketplace mood'][idx]}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div />
+        <div className="auth-column">
+          <div className="auth-column-track" style={{ animationDuration: '30s', animationDirection: 'reverse' }}>
+            {[3,2,1,0,3,1].map((idx, i) => (
+              <div key={`right-${i}`} className={`auth-card-image ${i % 2 === 0 ? 'small' : i % 3 === 0 ? 'tall' : ''}`} style={{ backgroundImage: `url(${ADMIN_AUTH_IMAGES[idx]})` }}>
+                <div className="auth-card-label">
+                  <strong>{['Insights Layer', 'Order Monitor', 'Shop Control', 'Team Overview'][idx]}</strong>
+                  <span>{['Animated scene', 'Fast review', 'Operations ready', 'Admin access'][idx]}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       <div className="auth-form-wrap">
         <div style={{ width: '100%', maxWidth: 420 }}>
-          {/* Logo */}
-          <div style={{ textAlign: 'center', marginBottom: 36 }}>
-            <div style={{ fontSize: 56, marginBottom: 12, animation: 'float 3s ease-in-out infinite' }}>🛡️</div>
-            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 32, color: '#fff', letterSpacing: '-.5px' }}>
-              DOTT <span style={{ color: '#a78bfa' }}>Admin</span>
+          <div className="auth-center-hero">
+            <div className="auth-hero-badge">Live Control Center</div>
+            <div style={{ width: 72, height: 72, margin: '0 auto 14px', borderRadius: 22, background: 'rgba(255,255,255,.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 14px 32px rgba(42,116,189,.18)' }}>
+              <span style={{ display:'inline-flex', width: 34, height: 34 }}><I.Shield /></span>
             </div>
-            <div style={{ color: 'rgba(255,255,255,.45)', fontSize: 14, marginTop: 6 }}>Platform Control Center</div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 32, color: '#fff', letterSpacing: '-.5px' }}>
+              DOTT <span style={{ color: '#eaf6ff' }}>Admin</span>
+            </div>
+            <div style={{ color: 'rgba(255,255,255,.82)', fontSize: 14, marginTop: 6 }}>Platform Control Center</div>
+            <div className="auth-mini-grid">
+              <div className="auth-mini-stat"><strong>24+</strong> shops under review</div>
+              <div className="auth-mini-stat"><strong>112</strong> orders tracked today</div>
+            </div>
           </div>
 
-          {/* Feature pills */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 28 }}>
-            {['📊 Live Analytics', '👥 User Management', '🏪 Shop Control', '🚴 Rider Tracking', '📦 Order Monitor'].map(f => (
-              <span key={f} style={{ background: 'rgba(108,71,255,.15)', border: '1px solid rgba(108,71,255,.25)', color: 'rgba(255,255,255,.7)', fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 100 }}>{f}</span>
+          <div className="auth-mobile-strip">
+            {ADMIN_AUTH_IMAGES.map((img, i) => (
+              <div key={`mobile-${i}`} className="auth-mobile-card" style={{ backgroundImage: `url(${img})` }} />
             ))}
           </div>
 
-          {/* Form card */}
-          <div style={{ background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 20, padding: 28, backdropFilter: 'blur(12px)', animation: 'scaleIn .4s cubic-bezier(.22,1,.36,1)' }}>
-            <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 18, color: '#fff', marginBottom: 20 }}>Sign in to Dashboard</div>
+          <div className="auth-panel">
+            <div style={{ marginBottom: 18, position: 'relative', zIndex: 1 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: '#eaf6ff', color: 'var(--primary-d)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.8px', marginBottom: 12 }}>
+                Animated Access
+              </div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 22, color: 'var(--text)' }}>Sign in to Admin</div>
+              <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>Manage orders, shops, riders, users, and settlements.</div>
+            </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'relative', zIndex: 1 }}>
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,.4)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Email</label>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Email</label>
                 <input value={email} onChange={e => setEmail(e.target.value)}
-                  style={{ width: '100%', padding: '12px 16px', background: 'rgba(255,255,255,.07)', border: '1.5px solid rgba(255,255,255,.12)', borderRadius: 10, color: '#fff', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
-                  onFocus={e => e.target.style.borderColor = '#a78bfa'} onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,.12)'} />
+                  style={{ width: '100%', padding: '12px 16px', background: '#f7fbff', border: '1.5px solid var(--border)', borderRadius: 12, color: 'var(--text)', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
+                  onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
               </div>
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,.4)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Password</label>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Password</label>
                 <input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
-                  style={{ width: '100%', padding: '12px 16px', background: 'rgba(255,255,255,.07)', border: '1.5px solid rgba(255,255,255,.12)', borderRadius: 10, color: '#fff', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
-                  onFocus={e => e.target.style.borderColor = '#a78bfa'} onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,.12)'} />
+                  style={{ width: '100%', padding: '12px 16px', background: '#f7fbff', border: '1.5px solid var(--border)', borderRadius: 12, color: 'var(--text)', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
+                  onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
               </div>
 
-              {err && <div style={{ background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 8, padding: '10px 14px', color: '#fca5a5', fontSize: 13, fontWeight: 600 }}>{err}</div>}
+              {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 14px', color: '#dc2626', fontSize: 13, fontWeight: 600 }}>{err}</div>}
 
               <button className="btn btn-primary" style={{ width: '100%', padding: '13px', fontSize: 15, marginTop: 4 }} onClick={submit} disabled={loading}>
                 {loading
@@ -376,8 +784,15 @@ function AuthPage({ onSuccess }) {
                   : <><I.Shield /> Enter Admin Panel</>}
               </button>
 
-              <div style={{ textAlign: 'center', color: 'rgba(255,255,255,.3)', fontSize: 12 }}>
-                Demo: admin@dott.in / password123
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div style={{ background: '#f7fbff', border: '1px solid var(--border)', borderRadius: 16, padding: '12px 14px' }}>
+                  <div style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px' }}>Live Modules</div>
+                  <div style={{ color: 'var(--text)', fontFamily: 'var(--font)', fontSize: 20, fontWeight: 800, marginTop: 4 }}>8</div>
+                </div>
+                <div style={{ background: '#f7fbff', border: '1px solid var(--border)', borderRadius: 16, padding: '12px 14px' }}>
+                  <div style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px' }}>Review Queue</div>
+                  <div style={{ color: 'var(--text)', fontFamily: 'var(--font)', fontSize: 20, fontWeight: 800, marginTop: 4 }}>31</div>
+                </div>
               </div>
             </div>
           </div>
@@ -434,15 +849,15 @@ function Dashboard() {
     <div className="page">
 
       {/* ── LIVE HEADER ── */}
-      <div style={{ background: 'linear-gradient(135deg,#1e1b3a,#312e81)', borderRadius: 18, padding: '22px 26px', marginBottom: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ background: 'linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%)', borderRadius: 18, padding: '22px 26px', marginBottom: 24, color: '#fff', position: 'relative', overflow: 'hidden', border: '1px solid rgba(74,168,255,.45)', boxShadow: '0 14px 30px rgba(29,111,184,.24)' }}>
         <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(rgba(255,255,255,.04) 1px,transparent 1px)', backgroundSize: '22px 22px' }} />
         <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
             <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20, letterSpacing: '-.5px' }}>Live Platform Dashboard</div>
-            <div style={{ opacity: .6, fontSize: 12, marginTop: 4 }}>
-              {lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading...'} · Auto-refreshes every 15s
+              <div style={{ opacity: .9, fontSize: 12, marginTop: 4 }}>
+                {lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading...'} · Auto-refreshes every 15s
+              </div>
             </div>
-          </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,197,94,.15)', border: '1px solid rgba(34,197,94,.3)', borderRadius: 100, padding: '5px 13px', fontSize: 12, fontWeight: 800, color: '#4ade80' }}>
               <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ade80', animation: 'pulse 1.5s infinite' }} /> LIVE
@@ -853,11 +1268,24 @@ function OrdersPage() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div><div className="page-title">All Orders</div><div className="page-sub">{orders.length} total · Live updates every 15s</div></div>
+      <div
+        className="page-header"
+        style={{
+          background: 'linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%)',
+          border: '1px solid rgba(74,168,255,.55)',
+          borderRadius: 16,
+          padding: '14px 16px',
+          marginBottom: 16,
+          boxShadow: '0 14px 30px rgba(29,111,184,.28)',
+        }}
+      >
+        <div>
+          <div className="page-title" style={{ color: '#fff' }}>All Orders</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{orders.length} total · Live updates every 15s</div>
+        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--green)', fontWeight: 700 }}><div className="live-dot" /> Live</div>
-          <button className="btn btn-ghost btn-sm" onClick={load}><I.Refresh /></button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dcfce7', fontWeight: 700 }}><div className="live-dot" /> Live</div>
+          <button className="btn btn-ghost btn-sm" onClick={load} style={{ background: 'rgba(255,255,255,.16)', color: '#fff', border: '1px solid rgba(255,255,255,.35)' }}><I.Refresh /></button>
         </div>
       </div>
 
@@ -1439,6 +1867,798 @@ function PromoPage() {
   )
 }
 
+function SettlementFilters({ filters, setFilters, onApply, loading }) {
+  const quick = [
+    { id: 'daily', label: 'Daily' },
+    { id: 'last2days', label: 'Last 2 Days' },
+    { id: 'custom', label: 'Custom Range' },
+  ]
+  return (
+    <div className="card" style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {quick.map(q => (
+          <button
+            key={q.id}
+            className="btn"
+            onClick={() => {
+              const next = { ...filters, rangeKey: q.id }
+              setFilters(next)
+              if (q.id !== 'custom') onApply(next)
+            }}
+            style={{
+              padding: '9px 14px',
+              borderRadius: 999,
+              border: `1px solid ${filters.rangeKey === q.id ? '#6c47ff' : 'var(--border)'}`,
+              background: filters.rangeKey === q.id ? 'rgba(108,71,255,.08)' : '#fff',
+              color: filters.rangeKey === q.id ? '#6c47ff' : 'var(--text)',
+            }}
+          >
+            {q.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input className="input" type="date" value={filters.startDate} onChange={e => setFilters(f => ({ ...f, startDate: e.target.value }))} style={{ width: 160 }} disabled={filters.rangeKey !== 'custom'} />
+        <input className="input" type="date" value={filters.endDate} onChange={e => setFilters(f => ({ ...f, endDate: e.target.value }))} style={{ width: 160 }} disabled={filters.rangeKey !== 'custom'} />
+        <button className="btn btn-primary" onClick={() => onApply(filters)} disabled={loading || (filters.rangeKey === 'custom' && (!filters.startDate || !filters.endDate))}>
+          {loading ? 'Loading…' : 'Apply'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SettlementPage({ onOpenOrders, onOpenShops }) {
+  const detailPanelRef = useRef(null)
+  const [filters, setFilters] = useState({ rangeKey: 'last2days', startDate: '', endDate: '' })
+  const [data, setData] = useState(null)
+  const [orders, setOrders] = useState([])
+  const [users, setUsers] = useState([])
+  const [shops, setShops] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [paying, setPaying] = useState(null)
+  const [focusType, setFocusType] = useState('vendor')
+  const [selectedVendor, setSelectedVendor] = useState(null)
+  const [vendorDetailTab, setVendorDetailTab] = useState('overview')
+  const [expandedVendorOrderId, setExpandedVendorOrderId] = useState(null)
+  const [showAllVendorProducts, setShowAllVendorProducts] = useState(false)
+  const [selectedRider, setSelectedRider] = useState(null)
+  const [riderDetailTab, setRiderDetailTab] = useState('overview')
+  const [expandedRiderOrderId, setExpandedRiderOrderId] = useState(null)
+  const [showAllRiderOrders, setShowAllRiderOrders] = useState(false)
+  const [selectedPayment, setSelectedPayment] = useState(null)
+  const [payContext, setPayContext] = useState(null)
+  const [payMethod, setPayMethod] = useState('phonepe')
+
+  const load = useCallback(async (active = filters) => {
+    setLoading(true)
+    try {
+      const [sett, ord, usr, shp] = await Promise.all([
+        api.settlements(active),
+        api.orders(),
+        api.users(),
+        api.shops(),
+      ])
+      setData(sett.data)
+      setOrders(ord.data || [])
+      setUsers(usr.data || [])
+      setShops(shp.data || [])
+      if (sett.data?.filters) {
+        setFilters({
+          rangeKey: sett.data.filters.rangeKey || active.rangeKey,
+          startDate: sett.data.filters.startDate || active.startDate,
+          endDate: sett.data.filters.endDate || active.endDate,
+        })
+      }
+    } catch (e) {
+      toast('Failed to load settlements', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [filters])
+
+  useEffect(() => { load(filters) }, [])
+
+  const payInvoice = async (invoiceId, payload = {}) => {
+    if (!invoiceId) return
+    setPaying(invoiceId)
+    try {
+      await api.payInvoice(invoiceId, payload)
+      toast('Marked as paid ✓', 'success')
+      await load(filters)
+    } catch (e) {
+      toast('Payment update failed', 'error')
+    } finally {
+      setPaying(null)
+    }
+  }
+
+  const vendorInvoices = data?.vendors || []
+  const riderInvoices = data?.riders || []
+  const history = data?.paymentHistory || []
+  const ownerUsers = users.filter(u => u.role === 'OWNER')
+  const riderUsers = users.filter(u => u.role === 'RIDER')
+  const itemMerchandiseTotal = order => {
+    const items = Array.isArray(order?.items) ? order.items : []
+    const fromItems = items.reduce((sum, item) => sum + (Number(item?.price || 0) * Number(item?.qty || 1)), 0)
+    return fromItems > 0 ? fromItems : Number(order?.subtotal || order?.total || 0)
+  }
+  const vendorRowsBase = (ownerUsers.length ? ownerUsers.map(owner => {
+    const inv = vendorInvoices.find(v => v.vendorId === owner.id || v.vendorName === owner.name)
+    const shop = shops.find(s => s.ownerId === owner.id || s.ownerName === owner.name)
+    const totalSales = Number(inv?.totalSales || 0)
+    const paidAmount = Number(inv?.paidAmount || 0)
+    const pendingAmount = Math.max(0, totalSales - paidAmount)
+    return inv ? {
+      ...inv,
+      vendorId: inv.vendorId || owner.id,
+      vendorName: inv.vendorName || owner.name,
+      shopName: inv.shopName || shop?.name || 'Shop',
+      totalOrders: Number(inv.totalOrders || 0),
+      totalSales,
+      commissionPct: 0,
+      commissionAmount: 0,
+      netPayable: totalSales,
+      paidAmount,
+      pendingAmount,
+    } : {
+      vendorId: owner.id,
+      vendorName: owner.name,
+      shopName: shop?.name || 'Shop',
+      totalOrders: 0,
+      totalSales: 0,
+      commissionPct: 0,
+      commissionAmount: 0,
+      netPayable: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      status: 'NO_INVOICE',
+      latestInvoiceId: null,
+    }
+  }) : vendorInvoices)
+  const vendorRows = Object.values(vendorRowsBase.reduce((acc, row) => {
+    const key = `${row.vendorId || row.vendorName}::${row.shopName || 'Shop'}`
+    if (!acc[key]) {
+      acc[key] = {
+        ...row,
+        totalOrders: Number(row.totalOrders || 0),
+        totalSales: Number(row.totalSales || 0),
+        netPayable: Number(row.netPayable || row.totalSales || 0),
+        paidAmount: Number(row.paidAmount || 0),
+        pendingAmount: Number(row.pendingAmount || 0),
+      }
+      return acc
+    }
+    acc[key] = {
+      ...acc[key],
+      totalOrders: Number(acc[key].totalOrders || 0) + Number(row.totalOrders || 0),
+      totalSales: Number(acc[key].totalSales || 0) + Number(row.totalSales || 0),
+      netPayable: Number(acc[key].netPayable || 0) + Number(row.netPayable || row.totalSales || 0),
+      paidAmount: Number(acc[key].paidAmount || 0) + Number(row.paidAmount || 0),
+      pendingAmount: Number(acc[key].pendingAmount || 0) + Number(row.pendingAmount || 0),
+      latestInvoiceId: row.latestInvoiceId || acc[key].latestInvoiceId,
+      status: row.status || acc[key].status,
+    }
+    return acc
+  }, {}))
+  const riderRows = (riderUsers.length ? riderUsers.map(rider => {
+    const inv = riderInvoices.find(r => r.riderId === rider.id || r.riderName === rider.name)
+    return inv ? {
+      ...inv,
+      riderId: inv.riderId || rider.id,
+      riderName: inv.riderName || rider.name,
+      totalDeliveries: Number(inv.totalDeliveries || 0),
+      earningsPerDelivery: Number(inv.earningsPerDelivery || 0),
+      totalEarnings: Number(inv.totalEarnings || 0),
+      paidAmount: Number(inv.paidAmount || 0),
+      pendingAmount: Number(inv.pendingAmount || 0),
+    } : {
+      riderId: rider.id,
+      riderName: rider.name,
+      totalDeliveries: 0,
+      earningsPerDelivery: 0,
+      totalEarnings: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      status: 'NO_INVOICE',
+      latestInvoiceId: null,
+    }
+  }) : riderInvoices)
+  const selectedVendorInvoice = selectedVendor ? vendorRows.find(v => v.vendorId === selectedVendor) : null
+  const selectedVendorUser = selectedVendor ? users.find(u => u.id === selectedVendor) : null
+  const selectedVendorShop = selectedVendor
+    ? shops.find(s => s.ownerId === selectedVendor || s.ownerName === selectedVendorInvoice?.vendorName || s.name === selectedVendorInvoice?.shopName)
+    : null
+  const selectedVendorOrders = selectedVendor
+    ? orders.filter(o => {
+        const shopName = o.shop?.name || o.shopName || ''
+        const vendorName = o.vendor?.name || o.vendorName || o.ownerName || ''
+        return (
+          shopName === selectedVendorInvoice?.shopName ||
+          vendorName === selectedVendorInvoice?.vendorName
+        )
+      })
+    : []
+  const last2DaysStart = Date.now() - (2 * 24 * 60 * 60 * 1000)
+  const selectedVendorDelivered2Days = selectedVendorOrders.filter(o => {
+    if (o.status !== 'DELIVERED') return false
+    const stamp = o.deliveredAt || o.updatedAt || o.createdAt || o.placedAt
+    if (!stamp) return false
+    return new Date(stamp).getTime() >= last2DaysStart
+  })
+  const selectedVendorGenerated2Days = selectedVendorDelivered2Days.reduce((sum, o) => sum + itemMerchandiseTotal(o), 0)
+  const selectedVendorPayable2Days = selectedVendorGenerated2Days
+  const selectedVendorProducts = selectedVendorDelivered2Days.reduce((acc, o) => {
+    const items = Array.isArray(o.items) ? o.items : []
+    items.forEach(it => {
+      const key = `${it.name || 'Product'}::${it.size || ''}`
+      if (!acc[key]) acc[key] = { name: it.name || 'Product', size: it.size || '', qty: 0, revenue: 0, orders: 0 }
+      acc[key].qty += Number(it.qty || 1)
+      acc[key].revenue += Number((it.price || 0) * (it.qty || 1))
+      acc[key].orders += 1
+    })
+    return acc
+  }, {})
+  const selectedVendorProductList = Object.values(selectedVendorProducts).sort((a, b) => b.revenue - a.revenue)
+  const selectedRiderInvoice = selectedRider ? riderRows.find(r => r.riderId === selectedRider) : null
+  const selectedRiderUser = selectedRider ? users.find(u => u.id === selectedRider || u.name === selectedRiderInvoice?.riderName) : null
+  const selectedRiderOrders = selectedRider
+    ? orders.filter(o => {
+        const riderName = o.rider?.name || o.riderName || ''
+        return riderName === selectedRiderInvoice?.riderName
+      })
+    : []
+  const selectedRiderDelivered2Days = selectedRiderOrders.filter(o => {
+    if (!['DELIVERED', 'OUT_FOR_DELIVERY', 'PICKED_UP'].includes(o.status)) return false
+    const stamp = o.deliveredAt || o.updatedAt || o.createdAt || o.placedAt
+    if (!stamp) return false
+    return new Date(stamp).getTime() >= last2DaysStart
+  })
+  const selectedRiderGenerated2Days = selectedRiderDelivered2Days.reduce((sum, o) => sum + Number(o.deliveryFee || 0), 0)
+  const selectedRiderPayable2Days = selectedRiderGenerated2Days
+
+  useEffect(() => {
+    if (!selectedVendor && vendorRows.length) setSelectedVendor(vendorRows[0].vendorId)
+    if (!selectedRider && riderRows.length) setSelectedRider(riderRows[0].riderId)
+  }, [vendorRows, riderRows, selectedVendor, selectedRider])
+
+  const toUpiFromPhone = (phone = '') => {
+    const digits = String(phone || '').replace(/\D/g, '')
+    return digits ? `${digits}@upi` : ''
+  }
+
+  const openPaymentLink = (app, upiId, amount, note) => {
+    const pa = encodeURIComponent(upiId || '')
+    const pn = encodeURIComponent('DOTT Payout')
+    const am = encodeURIComponent(String(Math.max(0, Number(amount || 0)).toFixed(2)))
+    const tn = encodeURIComponent(note || 'Vendor settlement payout')
+    if (!pa) {
+      toast('UPI ID not available for this payout', 'error')
+      return
+    }
+    const base = `pa=${pa}&pn=${pn}&am=${am}&cu=INR&tn=${tn}`
+    const urls = {
+      phonepe: `phonepe://pay?${base}`,
+      gpay: `gpay://upi/pay?${base}`,
+      upi: `upi://pay?${base}`,
+    }
+    window.open(urls[app] || urls.upi, '_blank')
+  }
+
+  const openVendorDetails = (vendorId) => {
+    setSelectedVendor(vendorId)
+    setVendorDetailTab('overview')
+    setExpandedVendorOrderId(null)
+    setShowAllVendorProducts(false)
+    setTimeout(() => detailPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
+  }
+
+  const openRiderDetails = (riderId) => {
+    setSelectedRider(riderId)
+    setRiderDetailTab('overview')
+    setExpandedRiderOrderId(null)
+    setShowAllRiderOrders(false)
+    setTimeout(() => detailPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
+  }
+
+  const openPayMethodModal = (context) => {
+    if (!context?.invoiceId || Number(context.amount || 0) <= 0) {
+      toast('No pending amount for payout', 'error')
+      return
+    }
+    setPayMethod('phonepe')
+    setPayContext(context)
+  }
+
+  const confirmPayout = async () => {
+    if (!payContext?.invoiceId) return
+    openPaymentLink(payMethod, payContext.upiId, payContext.amount, payContext.note)
+    await payInvoice(payContext.invoiceId, { method: payMethod })
+    setPayContext(null)
+  }
+  const cards = [
+    { label: 'Vendor Due', value: `₹${vendorRows.reduce((s, v) => s + (v.pendingAmount || 0), 0).toLocaleString('en-IN')}`, tone: '#6c47ff' },
+    { label: 'Rider Due', value: `₹${riderRows.reduce((s, v) => s + (v.pendingAmount || 0), 0).toLocaleString('en-IN')}`, tone: '#0ea5e9' },
+    { label: 'Payments Logged', value: history.length, tone: '#16a34a' },
+    { label: 'Invoices', value: (data?.vendorInvoices?.length || 0) + (data?.riderInvoices?.length || 0), tone: '#f59e0b' },
+  ]
+
+  return (
+    <div className="page fade-up">
+      <div
+        className="page-header"
+        style={{
+          background: 'linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%)',
+          border: '1px solid rgba(74,168,255,.55)',
+          borderRadius: 16,
+          padding: '14px 16px',
+          marginBottom: 16,
+          boxShadow: '0 14px 30px rgba(29,111,184,.28)',
+        }}
+      >
+        <div>
+          <div className="page-title" style={{ color: '#fff' }}>Invoices & Settlements</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>2-day payouts with direct vendor/rider payment actions</div>
+        </div>
+      </div>
+
+      <SettlementFilters filters={filters} setFilters={setFilters} onApply={load} loading={loading} />
+
+      {loading && !data ? (
+        <div className="empty" style={{ padding: '40px 0' }}><div>Loading settlements…</div></div>
+      ) : (
+        <>
+          <div className="card" style={{ padding: 10, marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className={focusType === 'vendor' ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ padding: '8px 14px', borderRadius: 999, boxShadow: focusType === 'vendor' ? '0 8px 20px rgba(74,168,255,.35)' : 'none' }}
+                onClick={() => setFocusType('vendor')}
+              >
+                Vendor
+              </button>
+              <button
+                className={focusType === 'rider' ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ padding: '8px 14px', borderRadius: 999, boxShadow: focusType === 'rider' ? '0 8px 20px rgba(74,168,255,.35)' : 'none' }}
+                onClick={() => setFocusType('rider')}
+              >
+                Rider
+              </button>
+              <button
+                className={focusType === 'invoices' ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ padding: '8px 14px', borderRadius: 999, boxShadow: focusType === 'invoices' ? '0 8px 20px rgba(74,168,255,.35)' : 'none' }}
+                onClick={() => setFocusType('invoices')}
+              >
+                Invoices
+              </button>
+              <button
+                className={focusType === 'payments' ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ padding: '8px 14px', borderRadius: 999, boxShadow: focusType === 'payments' ? '0 8px 20px rgba(74,168,255,.35)' : 'none' }}
+                onClick={() => setFocusType('payments')}
+              >
+                Payment History
+              </button>
+            </div>
+          </div>
+
+          <div className="responsive-grid-4">
+            {cards.map(card => (
+              <div key={card.label} className="card">
+                <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700, marginBottom: 8 }}>{card.label}</div>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 24, color: card.tone }}>{card.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="stack-grid">
+            <div className="stack-grid">
+              {focusType === 'vendor' && (
+                <>
+                  <div className="card">
+                    <div className="card-title" style={{ marginBottom: 14 }}>Vendor Settlements</div>
+                    {vendorRows.length === 0 ? <div className="empty"><div>No vendors available</div></div> : (
+                      <div className="sett-table">
+                        <div className="sett-head">
+                          <span className="th">Vendor</span><span className="th">Orders</span><span className="th">Sales</span><span className="th">Commission</span><span className="th">Net</span><span className="th">Pending</span><span className="th">Action</span>
+                        </div>
+                        {vendorRows.map(v => (
+                          <div key={v.vendorId} className="sett-row">
+                            <span><div style={{ fontWeight: 800 }}>{v.vendorName}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{v.shopName}</div></span>
+                            <span>{v.totalOrders}</span>
+                            <span>₹{v.totalSales.toLocaleString('en-IN')}</span>
+                            <span>0% · ₹0</span>
+                            <span>₹{v.netPayable.toLocaleString('en-IN')}</span>
+                            <span style={{ color: v.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>₹{v.pendingAmount.toLocaleString('en-IN')}</span>
+                            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openVendorDetails(v.vendorId)}>
+                                Details
+                              </button>
+                              <button
+                                className="btn btn-primary btn-sm"
+                                disabled={!v.latestInvoiceId || v.pendingAmount <= 0 || (v.latestInvoiceId && paying === v.latestInvoiceId)}
+                                onClick={() => {
+                                  const vUser = users.find(u => u.id === v.vendorId || u.name === v.vendorName)
+                                  const vShop = shops.find(s => s.ownerId === v.vendorId || s.ownerName === v.vendorName || s.name === v.shopName)
+                                  const upiId = (vUser?.paymentMethod || '').toLowerCase() === 'upi'
+                                    ? (vUser?.upiId || '')
+                                    : toUpiFromPhone(vShop?.phone || vUser?.phone)
+                                  openPayMethodModal({
+                                    invoiceId: v.latestInvoiceId,
+                                    amount: Number(v.pendingAmount || 0),
+                                    payeeName: v.vendorName,
+                                    upiId,
+                                    note: `${v.vendorName} settlement`,
+                                  })
+                                }}
+                              >
+                                {(v.latestInvoiceId && paying === v.latestInvoiceId) ? 'Paying...' : v.pendingAmount > 0 ? 'Mark Paid' : 'Paid'}
+                              </button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedVendorInvoice && (
+                    <div className="card" style={{ padding: 14 }} ref={detailPanelRef}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                        <div>
+                          <div className="card-title" style={{ marginBottom: 4 }}>Vendor Payment Details (2 Days)</div>
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedVendorInvoice.vendorName} · {selectedVendorInvoice.shopName}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('phonepe', (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone), selectedVendorInvoice.pendingAmount, `${selectedVendorInvoice.vendorName} settlement`)}>Pay PhonePe</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('gpay', (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone), selectedVendorInvoice.pendingAmount, `${selectedVendorInvoice.vendorName} settlement`)}>Pay GPay</button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                        {[
+                          ['overview', 'Overview'],
+                          ['shop', 'Shop Details'],
+                          ['products', 'Products'],
+                          ['orders', 'Orders'],
+                        ].map(([id, label]) => (
+                          <button
+                            key={id}
+                            className={vendorDetailTab === id ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm'}
+                            onClick={() => setVendorDetailTab(id)}
+                            style={{ borderRadius: 999 }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {vendorDetailTab === 'overview' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>2-day Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedVendorDelivered2Days.length}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Generated</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Math.round(selectedVendorGenerated2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pay Vendor</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Math.round(selectedVendorPayable2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedVendorInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
+                        </div>
+                      )}
+
+                      {vendorDetailTab === 'shop' && (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}>
+                            <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 6 }}>Shop Information</div>
+                            <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                              <div><strong>Name:</strong> {selectedVendorShop?.name || selectedVendorInvoice.shopName}</div>
+                              <div><strong>Location:</strong> {selectedVendorShop?.address || selectedVendorShop?.city || 'Not available'}</div>
+                              <div><strong>Contact:</strong> {selectedVendorShop?.phone || 'Not available'}</div>
+                              <div><strong>UPI:</strong> {(selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? (selectedVendorUser?.upiId || 'Not added') : (toUpiFromPhone(selectedVendorShop?.phone) || 'Not added')}</div>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => onOpenShops?.()}>Open Shop</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => onOpenOrders?.()}>View Orders</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {vendorDetailTab === 'products' && (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {selectedVendorProductList.slice(0, showAllVendorProducts ? 20 : 6).map((p, idx) => (
+                            <div key={`${p.name}-${p.size}-${idx}`} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', fontSize: 12 }}>
+                              <div style={{ fontWeight: 800 }}>{p.name}{p.size ? ` (${p.size})` : ''}</div>
+                              <div style={{ color: 'var(--muted)', marginTop: 4 }}>Qty {p.qty} · Revenue Rs {Math.round(p.revenue).toLocaleString('en-IN')} · Orders {p.orders}</div>
+                            </div>
+                          ))}
+                          {selectedVendorProductList.length === 0 && <div className="empty"><div>No product data for last 2-day delivered orders</div></div>}
+                          {selectedVendorProductList.length > 6 && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => setShowAllVendorProducts(prev => !prev)}>
+                              {showAllVendorProducts ? 'Show Less' : `Show All (${selectedVendorProductList.length})`}
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {vendorDetailTab === 'orders' && (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {selectedVendorDelivered2Days.slice(0, 8).map(o => {
+                            const oid = o.id || o.orderCode
+                            const showProducts = expandedVendorOrderId === oid
+                            const items = Array.isArray(o.items) ? o.items : []
+                            return (
+                              <div key={oid} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · Rs {Number(o.total || o.subtotal || 0).toLocaleString('en-IN')}</div>
+                                  <button className="btn btn-ghost btn-sm" onClick={() => setExpandedVendorOrderId(prev => prev === oid ? null : oid)}>{showProducts ? 'Hide Products' : 'Product Details'}</button>
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>{(o.customer?.name || o.customerName || 'Customer')} · {(o.deliveryAddress || o.address || 'No address')}</div>
+                                {showProducts && (
+                                  <div style={{ marginTop: 8, borderTop: '1px solid var(--border2)', paddingTop: 8, fontSize: 12 }}>
+                                    {items.length === 0 ? 'No product details for this order.' : items.map((it, idx) => (
+                                      <div key={`${oid}-${idx}`}>{(it.name || 'Product')} x{it.qty || 1}{it.size ? ` (${it.size})` : ''}</div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                          {selectedVendorDelivered2Days.length === 0 && <div className="empty"><div>No delivered orders in last 2 days</div></div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {focusType === 'rider' && (
+                <>
+                  <div className="card">
+                    <div className="card-title" style={{ marginBottom: 14 }}>Rider Settlements</div>
+                    {riderRows.length === 0 ? <div className="empty"><div>No riders available</div></div> : (
+                      <div className="sett-table">
+                        <div className="sett-head">
+                          <span className="th">Rider</span><span className="th">Deliveries</span><span className="th">Per Delivery</span><span className="th">Earnings</span><span className="th">Paid</span><span className="th">Pending</span><span className="th">Action</span>
+                        </div>
+                        {riderRows.map(r => (
+                          <div key={r.riderId} className="sett-row">
+                            <span style={{ fontWeight: 800 }}>{r.riderName}</span>
+                            <span>{r.totalDeliveries}</span>
+                            <span>₹{r.earningsPerDelivery.toLocaleString('en-IN')}</span>
+                            <span>₹{r.totalEarnings.toLocaleString('en-IN')}</span>
+                            <span>₹{r.paidAmount.toLocaleString('en-IN')}</span>
+                            <span style={{ color: r.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>₹{r.pendingAmount.toLocaleString('en-IN')}</span>
+                            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openRiderDetails(r.riderId)}>Details</button>
+                              <button
+                                className="btn btn-primary btn-sm"
+                                disabled={!r.latestInvoiceId || r.pendingAmount <= 0 || (r.latestInvoiceId && paying === r.latestInvoiceId)}
+                                onClick={() => {
+                                  const riderUser = users.find(u => u.id === r.riderId || u.name === r.riderName)
+                                  const upiId = riderUser?.upiId || toUpiFromPhone(riderUser?.phone)
+                                  openPayMethodModal({
+                                    invoiceId: r.latestInvoiceId,
+                                    amount: Number(r.pendingAmount || 0),
+                                    payeeName: r.riderName,
+                                    upiId,
+                                    note: `${r.riderName} payout`,
+                                  })
+                                }}
+                              >
+                                {(r.latestInvoiceId && paying === r.latestInvoiceId) ? 'Paying...' : r.pendingAmount > 0 ? 'Mark Paid' : 'Paid'}
+                              </button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedRiderInvoice && (
+                    <div className="card" ref={detailPanelRef}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                        <div>
+                          <div className="card-title" style={{ marginBottom: 4 }}>Rider Payment Details (2 Days)</div>
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedRiderInvoice.riderName}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('phonepe', selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone), selectedRiderInvoice.pendingAmount, `${selectedRiderInvoice.riderName} payout`)}>Pay PhonePe</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('gpay', selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone), selectedRiderInvoice.pendingAmount, `${selectedRiderInvoice.riderName} payout`)}>Pay GPay</button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                        {[
+                          ['overview', 'Overview'],
+                          ['profile', 'Rider Details'],
+                          ['trips', 'Trips'],
+                          ['payments', 'Payments'],
+                        ].map(([id, label]) => (
+                          <button
+                            key={id}
+                            className={riderDetailTab === id ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm'}
+                            onClick={() => setRiderDetailTab(id)}
+                            style={{ borderRadius: 999 }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {riderDetailTab === 'overview' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>2-day Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedRiderDelivered2Days.length}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Generated</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Math.round(selectedRiderGenerated2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pay Rider</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Math.round(selectedRiderPayable2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedRiderInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
+                        </div>
+                      )}
+
+                      {riderDetailTab === 'profile' && (
+                        <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff', fontSize: 13, lineHeight: 1.6 }}>
+                          <div><strong>Name:</strong> {selectedRiderInvoice.riderName}</div>
+                          <div><strong>Email:</strong> {selectedRiderUser?.email || 'Not available'}</div>
+                          <div><strong>Phone:</strong> {selectedRiderUser?.phone || 'Not available'}</div>
+                          <div><strong>UPI:</strong> {selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone) || 'Not available'}</div>
+                          <div style={{ marginTop: 8 }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => onOpenOrders?.()}>View Orders</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {riderDetailTab === 'trips' && (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {selectedRiderDelivered2Days.slice(0, showAllRiderOrders ? 20 : 6).map(o => {
+                            const oid = o.id || o.orderCode
+                            const open = expandedRiderOrderId === oid
+                            return (
+                              <div key={oid} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · {(o.shop?.name || o.shopName || 'Shop')}</div>
+                                  <button className="btn btn-ghost btn-sm" onClick={() => setExpandedRiderOrderId(prev => prev === oid ? null : oid)}>{open ? 'Hide' : 'Details'}</button>
+                                </div>
+                                {open && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{(o.customer?.name || o.customerName || 'Customer')} · Rs {Number(o.deliveryFee || 0).toLocaleString('en-IN')} delivery fee</div>}
+                              </div>
+                            )
+                          })}
+                          {selectedRiderDelivered2Days.length > 6 && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => setShowAllRiderOrders(prev => !prev)}>
+                              {showAllRiderOrders ? 'Show Less' : `Show All (${selectedRiderDelivered2Days.length})`}
+                            </button>
+                          )}
+                          {selectedRiderDelivered2Days.length === 0 && <div className="empty"><div>No rider deliveries in last 2 days</div></div>}
+                        </div>
+                      )}
+
+                      {riderDetailTab === 'payments' && (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName).map(h => (
+                            <div key={h.id} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                              <div style={{ fontSize: 12 }}>
+                                <div style={{ fontWeight: 800 }}>Rs {Number(h.amount || 0).toLocaleString('en-IN')}</div>
+                                <div style={{ color: 'var(--muted)' }}>{new Date(h.paymentDate).toLocaleString()}</div>
+                              </div>
+                              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPayment(h)}>Details</button>
+                            </div>
+                          ))}
+                          {history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName).length === 0 && <div className="empty"><div>No payment history for this rider yet</div></div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {(focusType === 'payments' || focusType === 'invoices') && (
+            <div className="stack-grid">
+              {focusType === 'payments' && (
+              <div className="card">
+                <div className="card-title" style={{ marginBottom: 14 }}>Payment History</div>
+                {history.length === 0 ? <div className="empty"><div>No payments recorded yet</div></div> : history.slice(0, 12).map(item => (
+                  <div key={item.id} style={{ display: 'grid', gap: 4, padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ fontWeight: 800 }}>{item.userName || item.entityType}</div>
+                      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                        <div style={{ fontWeight: 900, color: '#16a34a' }}>₹{item.amount.toLocaleString('en-IN')}</div>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPayment(item)}>Details</button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.entityType === 'vendor' ? (item.shopName || 'Vendor payout') : 'Rider payout'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(item.paymentDate).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+              )}
+
+              {focusType === 'invoices' && (
+              <div className="card">
+                <div className="card-title" style={{ marginBottom: 14 }}>Open Invoices</div>
+                {[...(data?.vendorInvoices || []), ...(data?.riderInvoices || [])].filter(i => i.pendingAmount > 0).slice(0, 12).map(invoice => (
+                  <div key={`${invoice.entityType}-${invoice.id}`} style={{ padding: '12px 0', borderBottom: '1px solid var(--border2)', display: 'grid', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <span style={{ fontWeight: 800, textTransform: 'capitalize' }}>{invoice.entityType} invoice</span>
+                      <span className={`badge ${invoice.status === 'PAID' ? 'badge-success' : invoice.status === 'PARTIAL' ? 'badge-warning' : 'badge-danger'}`}>{invoice.status}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{invoice.totalOrders} orders · {invoice.periodStart?.slice(0, 10)} to {invoice.periodEnd?.slice(0, 10)}</div>
+                    <div style={{ fontSize: 13, fontWeight: 800 }}>Pending ₹{invoice.pendingAmount.toLocaleString('en-IN')}</div>
+                  </div>
+                ))}
+                {(!data?.vendorInvoices?.length && !data?.riderInvoices?.length) && <div className="empty"><div>No invoices yet</div></div>}
+              </div>
+              )}
+            </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {payContext && (
+        <div className="modal-overlay" onClick={() => setPayContext(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20 }}>Choose payment app</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>
+                  {payContext.payeeName} · Rs {Number(payContext.amount || 0).toLocaleString('en-IN')}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPayContext(null)}><I.Close /></button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+              <button
+                className={payMethod === 'phonepe' ? 'btn btn-primary' : 'btn btn-ghost'}
+                onClick={() => setPayMethod('phonepe')}
+                style={{ justifyContent: 'center' }}
+              >
+                PhonePe
+              </button>
+              <button
+                className={payMethod === 'gpay' ? 'btn btn-primary' : 'btn btn-ghost'}
+                onClick={() => setPayMethod('gpay')}
+                style={{ justifyContent: 'center' }}
+              >
+                GPay
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+              UPI: {payContext.upiId || 'Not configured'}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => setPayContext(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirmPayout} disabled={!payContext.upiId || Boolean(paying)}>
+                {paying ? 'Paying...' : `Pay via ${payMethod === 'phonepe' ? 'PhonePe' : 'GPay'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedPayment && (
+        <div className="modal-overlay" onClick={() => setSelectedPayment(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20 }}>Payment Details</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>Detailed payout information</div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPayment(null)}><I.Close /></button>
+            </div>
+            <div className="info-grid">
+              <div><strong>Payment ID:</strong> {selectedPayment.id}</div>
+              <div><strong>Type:</strong> {selectedPayment.entityType?.toUpperCase() || '—'}</div>
+              <div><strong>Name:</strong> {selectedPayment.userName || '—'}</div>
+              <div><strong>Amount:</strong> ₹{Number(selectedPayment.amount || 0).toLocaleString('en-IN')}</div>
+              <div><strong>Date:</strong> {selectedPayment.paymentDate ? new Date(selectedPayment.paymentDate).toLocaleString() : '—'}</div>
+              <div><strong>Shop:</strong> {selectedPayment.shopName || '—'}</div>
+              <div><strong>Method:</strong> {selectedPayment.paymentMethod || 'UPI'}</div>
+              <div><strong>Invoice:</strong> {selectedPayment.invoiceId || '—'}</div>
+            </div>
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#f8fbff', fontSize: 12, color: 'var(--muted)' }}>
+              This payment is recorded in settlement history and can be used for admin reconciliation.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ════════════════════════════════════════════════════════════
    COMMISSION / SETTINGS PAGE
 ════════════════════════════════════════════════════════════ */
@@ -1462,6 +2682,7 @@ function CommissionPage() {
         platform_fee_flat: parseFloat(form.platform_fee_flat),
         reseller_pct: parseFloat(form.reseller_pct),
         rider_base: parseFloat(form.rider_base),
+        vendor_commission_pct: parseFloat(form.vendor_commission_pct),
       })
       setData(r.data)
       toast('Settings saved ✓', 'success')
@@ -1484,11 +2705,12 @@ function CommissionPage() {
       <div className="card" style={{ padding: 24, marginBottom: 20 }}>
         <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, marginBottom: 18 }}>💰 Commission & Fee Settings</div>
         {data && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 20 }}>
+          <div className="responsive-grid-3" style={{ marginBottom: 20 }}>
             {[
               {key:'platform_fee_flat', label:'Platform Fee (₹ per order)', unit:'₹', desc:'Flat fee charged on every customer order'},
               {key:'reseller_pct',      label:'Reseller Commission (%)',     unit:'%', desc:'Commission paid to resellers per sale'},
               {key:'rider_base',        label:'Rider Base Pay (₹)',          unit:'₹', desc:'Minimum pay per delivery regardless of distance'},
+              {key:'vendor_commission_pct', label:'Vendor Commission (%)', unit:'%', desc:'Commission deducted from vendor sales in each settlement cycle'},
             ].map(({key, label, unit, desc}) => (
               <div key={key} style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>{label}</label>
@@ -1511,7 +2733,7 @@ function CommissionPage() {
       <div className="card" style={{ padding: 24, marginBottom: 20 }}>
         <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, marginBottom: 6 }}>📥 Export Data</div>
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18 }}>Download CSV files for reporting and accounting</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div className="responsive-grid-2">
           {[
             { label: 'Export Orders CSV', desc: 'All orders with status, revenue, payment method', action: api.exportOrders, color: '#dbeafe', textColor: '#1d4ed8' },
             { label: 'Export Users CSV', desc: 'All registered customers, vendors and riders', action: api.exportUsers, color: '#dcfce7', textColor: '#15803d' },
@@ -1530,7 +2752,7 @@ function CommissionPage() {
       {/* Quick links */}
       <div className="card" style={{ padding: 24 }}>
         <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, marginBottom: 14 }}>🔧 System Info</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 13 }}>
+        <div className="info-grid">
           {[
             {k:'Backend',v:'FastAPI + SQLite'},
             {k:'Auth',v:'JWT (access + refresh)'},
@@ -1560,7 +2782,7 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('dott_admin_access')
-    if (!token) { setLoading(false); return }
+    if (!token && !isAdminDemoMode()) { setLoading(false); return }
     api.me().then(r => { if (r.data.role === 'ADMIN') setUser(r.data) }).catch(() => {}).finally(() => setLoading(false))
   }, [])
 
@@ -1573,6 +2795,7 @@ export default function App() {
   const signOut = async () => {
     try { await api.logout() } catch (e) {}
     localStorage.removeItem('dott_admin_access'); localStorage.removeItem('dott_admin_refresh')
+    localStorage.removeItem(DEMO_ADMIN_MODE_KEY)
     setUser(null)
   }
 
@@ -1595,6 +2818,7 @@ export default function App() {
     { id: 'shops',      label: 'Shops',      Icon: I.Shops },
     { id: 'verify',     label: 'Verify',     Icon: I.Shield },
     { id: 'riders',     label: 'Riders',     Icon: I.Riders },
+    { id: 'settlements',label: 'Settlements',Icon: I.Revenue },
     { id: 'revenue',    label: 'Revenue',    Icon: I.Revenue },
     { id: 'returns',    label: 'Returns',    Icon: I.Returns },
     { id: 'promo',      label: 'Promo Codes',Icon: I.Analytics },
@@ -1652,7 +2876,7 @@ export default function App() {
               )}
             </div>
             <div className="topbar-right">
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>Welcome, <strong style={{ color: 'var(--text)' }}>{user.name}</strong></div>
+              <div className="topbar-welcome">Welcome, <strong style={{ color: 'var(--text)' }}>{user.name}</strong></div>
               <span className="badge badge-purple"><I.Shield /> Admin</span>
             </div>
           </div>
@@ -1663,6 +2887,7 @@ export default function App() {
           {page === 'shops'      && <ShopsPage />}
           {page === 'verify'     && <VerifyPage />}
           {page === 'riders'     && <RidersPage />}
+          {page === 'settlements'&& <SettlementPage onOpenOrders={() => setPage('orders')} onOpenShops={() => setPage('shops')} />}
           {page === 'revenue'    && <RevenuePage />}
           {page === 'returns'    && <ReturnsPage />}
           {page === 'promo'      && <PromoPage />}

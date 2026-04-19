@@ -18,6 +18,16 @@ Dott/
 
 ## QUICK START (5 terminals)
 
+Before starting, create local env files from the examples:
+
+```bash
+copy backend\.env.example backend\.env
+copy customer\.env.example customer\.env
+copy vendor\.env.example vendor\.env
+copy rider\.env.example rider\.env
+copy admin\.env.example admin\.env
+```
+
 ### Terminal 1 — Backend API
 ```bash
 cd Dott/backend
@@ -155,9 +165,10 @@ to the backend console AND returned in the API response as `dev_otp`
 
 1. **Payment Gateway:** Sign up at razorpay.com, add API key to backend
 2. **Real SMS OTP:** Sign up at msg91.com or twilio.com, replace console OTP
-3. **Database:** Switch SQLite → PostgreSQL in database.py
-4. **Secrets:** Move SECRET_KEY from auth.py to environment variables
-5. **Remove dev_otp** from the OTP send response in main.py
+3. **Database:** Switch `DATABASE_URL` from SQLite to PostgreSQL in `backend/.env`
+4. **Secrets:** Set `SECRET_KEY` and API keys in `backend/.env` or in your hosting provider secrets
+5. **Image Cleanup:** Set `IMAGE_CLEANUP_PROVIDER=auto` and add `REMOVE_BG_API_KEY` in `backend/.env` for higher-quality marketplace cleanup
+6. **Remove dev_otp** from the OTP send response in main.py
 
 ---
 
@@ -169,3 +180,90 @@ to the backend console AND returned in the API response as `dev_otp`
 - **AI:** Anthropic Claude API (vendor product analyze)
 - **Fonts:** Plus Jakarta Sans, Outfit
 
+---
+
+## MOBILE TESTING ON SAME WIFI (NO DEPLOY)
+
+Use these commands so mobile can access your laptop apps:
+
+```bash
+# customer
+cd customer
+npm run dev -- --host 0.0.0.0
+
+# vendor
+cd ../vendor
+npm run dev -- --host 0.0.0.0
+
+# rider
+cd ../rider
+npm run dev -- --host 0.0.0.0
+
+# admin
+cd ../admin
+npm run dev -- --host 0.0.0.0
+
+# backend
+cd ../backend
+python main.py
+```
+
+Find laptop LAN IP:
+
+```bash
+ipconfig
+```
+
+Then open on mobile browser:
+
+- `http://<LAPTOP_IP>:3001` (customer)
+- `http://<LAPTOP_IP>:3002` (vendor)
+- `http://<LAPTOP_IP>:3003` (rider)
+- `http://<LAPTOP_IP>:3004` (admin)
+
+---
+
+## HTTPS FOR MOBILE GPS (RECOMMENDED)
+Mobile browsers require HTTPS to allow GPS. Use a local certificate and enable HTTPS in Vite.
+
+1. Create a local cert (mkcert recommended):
+```bash
+mkcert -install
+mkcert localhost 127.0.0.1 ::1 <LAPTOP_IP>
+```
+
+2. Update each app `.env`:
+```
+VITE_DEV_HTTPS=true
+VITE_SSL_KEY=path/to/localhost-key.pem
+VITE_SSL_CERT=path/to/localhost.pem
+```
+
+3. Restart each app `npm run dev`.
+
+Now open: `https://<LAPTOP_IP>:3001` on mobile and allow GPS.
+
+---
+
+## FREE OTP (AUTHENTICATOR)
+We support free TOTP (Google Authenticator / Authy).
+
+1. Go to Customer Account → **Security & Notifications**.
+2. Click **Generate secret**.
+3. Add the secret in your authenticator app.
+4. Enter the 6‑digit code and **Enable**.
+
+Once enabled, login requires the 6‑digit authenticator code.
+
+---
+
+## PUSH NOTIFICATIONS (FCM)
+Push is free, but requires Firebase setup.
+
+1. Create a Firebase project and Service Account JSON.
+2. Put it in `backend/.env` as `FIREBASE_SERVICE_ACCOUNT_JSON`.
+   - Paste raw JSON or base64-encoded JSON.
+3. Restart backend.
+
+Then in Customer Account → **Security & Notifications**, paste a device token
+and click **Send test**.

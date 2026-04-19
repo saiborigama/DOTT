@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 
-const BASE = 'http://localhost:8080/api'
+const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_vendor_access')
@@ -83,33 +83,278 @@ async function analyzeProductWithAI(imageDataUrl) {
   }
 }
 
+const DEMO_VENDOR_MODE = false
+const DEMO_VENDOR_MODE_KEY = 'dott_vendor_demo_mode'
+const DEMO_VENDOR_DB_KEY = 'dott_vendor_demo_db'
+
+const DEMO_IMAGES = {
+  shop: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=900&q=80',
+  banner: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1400&q=80',
+  storefront: 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&w=1200&q=80',
+  kurta: 'https://images.unsplash.com/photo-1617137968427-85924c800a22?auto=format&fit=crop&w=900&q=80',
+  saree: 'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=900&q=80',
+  dress: 'https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=900&q=80',
+  jacket: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=80',
+}
+
+const demoResponse = (data) => Promise.resolve({ data })
+const isVendorDemoMode = () => (DEMO_VENDOR_MODE && localStorage.getItem(DEMO_VENDOR_MODE_KEY) === '1')
+
+function createDemoVendorDb() {
+  const user = {
+    id: 'demo-user-1',
+    name: 'Rahul Vendor',
+    email: 'rahul@dott.in',
+    phone: '9876543210',
+    paymentMethod: 'upi',
+    upiId: 'rahul@upi',
+    bankAccount: '',
+    bankIfsc: '',
+    bankName: '',
+  }
+  const shop = {
+    id: 'demo-shop-1',
+    name: 'NearNow Fashion Hub',
+    category: 'Fashion',
+    description: 'Trendy ethnic and western styles ready for same-day delivery.',
+    address: 'Road No 12, Banjara Hills, Hyderabad',
+    city: 'Hyderabad',
+    phone: '9876543210',
+    lat: 17.4124,
+    lng: 78.4347,
+    imageUrl: DEMO_IMAGES.shop,
+    bannerUrl: DEMO_IMAGES.banner,
+    storefrontUrl: DEMO_IMAGES.storefront,
+    deliveryTime: 28,
+    minOrder: 199,
+    isOpen: true,
+    isSuspended: false,
+    acceptsReturns: true,
+    returnDays: 7,
+    returnPolicyNote: 'Easy 7-day return on unused fashion items.',
+    whatsappMode: true,
+    whatsappPhone: '9876543210',
+  }
+  const products = [
+    { id: 'prod-1', name: 'Cloud Mist Anarkali Kurta', category: 'Kurtas', price: 999, stock: 8, hasSizes: true, sizes: ['S','M','L','XL'], images: [DEMO_IMAGES.kurta], imageUrl: DEMO_IMAGES.kurta, colors: ['White','Blue'], tags: ['anarkali','ethnic'], brand: 'NearNow Studio', material: 'Cotton Blend', isActive: true, avgRating: 4.7, reviewCount: 96 },
+    { id: 'prod-2', name: 'Ivory Festive Kurti Set', category: 'Kurtis', price: 1199, stock: 5, hasSizes: true, sizes: ['S','M','L'], images: [DEMO_IMAGES.saree], imageUrl: DEMO_IMAGES.saree, colors: ['Ivory'], tags: ['festive','set'], brand: 'NearNow Studio', material: 'Rayon', isActive: true, avgRating: 4.5, reviewCount: 61 },
+    { id: 'prod-3', name: 'Pearl Day Midi Dress', category: 'Dresses', price: 1299, stock: 2, hasSizes: true, sizes: ['S','M','L'], images: [DEMO_IMAGES.dress], imageUrl: DEMO_IMAGES.dress, colors: ['White'], tags: ['midi','dress'], brand: 'NearNow Studio', material: 'Georgette', isActive: true, avgRating: 4.6, reviewCount: 88 },
+    { id: 'prod-4', name: 'City Blue Denim Jacket', category: 'Jackets', price: 1499, stock: 0, hasSizes: true, sizes: ['M','L','XL'], images: [DEMO_IMAGES.jacket], imageUrl: DEMO_IMAGES.jacket, colors: ['Blue'], tags: ['denim','jacket'], brand: 'NearNow Studio', material: 'Denim', isActive: false, avgRating: 4.4, reviewCount: 34 },
+  ]
+  const now = Date.now()
+  const orders = [
+    { id: 'ord-1', orderCode: 'NN1024', customer: { name: 'Sai Kumar', phone: '6303142328' }, items: [{ name: 'Cloud Mist Anarkali Kurta', qty: 1 }], status: 'PENDING', placedAt: new Date(now - 1000 * 60 * 8).toISOString(), total: 999, paymentMethod: 'cod', riderId: null, shop, deliveryAddress: 'Janakpuri 1-28, Hyderabad', notes: 'Call before dispatch', pickupOtp: '4821' },
+    { id: 'ord-2', orderCode: 'NN1025', customer: { name: 'Bhavana', phone: '9012345678' }, items: [{ name: 'Pearl Day Midi Dress', qty: 1 }], status: 'CONFIRMED', placedAt: new Date(now - 1000 * 60 * 18).toISOString(), total: 1299, paymentMethod: 'online', riderId: 'rider-2', shop, deliveryAddress: 'Jubilee Hills Checkpost, Hyderabad', notes: '', pickupOtp: '9244' },
+    { id: 'ord-3', orderCode: 'NN1026', customer: { name: 'Nikhil', phone: '9988776655' }, items: [{ name: 'Ivory Festive Kurti Set', qty: 1 }], status: 'PACKING', placedAt: new Date(now - 1000 * 60 * 26).toISOString(), total: 1199, paymentMethod: 'online', riderId: 'rider-3', shop, deliveryAddress: 'Madhapur Main Road, Hyderabad', notes: 'Gift wrap please', pickupOtp: '5512' },
+    { id: 'ord-4', orderCode: 'NN1027', customer: { name: 'Asha', phone: '9123456780' }, items: [{ name: 'City Blue Denim Jacket', qty: 1 }], status: 'DELIVERED', placedAt: new Date(now - 1000 * 60 * 90).toISOString(), total: 1499, paymentMethod: 'online', riderId: 'rider-1', shop, deliveryAddress: 'Gachibowli, Hyderabad', notes: '', pickupOtp: '3001' },
+  ]
+  const returns = [
+    { id: 'ret-1', orderCode: 'NN1008', customerName: 'Priya', customerPhone: '9090909090', customerAddress: 'Madhapur, Hyderabad', refundAmount: 999, reason: 'Size issue', status: 'REQUESTED', vendorNote: '' },
+    { id: 'ret-2', orderCode: 'NN1002', customerName: 'Anil', customerPhone: '9888777666', customerAddress: 'Banjara Hills, Hyderabad', refundAmount: 1199, reason: 'Price issue / changed mind', status: 'APPROVED', vendorNote: 'Pickup already scheduled' },
+    { id: 'ret-3', orderCode: 'NN0998', customerName: 'Kiran', customerPhone: '9000011111', customerAddress: 'Jubilee Hills, Hyderabad', refundAmount: 1299, reason: 'Price issue', status: 'REFUNDED', vendorNote: 'Refund completed to original payment method' },
+  ]
+  return { user, shop, products, orders, returns }
+}
+
+function getDemoVendorDb() {
+  try {
+    const raw = localStorage.getItem(DEMO_VENDOR_DB_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  const seeded = createDemoVendorDb()
+  localStorage.setItem(DEMO_VENDOR_DB_KEY, JSON.stringify(seeded))
+  return seeded
+}
+
+function saveDemoVendorDb(db) {
+  localStorage.setItem(DEMO_VENDOR_DB_KEY, JSON.stringify(db))
+}
+
+function getDemoAnalytics(db) {
+  const delivered = db.orders.filter(o => o.status === 'DELIVERED')
+  const active = db.orders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
+  const totalRevenue = delivered.reduce((sum, o) => sum + Number(o.total || 0), 0)
+  return {
+    today: { revenue: 2498, orders: 2 },
+    week: { revenue: 6840, orders: 6 },
+    month: { revenue: 18240, orders: 16 },
+    allTime: { revenue: totalRevenue || 28450, orders: delivered.length || 21 },
+    pendingReturns: db.returns.filter(r => r.status === 'REQUESTED').length,
+    activeOrders: active.length,
+  }
+}
+
+function getDemoEarnings(db) {
+  const analytics = getDemoAnalytics(db)
+  return {
+    totalRevenue: analytics.allTime.revenue,
+    netEarnings: analytics.allTime.revenue,
+    thisMonth: { revenue: analytics.month.revenue, orders: analytics.month.orders },
+    totalOrders: analytics.allTime.orders,
+    platformFees: 0,
+    pendingPayout: analytics.month.revenue,
+  }
+}
+
 const api = {
-  sendOtp:    phone => ax.post('/otp/send', { phone }),
-  verifyOtp:  (phone,otp) => ax.post('/otp/verify', { phone, otp }),
-  uploadImage: file => { const fd=new FormData(); fd.append('file',file); return ax.post('/upload/image',fd,{headers:{'Content-Type':'multipart/form-data'}}) },
-  processProductImageAI: file => { const fd=new FormData(); fd.append('file',file); return ax.post('/upload/product-image-transform',fd,{headers:{'Content-Type':'multipart/form-data'}}) },
+  sendOtp: phone => isVendorDemoMode() ? demoResponse({ sent: true, phone }) : ax.post('/otp/send', { phone }),
+  verifyOtp: (phone, otp) => isVendorDemoMode() ? demoResponse({ verified: true, phone, otp }) : ax.post('/otp/verify', { phone, otp }),
+  uploadImage: file => {
+    if (isVendorDemoMode()) return demoResponse({ url: DEMO_IMAGES.shop })
+    const fd = new FormData(); fd.append('file', file)
+    return ax.post('/upload/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  processProductImageAI: file => {
+    if (isVendorDemoMode()) return demoResponse({ transformedUrl: DEMO_IMAGES.dress, originalUrl: DEMO_IMAGES.dress, analysis: null })
+    const fd = new FormData(); fd.append('file', file)
+    return ax.post('/upload/product-image-transform', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
   login: d => ax.post('/auth/login', d),
   register: d => ax.post('/auth/register', d),
-  me: () => ax.get('/auth/me'),
-  updatePayment: d => ax.put('/auth/payment-details', d),
-  logout: () => ax.post('/auth/logout'),
-  myShop: () => ax.get('/shops/my'),
-  createShop: d => ax.post('/shops', d),
-  updateShop: (id, d) => ax.put(`/shops/${id}`, d),
-  myProducts: () => ax.get('/products/my'),
-  addProduct: d => ax.post('/products', d),
-  updateProduct: (id, d) => ax.put(`/products/${id}`, d),
-  shopOrders: (p) => ax.get('/orders/shop/all', { params: p }),
-  acceptOrder: id => ax.post(`/orders/${id}/accept`),
-  rejectOrder: id => ax.post(`/orders/${id}/reject`),
-  updateStatus: (id, s) => ax.put(`/orders/${id}/status`, { status: s }),
-  shopReturns: () => ax.get('/returns/shop'),
-  updateReturn: (id, d) => ax.put(`/returns/${id}`, d),
-  analytics: () => ax.get('/analytics'),
-  lowStock: () => ax.get('/vendor/low-stock'),
-  cloneProduct: id => ax.post(`/products/${id}/clone`),
-  vendorEarnings: () => ax.get('/vendor/earnings'),
-  replyReview: (id, reply) => ax.post(`/reviews/${id}/reply`, { reply }),
+  me: () => isVendorDemoMode() ? demoResponse(getDemoVendorDb().user) : ax.get('/auth/me'),
+  updatePayment: d => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.user = { ...db.user, ...d }
+      saveDemoVendorDb(db)
+      return demoResponse(db.user)
+    }
+    return ax.put('/auth/payment-details', d)
+  },
+  logout: () => isVendorDemoMode() ? demoResponse({ ok: true }) : ax.post('/auth/logout'),
+  myShop: () => isVendorDemoMode() ? demoResponse(getDemoVendorDb().shop) : ax.get('/shops/my'),
+  createShop: d => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.shop = { ...db.shop, ...d, id: db.shop?.id || 'demo-shop-1' }
+      saveDemoVendorDb(db)
+      return demoResponse(db.shop)
+    }
+    return ax.post('/shops', d)
+  },
+  updateShop: (id, d) => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.shop = { ...db.shop, ...d }
+      saveDemoVendorDb(db)
+      return demoResponse(db.shop)
+    }
+    return ax.put(`/shops/${id}`, d)
+  },
+  myProducts: () => isVendorDemoMode() ? demoResponse(getDemoVendorDb().products) : ax.get('/products/my'),
+  addProduct: d => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      const images = typeof d.images === 'string' ? JSON.parse(d.images || '[]') : (d.images || [])
+      const sizes = typeof d.sizes === 'string' ? JSON.parse(d.sizes || '[]') : (d.sizes || [])
+      const colors = typeof d.colors === 'string' ? JSON.parse(d.colors || '[]') : (d.colors || [])
+      const tags = typeof d.tags === 'string' ? JSON.parse(d.tags || '[]') : (d.tags || [])
+      const next = { ...d, id: `prod-${Date.now()}`, images, sizes, colors, tags, imageUrl: d.imageUrl || images[0] || DEMO_IMAGES.shop, reviewCount: 0, avgRating: 0, isActive: true }
+      db.products.unshift(next)
+      saveDemoVendorDb(db)
+      return demoResponse(next)
+    }
+    return ax.post('/products', d)
+  },
+  updateProduct: (id, d) => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.products = db.products.map(p => {
+        if (p.id !== id) return p
+        const images = typeof d.images === 'string' ? JSON.parse(d.images || '[]') : (d.images ?? p.images)
+        const sizes = typeof d.sizes === 'string' ? JSON.parse(d.sizes || '[]') : (d.sizes ?? p.sizes)
+        const colors = typeof d.colors === 'string' ? JSON.parse(d.colors || '[]') : (d.colors ?? p.colors)
+        const tags = typeof d.tags === 'string' ? JSON.parse(d.tags || '[]') : (d.tags ?? p.tags)
+        return { ...p, ...d, images, sizes, colors, tags, imageUrl: d.imageUrl || images?.[0] || p.imageUrl }
+      })
+      saveDemoVendorDb(db)
+      return demoResponse(db.products.find(p => p.id === id))
+    }
+    return ax.put(`/products/${id}`, d)
+  },
+  shopOrders: (p) => {
+    if (isVendorDemoMode()) {
+      let orders = [...getDemoVendorDb().orders]
+      if (p?.status) orders = orders.filter(o => o.status === p.status)
+      return demoResponse(orders)
+    }
+    return ax.get('/orders/shop/all', { params: p })
+  },
+  acceptOrder: id => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.orders = db.orders.map(o => o.id === id ? { ...o, status: 'CONFIRMED', riderId: o.riderId || 'rider-2' } : o)
+      saveDemoVendorDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.post(`/orders/${id}/accept`)
+  },
+  rejectOrder: id => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.orders = db.orders.map(o => o.id === id ? { ...o, status: 'CANCELLED' } : o)
+      saveDemoVendorDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.post(`/orders/${id}/reject`)
+  },
+  updateStatus: (id, s) => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.orders = db.orders.map(o => o.id === id ? { ...o, status: s, riderId: o.riderId || 'rider-2' } : o)
+      saveDemoVendorDb(db)
+      return demoResponse({ ok: true })
+    }
+    return ax.put(`/orders/${id}/status`, { status: s })
+  },
+  generatePickupOtp: id => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      const otp = `${Math.floor(1000 + Math.random() * 9000)}`
+      db.orders = db.orders.map(o => o.id === id ? { ...o, pickupOtp: otp } : o)
+      saveDemoVendorDb(db)
+      return demoResponse({ otp })
+    }
+    return ax.post(`/orders/${id}/pickup-otp/generate`)
+  },
+  getPickupOtp: id => {
+    if (isVendorDemoMode()) {
+      const order = getDemoVendorDb().orders.find(o => o.id === id)
+      return demoResponse({ otp: order?.pickupOtp || '4821' })
+    }
+    return ax.get(`/orders/${id}/pickup-otp`)
+  },
+  shopReturns: () => isVendorDemoMode() ? demoResponse(getDemoVendorDb().returns) : ax.get('/returns/shop'),
+  updateReturn: (id, d) => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      db.returns = db.returns.map(r => r.id === id ? { ...r, ...d } : r)
+      saveDemoVendorDb(db)
+      return demoResponse(db.returns.find(r => r.id === id))
+    }
+    return ax.put(`/returns/${id}`, d)
+  },
+  analytics: () => isVendorDemoMode() ? demoResponse(getDemoAnalytics(getDemoVendorDb())) : ax.get('/analytics'),
+  lowStock: () => {
+    if (isVendorDemoMode()) {
+      const items = getDemoVendorDb().products.filter(p => Number(p.stock) <= 3)
+      return demoResponse({ items })
+    }
+    return ax.get('/vendor/low-stock')
+  },
+  cloneProduct: id => {
+    if (isVendorDemoMode()) {
+      const db = getDemoVendorDb()
+      const base = db.products.find(p => p.id === id)
+      const copy = { ...base, id: `prod-${Date.now()}`, name: `${base.name} Copy` }
+      db.products.unshift(copy)
+      saveDemoVendorDb(db)
+      return demoResponse(copy)
+    }
+    return ax.post(`/products/${id}/clone`)
+  },
+  vendorEarnings: () => isVendorDemoMode() ? demoResponse(getDemoEarnings(getDemoVendorDb())) : ax.get('/vendor/earnings'),
+  replyReview: (id, reply) => isVendorDemoMode() ? demoResponse({ ok: true }) : ax.post(`/reviews/${id}/reply`, { reply }),
 }
 
 async function reverseGeocode(lat, lng) {
@@ -127,6 +372,54 @@ async function reverseGeocode(lat, lng) {
     }
   } catch (e) {}
   return { full: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, city: 'Hyderabad', pincode: '', area: '' }
+}
+
+function vendorGeoNeedsSecureContext() {
+  if (typeof window === 'undefined') return false
+  const host = window.location?.hostname || ''
+  return !window.isSecureContext && host !== 'localhost' && host !== '127.0.0.1'
+}
+function vendorGeoErrorMessage(error) {
+  if (vendorGeoNeedsSecureContext()) return 'Current GPS needs HTTPS on mobile. Open app with secure link or use map pin.'
+  switch (error?.code) {
+    case 1: return 'Location permission denied. Please allow GPS access.'
+    case 2: return 'Location unavailable. Move to open sky and retry.'
+    case 3: return 'Location request timed out. Please retry.'
+    default: return 'Unable to detect current location.'
+  }
+}
+async function getCurrentGpsLocation() {
+  if (!navigator?.geolocation) throw new Error('GPS is not supported on this device.')
+  if (vendorGeoNeedsSecureContext()) throw new Error(vendorGeoErrorMessage())
+  const first = await new Promise((resolve) => {
+    try {
+      navigator.geolocation.getCurrentPosition(
+        p => resolve({ ok: true, pos: p }),
+        e => resolve({ ok: false, error: e }),
+        { enableHighAccuracy: true, timeout: 14000, maximumAge: 0 }
+      )
+    } catch (error) {
+      resolve({ ok: false, error })
+    }
+  })
+  if (first?.ok) {
+    return { lat: first.pos.coords.latitude, lng: first.pos.coords.longitude, accuracy: Number(first.pos.coords.accuracy || 0) }
+  }
+  const second = await new Promise((resolve) => {
+    try {
+      navigator.geolocation.getCurrentPosition(
+        p => resolve({ ok: true, pos: p }),
+        e => resolve({ ok: false, error: e }),
+        { enableHighAccuracy: false, timeout: 12000, maximumAge: 120000 }
+      )
+    } catch (error) {
+      resolve({ ok: false, error })
+    }
+  })
+  if (second?.ok) {
+    return { lat: second.pos.coords.latitude, lng: second.pos.coords.longitude, accuracy: Number(second.pos.coords.accuracy || 0) }
+  }
+  throw new Error(vendorGeoErrorMessage(second?.error || first?.error))
 }
 
 function LeafletMap({ lat, lng, onPinMove, height = 200 }) {
@@ -179,17 +472,17 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --primary:#6c47ff;--primary-dark:#5535e0;--primary-light:rgba(108,71,255,.08);
-  --green:#16a34a;--red:#ef4444;--orange:#f97316;--blue:#0ea5e9;--amber:#f59e0b;
-  --bg:#f8f7ff;--surface:#fff;--border:#e8e4ff;--border2:#f0eeff;
-  --text:#1e1b3a;--muted:#6b7280;--font:'Plus Jakarta Sans',sans-serif;--body:'Inter',sans-serif;
-  --shadow-sm:0 1px 4px rgba(108,71,255,.08);
-  --shadow:0 4px 20px rgba(108,71,255,.12);
-  --shadow-lg:0 12px 40px rgba(108,71,255,.18);
+  --primary:#4aa8ff;--primary-dark:#2387e8;--primary-light:rgba(74,168,255,.12);
+  --green:#4aa8ff;--red:#ef4444;--orange:#4aa8ff;--blue:#4aa8ff;--amber:#8ecbff;
+  --bg:#eef7ff;--surface:#fff;--border:#cfe6fb;--border2:#e8f4ff;
+  --text:#12324d;--muted:#5f7d96;--font:'Plus Jakarta Sans',sans-serif;--body:'Inter',sans-serif;
+  --shadow-sm:0 1px 4px rgba(42,116,189,.08);
+  --shadow:0 8px 28px rgba(42,116,189,.12);
+  --shadow-lg:0 18px 48px rgba(42,116,189,.18);
   --radius:14px;--radius-sm:10px;--radius-lg:20px;
 }
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:hidden}
+body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);color:var(--text);font-family:var(--body);overflow-x:hidden}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:#c4b8ff}
@@ -213,21 +506,25 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .skeleton{background:linear-gradient(90deg,#ede9ff 25%,#ddd8ff 50%,#ede9ff 75%);background-size:600px 100%;animation:shimmer 1.6s infinite;border-radius:8px}
 
 /* ── AUTH PAGE ── */
-.auth-page{min-height:100vh;display:flex;background:#fff}
-.auth-visual{width:48%;background:#1e1b3a;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;overflow:hidden;padding:48px}
-.auth-visual::before{content:'';position:absolute;inset:0;background-image:radial-gradient(circle at 20% 20%,rgba(108,71,255,.4) 0%,transparent 50%),radial-gradient(circle at 80% 80%,rgba(108,71,255,.3) 0%,transparent 50%);pointer-events:none}
-.auth-visual-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(108,71,255,.3) 1px,transparent 1px);background-size:28px 28px;animation:bgScroll 8s linear infinite;pointer-events:none}
+.auth-page{min-height:100vh;display:flex;background:#fff;position:relative;overflow:hidden}
+.auth-visual{width:48%;background:linear-gradient(180deg,#89c9ff 0%,#4aa8ff 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;overflow:hidden;padding:48px}
+.auth-visual::before{content:'';position:absolute;inset:0;background-image:radial-gradient(circle at 20% 20%,rgba(255,255,255,.45) 0%,transparent 50%),radial-gradient(circle at 80% 80%,rgba(17,95,161,.22) 0%,transparent 50%);pointer-events:none}
+.auth-visual-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(255,255,255,.3) 1px,transparent 1px);background-size:28px 28px;animation:bgScroll 8s linear infinite;pointer-events:none}
 .auth-form-side{width:52%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 56px;background:#fff;overflow-y:auto}
 .auth-form-wrap{width:100%;max-width:420px}
+.auth-card{width:100%;max-width:420px;background:#fff;border-radius:24px;padding:36px;box-shadow:0 24px 80px rgba(0,0,0,.14);animation:scaleIn .25s cubic-bezier(.22,1,.36,1)}
+.auth-tabs{display:flex;background:#eaf4ff;border-radius:12px;padding:4px;gap:4px;margin-bottom:24px}
+.auth-location-card{display:flex;align-items:center;gap:12px;padding:13px 16px;border-radius:12px;border:1.5px solid var(--border);background:var(--bg);cursor:pointer;transition:.2s}
 @media(max-width:768px){
   .auth-visual{display:none}
-  .auth-form-side{width:100%;padding:32px 24px;background:linear-gradient(170deg,#1e1b3a 0%,#2d2a5e 40%,#fff 40%)}
-  .auth-form-wrap{background:#fff;border-radius:20px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+  .auth-form-side{width:100%;padding:24px 16px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)}
+  .auth-form-wrap{max-width:100%}
+  .auth-card{max-width:none;padding:26px 22px;border-radius:20px;box-shadow:0 18px 44px rgba(74,168,255,.14)}
 }
 
 /* ── SIDEBAR LAYOUT ── */
 .layout{display:flex;min-height:100vh}
-.sidebar{width:240px;background:#1e1b3a;display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:100;overflow-y:auto}
+.sidebar{width:240px;background:linear-gradient(180deg,#8fd0ff 0%,#4aa8ff 100%);display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:100;overflow-y:auto;border-right:1px solid rgba(255,255,255,.55)}
 .sidebar-logo{padding:22px 20px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
 .sidebar-logo .brand{font-family:var(--font);font-weight:900;font-size:24px;color:#fff;letter-spacing:-.5px}
 .sidebar-logo .brand span{color:#a78bfa}
@@ -236,13 +533,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .nav-section-title{font-size:9px;font-weight:800;color:rgba(255,255,255,.25);text-transform:uppercase;letter-spacing:1.2px;padding:12px 8px 6px;margin-top:8px}
 .nav-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;cursor:pointer;color:rgba(255,255,255,.6);font-size:13px;font-weight:600;transition:.2s;position:relative;margin-bottom:2px;font-family:var(--font)}
 .nav-item:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.9)}
-.nav-item.active{background:rgba(108,71,255,.25);color:#c4b8ff}
-.nav-item.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:60%;background:#a78bfa;border-radius:0 3px 3px 0}
+.nav-item.active{background:rgba(255,255,255,.22);color:#fff}
+.nav-item.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:60%;background:#fff;border-radius:0 3px 3px 0}
 .nav-item svg{width:18px;height:18px;flex-shrink:0}
 .nav-badge{margin-left:auto;background:#ef4444;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:100px;min-width:18px;text-align:center}
 .sidebar-bottom{padding:16px 12px 20px;border-top:1px solid rgba(255,255,255,.08)}
 .sidebar-shop{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);margin-bottom:10px}
-.sidebar-shop .shop-avatar{width:36px;height:36px;border-radius:10px;background:rgba(108,71,255,.3);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.sidebar-shop .shop-avatar{width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.28);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
 .sidebar-shop .shop-name{font-size:13px;font-weight:700;color:#e5e7eb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sidebar-shop .shop-status{font-size:10px;font-weight:600;margin-top:1px}
 .main-content{margin-left:240px;flex:1;min-height:100vh;display:flex;flex-direction:column}
@@ -257,6 +554,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
 .page-title{font-family:var(--font);font-size:24px;font-weight:900;color:var(--text)}
 .page-sub{color:var(--muted);font-size:14px;margin-top:3px}
+.page-header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 
 /* ── CARDS ── */
 .card{background:var(--surface);border-radius:var(--radius);border:1.5px solid var(--border2);padding:20px;box-shadow:var(--shadow-sm);transition:.25s}
@@ -288,19 +586,20 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 
 /* ── BUTTONS ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 18px;border-radius:10px;border:none;cursor:pointer;font-family:var(--font);font-weight:700;font-size:13px;transition:.22s;position:relative;overflow:hidden;white-space:nowrap}
+.btn svg{width:16px;height:16px;flex-shrink:0}
 .btn::after{content:'';position:absolute;inset:0;background:rgba(255,255,255,0);transition:.2s}
 .btn:hover::after{background:rgba(255,255,255,.12)}
 .btn:active{transform:scale(.97)}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
-.btn-primary{background:linear-gradient(135deg,#6c47ff,#8b5cf6);color:#fff;box-shadow:0 4px 14px rgba(108,71,255,.3)}
-.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(108,71,255,.4)}
-.btn-success{background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;box-shadow:0 4px 14px rgba(22,163,74,.3)}
+.btn-primary{background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;box-shadow:0 4px 14px rgba(74,168,255,.3)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(74,168,255,.4)}
+.btn-success{background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;box-shadow:0 4px 14px rgba(74,168,255,.3)}
 .btn-success:hover{transform:translateY(-1px)}
 .btn-danger{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;box-shadow:0 4px 14px rgba(239,68,68,.3)}
 .btn-danger:hover{transform:translateY(-1px)}
 .btn-ghost{background:var(--surface);color:var(--text);border:1.5px solid var(--border);box-shadow:var(--shadow-sm)}
 .btn-ghost:hover{border-color:var(--primary);color:var(--primary)}
-.btn-orange{background:linear-gradient(135deg,#ea580c,#f97316);color:#fff;box-shadow:0 4px 14px rgba(249,115,22,.3)}
+.btn-orange{background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;box-shadow:0 4px 14px rgba(74,168,255,.3)}
 
 /* ── BADGES ── */
 .badge{display:inline-flex;align-items:center;padding:4px 10px;border-radius:100px;font-size:11px;font-weight:800;font-family:var(--font)}
@@ -319,7 +618,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 
 /* ── MODAL/OVERLAY ── */
 .overlay{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .2s ease;backdrop-filter:blur(4px)}
-.modal{background:var(--surface);border-radius:20px;padding:28px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;animation:scaleIn .25s cubic-bezier(.22,1,.36,1);box-shadow:0 24px 64px rgba(0,0,0,.2)}
+.modal{background:var(--surface);border-radius:20px;padding:22px;width:100%;max-width:560px;max-height:86vh;overflow-y:auto;animation:scaleIn .25s cubic-bezier(.22,1,.36,1);box-shadow:0 24px 64px rgba(0,0,0,.2)}
 
 /* ── PRODUCT CARD ── */
 .prod-card{background:var(--surface);border:1.5px solid var(--border2);border-radius:var(--radius);overflow:hidden;transition:.25s;position:relative}
@@ -331,6 +630,17 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .prod-card .pc-price{font-family:var(--font);font-weight:900;font-size:20px;color:var(--primary)}
 .prod-card .pc-actions{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--border2);background:var(--bg)}
 .prod-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
+.prod-grid.compact{gap:10px}
+.prod-card.compact .pc-img{height:128px}
+.prod-card.compact .pc-body{padding:10px}
+.prod-card.compact .pc-name{font-size:13px;margin-bottom:2px;-webkit-line-clamp:1}
+.prod-card.compact .pc-meta{font-size:11px;margin-bottom:5px}
+.prod-card.compact .pc-price{font-size:17px}
+.prod-card.compact .pc-actions{padding:8px 10px;gap:6px}
+.prod-card.compact .pc-actions .btn{font-size:11px;padding:7px 8px}
+.view-toggle{display:inline-flex;align-items:center;gap:4px;padding:4px;border-radius:999px;background:#f4faff;border:1px solid var(--border)}
+.view-toggle-btn{border:none;background:transparent;color:var(--muted);padding:7px 11px;border-radius:999px;cursor:pointer;font-size:11px;font-weight:800;font-family:var(--font);white-space:nowrap}
+.view-toggle-btn.active{background:linear-gradient(180deg,#dff1ff,#c9e7ff);color:var(--primary-dark)}
 
 /* ── ORDER CARD ── */
 .order-card{background:var(--surface);border:1.5px solid var(--border2);border-radius:var(--radius);overflow:hidden;margin-bottom:12px;transition:.2s}
@@ -362,10 +672,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .camera-btn:hover{background:rgba(108,71,255,.14);border-style:solid;transform:scale(.99)}
 .img-process-overlay{position:absolute;inset:0;background:rgba(0,0,0,.7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;border-radius:var(--radius);color:#fff;font-family:var(--font);font-weight:700;font-size:13px}
 .img-compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
-.img-compare img{width:100%;height:140px;object-fit:contain;border-radius:10px;background:#f9fafb;border:1.5px solid var(--border)}
+.img-compare img{width:100%;height:110px;object-fit:contain;border-radius:10px;background:#f9fafb;border:1.5px solid var(--border)}
 
 /* ── AI AUTOFILL ── */
-.ai-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:100px;background:linear-gradient(135deg,#6c47ff,#a78bfa);color:#fff;font-size:11px;font-weight:800;font-family:var(--font)}
+.ai-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:100px;background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;font-size:11px;font-weight:800;font-family:var(--font)}
 .ai-field{position:relative}
 .ai-field .ai-dot{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;background:var(--primary);opacity:.7}
 .ai-glow{border-color:var(--primary)!important;box-shadow:0 0 0 3px rgba(108,71,255,.12)!important}
@@ -385,11 +695,91 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);overflow-x:h
 .shop-banner-slot{width:100%;height:120px;border:2px dashed var(--border);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:.2s;background:var(--bg);overflow:hidden;position:relative}
 .shop-banner-slot:hover{border-color:var(--primary);background:var(--primary-light)}
 .shop-banner-slot img{width:100%;height:100%;object-fit:cover}
+.settings-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px;border-radius:16px;background:linear-gradient(135deg,#0f4c81 0%,#1d6fb8 54%,#4aa8ff 100%);border:1px solid rgba(74,168,255,.48);box-shadow:0 14px 30px rgba(29,111,184,.25);margin-bottom:16px}
+.settings-kicker{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.17);color:rgba(255,255,255,.96);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+.settings-hero-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.settings-grid{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,.88fr);gap:16px;align-items:start}
+.settings-col{display:flex;flex-direction:column;gap:16px}
+.settings-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.settings-health-item{padding:12px;border-radius:12px;background:linear-gradient(180deg,#f8fcff,#eef7ff);border:1px solid var(--border2)}
+.settings-health-label{font-size:11px;color:var(--muted);font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.settings-health-value{font-family:var(--font);font-size:22px;font-weight:900;color:var(--primary-dark);line-height:1.1;margin-top:6px}
+.settings-health-sub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.4}
+.settings-signout-btn{width:100%;background:rgba(239,68,68,.08);color:#ef4444;border:1.5px solid rgba(239,68,68,.18)}
+.settings-signout-btn:hover{background:rgba(239,68,68,.14)}
+.hub-switch-card{padding:12px 12px 4px;margin-bottom:10px;background:linear-gradient(180deg,#ffffff,#f8fbff);border:1.5px solid var(--border2)}
+.hub-switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.hub-switch-title{font-size:12px;font-weight:800;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.hub-counts{display:flex;gap:8px;flex-wrap:wrap}
+.hub-count-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--primary-light);color:var(--primary-dark);font-size:11px;font-weight:800}
+@media(max-width:980px){
+  .layout{display:block}
+  .auth-page{display:block}
+  .auth-visual,.auth-form-side{width:100%}
+  .auth-visual{min-height:220px;padding:28px 20px}
+  .auth-form-side{padding:20px 14px 32px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)}
+  .auth-card{max-width:none;padding:24px 18px;border-radius:20px}
+  .auth-tabs{margin-bottom:18px}
+  .auth-location-card{padding:12px 14px}
+  .sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;height:auto;max-height:none;border-right:none;border-top:1px solid rgba(74,168,255,.18);background:rgba(255,255,255,.97);backdrop-filter:blur(18px);overflow:hidden}
+  .sidebar-logo{display:none}
+  .sidebar-nav{display:flex;align-items:stretch;gap:8px;padding:10px 12px;overflow-x:auto}
+  .nav-section-title{display:none}
+  .nav-item{flex:0 0 auto;min-width:74px;justify-content:center;flex-direction:column;gap:5px;padding:9px 12px;border-radius:16px;background:#f4faff;color:var(--muted);border:1px solid var(--border);font-size:10px;text-align:center}
+  .nav-item.active{background:linear-gradient(180deg,#dff1ff,#c9e7ff);color:var(--primary-dark)}
+  .nav-item.active::before{display:none}
+  .nav-item svg{width:20px;height:20px}
+  .sidebar-bottom{display:none}
+  .sidebar-shop{display:none}
+  .main-content{margin-left:0;padding-bottom:94px}
+  .topbar{display:none}
+  .topbar-actions{width:100%;justify-content:space-between;flex-wrap:wrap}
+  .topbar-actions .topbar-welcome{display:none}
+  .page{padding:18px 14px 10px;max-width:none}
+  .page-header{align-items:flex-start;flex-direction:column;gap:10px}
+  .page-header-actions{width:100%}
+  .page-header-actions .btn{flex:1 1 180px}
+  .stat-grid,.grid-2,.grid-3,.img-compare{grid-template-columns:1fr}
+  .settings-grid,.settings-health-grid{grid-template-columns:1fr}
+  .settings-hero{flex-direction:column;padding:16px}
+  .settings-hero-actions{width:100%;justify-content:stretch}
+  .settings-hero-actions .btn{flex:1 1 180px}
+  .hub-switch-row{align-items:flex-start}
+  .prod-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .prod-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .table-head,.table-row{flex-wrap:wrap;padding:14px}
+  .table-wrap{overflow-x:auto}
+  .order-head,.page-header,.topbar{align-items:flex-start}
+  .modal{padding:22px 18px}
+  .prod-card .pc-actions{flex-direction:column}
+  .prod-card .pc-actions .btn{width:100%}
+  .table-head span,.table-row > *{flex:1 1 140px;min-width:0}
+}
+@media(max-width:560px){
+  .auth-visual{display:none}
+  .prod-grid{grid-template-columns:1fr}
+  .prod-grid.compact{grid-template-columns:1fr}
+  .sidebar-nav{padding:10px 10px 6px}
+  .sidebar-bottom{display:none}
+  .topbar,.page,.modal{padding-left:12px;padding-right:12px}
+  .btn{width:100%}
+  .topbar-actions{gap:8px}
+  .topbar-actions > *{width:100%}
+  .page-title{font-size:22px}
+  .table-head{display:none}
+  .table-row{padding:12px;gap:10px;border-radius:14px;background:var(--surface);margin-bottom:10px;border:1px solid var(--border2)}
+  .table-row:last-child{margin-bottom:0}
+  .auth-form-side{padding:14px 12px 24px}
+  .auth-card{padding:22px 16px;border-radius:18px}
+  .auth-location-card,.auth-tabs{gap:8px}
+}
 `
 
 const NEXT_STATUS = { CONFIRMED: 'PACKING' }  // Vendor only: start prep after rider accepts
 const STATUS_COLOR = { PENDING: '#f59e0b', CONFIRMED: '#3b82f6', PACKING: '#8b5cf6', PICKED_UP: '#06b6d4', OUT_FOR_DELIVERY: '#f97316', DELIVERED: '#22c55e', CANCELLED: '#ef4444' }
 const STATUS_LABEL = { PENDING: 'Pending', CONFIRMED: 'Confirmed', PACKING: 'Packing', PICKED_UP: 'Picked Up', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' }
+const PRODUCT_FORM_DRAFT_PREFIX = 'dott_vendor_product_form_draft_v1'
+const PRODUCT_CARD_MODE_KEY = 'dott_vendor_products_card_mode'
 
 /* ── ICONS ── */
 
@@ -526,6 +916,106 @@ async function processProductImage(file) {
     img.onerror = reject
     img.src = url
   })
+}
+
+function cleanUploadTokens(filename = '') {
+  return filename
+    .replace(/\.[^.]+$/, '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+function toTitleWords(value = '') {
+  return value
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+function pickLocalCategory(tokens = []) {
+  const joined = tokens.join(' ')
+  if (/lehenga/.test(joined)) return { category:'Lehenga', productType:'Lehenga', gender:'Women', fabric:'Silk Blend', pattern:'Embroidered', fit:'Regular', occasion:'Festival', sleeveType:'Half Sleeve', length:'Long', price:'2499' }
+  if (/(kurti|kurta)/.test(joined)) return { category:'Kurti', productType:'Kurti', gender:'Women', fabric:'Cotton Blend', pattern:'Printed', fit:'Regular', occasion:'Casual', sleeveType:'Three Quarter Sleeve', length:'Long', price:'999' }
+  if (/(saree|sari)/.test(joined)) return { category:'Saree', productType:'Saree', gender:'Women', fabric:'Silk Blend', pattern:'Woven', fit:'Regular', occasion:'Festival', sleeveType:'Not Applicable', length:'Long', price:'1799' }
+  if (/(shirt|tshirt|t-shirt|tee)/.test(joined)) return { category:'Shirt', productType:'Shirt', gender:'Men', fabric:'Cotton', pattern:'Plain', fit:'Slim', occasion:'Casual', sleeveType:'Full Sleeve', length:'Regular', price:'899' }
+  if (/(jeans|jean|pant|pants|trouser|trousers)/.test(joined)) return { category:'Jeans', productType:'Jeans', gender:'Men', fabric:'Denim', pattern:'Solid', fit:'Regular', occasion:'Casual', sleeveType:'Not Applicable', length:'Full Length', price:'1299' }
+  if (/(dress|gown)/.test(joined)) return { category:'Dress', productType:'Dress', gender:'Women', fabric:'Polyester Blend', pattern:'Printed', fit:'Regular', occasion:'Party', sleeveType:'Sleeveless', length:'Midi', price:'1499' }
+  return { category:'Fashion', productType:'Fashion', gender:'Unisex', fabric:'Cotton Blend', pattern:'Solid', fit:'Regular', occasion:'Casual', sleeveType:'Regular', length:'Regular', price:'999' }
+}
+
+async function detectDominantColorFromSource(src) {
+  try {
+    const img = await loadImage(src)
+    const canvas = document.createElement('canvas')
+    canvas.width = 48
+    canvas.height = 48
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    ctx.drawImage(img, 0, 0, 48, 48)
+    const { data } = ctx.getImageData(0, 0, 48, 48)
+    let r = 0, g = 0, b = 0, count = 0
+    for (let i = 0; i < data.length; i += 4) {
+      const pr = data[i], pg = data[i+1], pb = data[i+2]
+      if (pr > 240 && pg > 240 && pb > 240) continue
+      if (pr < 20 && pg < 20 && pb < 20) continue
+      r += pr; g += pg; b += pb; count += 1
+    }
+    if (!count) return 'Blue'
+    const avg = [r / count, g / count, b / count]
+    const palette = [
+      ['Black', [35,35,35]], ['White', [245,245,245]], ['Grey', [125,125,125]], ['Cream', [236,228,202]],
+      ['Beige', [209,188,157]], ['Gold', [205,170,95]], ['Navy', [38,56,110]], ['Blue', [58,110,196]],
+      ['Teal', [30,131,139]], ['Green', [62,132,66]], ['Olive', [107,121,52]], ['Yellow', [220,185,50]],
+      ['Orange', [217,120,47]], ['Red', [180,55,63]], ['Pink', [214,112,155]], ['Purple', [104,72,134]],
+      ['Maroon', [104,43,60]], ['Brown', [116,83,52]],
+    ]
+    let best = 'Blue'
+    let bestScore = Number.POSITIVE_INFINITY
+    palette.forEach(([name, [pr, pg, pb]]) => {
+      const score = Math.pow(avg[0]-pr,2) + Math.pow(avg[1]-pg,2) + Math.pow(avg[2]-pb,2)
+      if (score < bestScore) {
+        best = name
+        bestScore = score
+      }
+    })
+    return best
+  } catch {
+    return 'Blue'
+  }
+}
+
+async function buildLocalAutofill(file, previewUrl) {
+  const tokens = cleanUploadTokens(file?.name || '')
+  const preset = pickLocalCategory(tokens)
+  const color = await detectDominantColorFromSource(previewUrl)
+  const descriptor = [color, preset.pattern !== 'Solid' ? preset.pattern : '', preset.category].filter(Boolean).join(' ')
+  const title = `${descriptor} for ${preset.gender}`.trim()
+  return {
+    name: `${color} ${preset.category}`.trim(),
+    title,
+    category: preset.category,
+    productType: preset.productType,
+    brand: 'DOTT Fashion',
+    color,
+    material: preset.fabric,
+    fabric: preset.fabric,
+    pattern: preset.pattern,
+    gender: preset.gender,
+    fit: preset.fit,
+    occasion: preset.occasion,
+    sleeveType: preset.sleeveType,
+    length: preset.length,
+    mrp: '',
+    suggestedPrice: preset.price,
+    price: preset.price,
+    description: `${title} with a clean catalogue-ready look, ${preset.fabric.toLowerCase()} feel, and a ${preset.fit.toLowerCase()} fit for ${preset.occasion.toLowerCase()} wear.`,
+    tags: [preset.category, preset.productType, color, preset.fabric, preset.occasion, 'fashion', 'catalogue'].map(toTitleWords),
+    sizes: /Shirt|Kurti|Dress|Lehenga/.test(preset.productType) ? 'S, M, L, XL' : '',
+    confidence: 'basic',
+    analysisSource: 'local-fallback',
+  }
 }
 
 function detectProductPresentation(ai = {}) {
@@ -767,6 +1257,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [aiResult, setAiResult] = useState(null)
+  const [lastUploadName, setLastUploadName] = useState('')
 
   useEffect(() => { startCamera(); return () => stopCamera() }, [])
 
@@ -795,20 +1286,22 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
     const url = URL.createObjectURL(file)
+    setLastUploadName(file.name || 'product image')
     setCapturedUrl(url); setMode('preview'); stopCamera()
     processAndAnalyze(file)
     e.target.value = ''
   }
 
   const processAndAnalyze = async (blob) => {
-    setProcessing(true); setAnalyzing(false); setAiResult(null); setProcessedData(null); setBaseProcessedData(null)
+    setProcessing(true); setAnalyzing(false); setAiResult(null); setProcessedData(null); setBaseProcessedData(null); setError('')
     try {
       const file = blob instanceof File ? blob : new File([blob], 'cap.jpg', { type: 'image/jpeg' })
+      if (!lastUploadName) setLastUploadName(file.name || 'product image')
       const localPreview = await processProductImage(file)
       setBaseProcessedData(localPreview)
       setAnalyzing(true)
       const { data } = await api.processProductImageAI(file)
-      setAiResult(data.analysis || null)
+      setAiResult(data.autofill || data.analysis || null)
       setProcessedData({
         url: data.transformedUrl,
         dataUrl: data.transformedUrl,
@@ -821,19 +1314,53 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
         } : null,
       })
     } catch (e) {
-      setError('Processing failed.')
+      try {
+        const file = blob instanceof File ? blob : new File([blob], 'cap.jpg', { type: 'image/jpeg' })
+        const preview = baseProcessedData || await processProductImage(file)
+        if (!baseProcessedData) setBaseProcessedData(preview)
+        const fallbackAi = await buildLocalAutofill(file, preview.url || capturedUrl)
+        setAiResult(fallbackAi)
+        setProcessedData({
+          url: preview.url || capturedUrl,
+          dataUrl: preview.dataUrl || capturedUrl,
+          serverUrl: '',
+          originalUrl: capturedUrl,
+          presentation: detectProductPresentation(fallbackAi),
+        })
+        setError('Quick AI draft ready')
+      } catch {
+        setError('Quick draft unavailable')
+      }
     }
     setProcessing(false); setAnalyzing(false)
+  }
+
+  const resetCapture = () => {
+    setMode('camera')
+    setCapturedUrl(null)
+    setProcessedData(null)
+    setBaseProcessedData(null)
+    setAiResult(null)
+    setError('')
+    setLastUploadName('')
+    startCamera()
   }
 
   const confirmImage = async () => {
     if (!processedData && !capturedUrl) { onClose(); return }
     setUploading(true)
+    const payload = {
+      imageUrl: processedData?.serverUrl || processedData?.dataUrl || capturedUrl,
+      processedImageUrl: processedData?.serverUrl || processedData?.dataUrl || capturedUrl,
+      originalImageUrl: processedData?.originalUrl || capturedUrl,
+      aiMeta: aiResult || null,
+      presentation: processedData?.presentation || null,
+    }
     try {
-      onCapture(processedData?.serverUrl || processedData?.dataUrl || capturedUrl)
+      onCapture(payload)
       if (aiResult && onAnalyze) onAnalyze(aiResult)
     } catch(e) {
-      onCapture(processedData?.serverUrl || processedData?.dataUrl || capturedUrl)
+      onCapture(payload)
       if (aiResult && onAnalyze) onAnalyze(aiResult)
     }
     setUploading(false); onClose()
@@ -841,8 +1368,15 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
 
   const confirmWithoutAI = async () => {
     setUploading(true)
-    try { onCapture(processedData?.serverUrl || processedData?.dataUrl || capturedUrl) }
-    catch(e) { onCapture(processedData?.serverUrl || processedData?.dataUrl || capturedUrl) }
+    const payload = {
+      imageUrl: processedData?.serverUrl || processedData?.dataUrl || capturedUrl,
+      processedImageUrl: processedData?.serverUrl || processedData?.dataUrl || capturedUrl,
+      originalImageUrl: processedData?.originalUrl || capturedUrl,
+      aiMeta: null,
+      presentation: processedData?.presentation || null,
+    }
+    try { onCapture(payload) }
+    catch(e) { onCapture(payload) }
     setUploading(false); onClose()
   }
 
@@ -852,41 +1386,55 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
     <div className="overlay" style={{ zIndex: 500 }}>
       <div className="modal" style={{ maxWidth: 520, padding: 0, overflow: 'hidden' }}>
         {/* Header */}
-        <div style={{ background: 'linear-gradient(135deg,var(--primary),#a78bfa)', padding: '15px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ color: '#fff', fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ background: 'linear-gradient(135deg,var(--primary),#a78bfa)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ color: '#fff', fontFamily: 'var(--font)', fontWeight: 800, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Icons.Camera /> Smart Product Camera
-            <span style={{ background: 'rgba(255,255,255,.2)', borderRadius: 100, padding: '2px 8px', fontSize: 10, fontWeight: 700, letterSpacing: '.5px' }}>AI POWERED</span>
+            <span style={{ background: 'rgba(255,255,255,.2)', borderRadius: 100, padding: '2px 6px', fontSize: 9, fontWeight: 700, letterSpacing: '.4px' }}>AI POWERED</span>
           </div>
-          <button onClick={onClose} style={{ background: 'rgba(255,255,255,.2)', border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer', padding: '6px 8px', display: 'flex' }}><Icons.Close /></button>
+          <button onClick={onClose} style={{ background: 'rgba(255,255,255,.2)', border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer', padding: '5px 7px', display: 'flex' }}><Icons.Close /></button>
         </div>
 
-        <div style={{ padding: 20 }}>
+          <div style={{ padding: 14 }}>
           {/* Camera mode */}
           {mode === 'camera' && !error && (
             <div>
-              <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: 12, background: '#000', maxHeight: 300, objectFit: 'cover', display: 'block' }} />
-              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => fileRef.current?.click()}>
+              <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: 12, background: '#000', maxHeight: 240, objectFit: 'cover', display: 'block' }} />
+              <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                <button className="btn btn-ghost" style={{ flex: 1, padding: '10px 12px' }} onClick={() => fileRef.current?.click()}>
                   <Icons.Upload /> Gallery
                 </button>
-                <button className="btn btn-primary" style={{ flex: 2 }} onClick={capturePhoto}>
+                <button className="btn btn-primary" style={{ flex: 2, padding: '10px 12px' }} onClick={capturePhoto}>
                   <Icons.Camera /> Capture
                 </button>
               </div>
-              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+              <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
                 Camera — AI enhances image + auto-fills all product details
               </div>
             </div>
           )}
 
           {/* Upload mode fallback */}
-          {(mode === 'upload' || error) && (
+          {(mode === 'upload' || (error && !capturedUrl)) && (
             <div>
-              {error && <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 14px', color: '#9a3412', fontSize: 13, marginBottom: 12 }}>{error}</div>}
-              <div className="camera-btn" onClick={() => fileRef.current?.click()}>
-                <Icons.Upload />
-                <div>Upload Product Photo</div>
-                <div style={{ fontSize: 12, opacity: .7 }}>AI will analyze & auto-fill all fields</div>
+              {error && <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 12, padding: '10px 14px', color: '#9a3412', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+              <div style={{border:'1.5px dashed #93c5fd',borderRadius:16,padding:'14px 14px',background:'linear-gradient(180deg,#f8fbff,#eef6ff)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+                  <div style={{width:46,height:46,borderRadius:14,background:'rgba(59,130,246,.12)',display:'grid',placeItems:'center',color:'#3b82f6'}}>
+                    <Icons.Upload />
+                  </div>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:900,color:'var(--text)'}}>Add Product Image</div>
+                    <div style={{fontSize:11,color:'var(--muted)'}}>Upload one clean product photo to generate a faster listing draft.</div>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:10}}>
+                  <button className="btn btn-primary" style={{flex:1,padding:'10px 12px'}} onClick={() => fileRef.current?.click()}>
+                    <Icons.Upload /> Upload Photo
+                  </button>
+                  <button className="btn btn-ghost" style={{flex:1,padding:'10px 12px'}} onClick={() => { setMode('camera'); setError(''); startCamera() }}>
+                    <Icons.Camera /> Open Camera
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -894,14 +1442,29 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
           {/* Preview + AI results */}
           {mode === 'preview' && (
             <div>
-              {/* Before / After comparison */}
-              <div className="img-compare" style={{ marginBottom: 14 }}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:900,color:'var(--text)'}}>Product Preview</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>
+                    {lastUploadName || 'Captured image'}
+                    {aiResult ? ' ready for auto-fill.' : ' ready to use.'}
+                    {error === 'Quick AI draft ready' ? ' A quick product draft was generated locally.' : ''}
+                    {!aiResult && error ? ' You can continue and add details manually.' : ''}
+                  </div>
+                </div>
+                <span style={{padding:'6px 9px',borderRadius:999,background:aiResult?'rgba(59,130,246,.12)':'rgba(148,163,184,.12)',color:aiResult?'#2563eb':'#64748b',fontSize:10,fontWeight:800}}>
+                  {processing ? 'Processing' : aiResult ? 'AI Ready' : 'Ready'}
+                </span>
+              </div>
+
+              <div className="img-compare" style={{ marginBottom: 14, gridTemplateColumns: baseProcessedData || processedData ? '1fr 1fr' : '1fr' }}>
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', marginBottom: 5, textAlign: 'center', textTransform: 'uppercase' }}>Original</div>
                   <img src={capturedUrl} alt="Original" />
                 </div>
+                {(baseProcessedData || processedData) && (
                 <div style={{ position: 'relative' }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', marginBottom: 5, textAlign: 'center', textTransform: 'uppercase' }}>E-commerce Ready</div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', marginBottom: 5, textAlign: 'center', textTransform: 'uppercase' }}>{processedData ? 'E-commerce Ready' : 'Clean Preview'}</div>
                   {processing ? (
                     <div style={{ height: 140, background: 'var(--bg)', borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, border: '1.5px solid var(--border)' }}>
                       <div style={{ width: 24, height: 24, border: '3px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
@@ -922,6 +1485,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
                     </div>
                   )}
                 </div>
+                )}
               </div>
 
               {!processing && processedData?.presentation && (
@@ -938,7 +1502,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
 
               {/* AI Results */}
               {!processing && !analyzing && aiResult && (
-                <div style={{ background: 'var(--primary-light)', border: '1.5px solid rgba(108,71,255,.2)', borderRadius: 12, padding: '12px 14px', marginBottom: 14 }}>
+                <div style={{ background: 'var(--primary-light)', border: '1.5px solid rgba(108,71,255,.2)', borderRadius: 12, padding: '10px 12px', marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                     <span className="ai-badge">AI Detected</span>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>Confidence: {aiResult.confidence || 'medium'}</span>
@@ -969,24 +1533,32 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
               )}
 
               {!processing && !analyzing && !aiResult && (
-                <div style={{ background: '#fff7ed', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#92400e', fontWeight: 600 }}>
-                  AI analysis unavailable — image enhanced. You can still use it.
+                <div style={{ background: '#f8fafc', border:'1px solid #e2e8f0', borderRadius: 12, padding: '12px 14px', marginBottom: 14 }}>
+                  <div style={{fontSize:13,fontWeight:800,color:'#0f172a'}}>Continue with this image</div>
+                  <div style={{ fontSize: 12, color: '#64748b', marginTop:4 }}>
+                    The photo is ready. You can add product details manually and save normally.
+                  </div>
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setMode('camera'); setCapturedUrl(null); setProcessedData(null); setBaseProcessedData(null); setAiResult(null); setError(''); startCamera() }} disabled={isWorking}>
+              <div style={{position:'sticky',bottom:-2,background:'linear-gradient(180deg,rgba(255,255,255,0),#fff 28%)',paddingTop:14,marginTop:6}}>
+                <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:8,textAlign:'center'}}>
+                  {aiResult ? 'Use auto-fill to open the product form with AI-filled fields.' : 'Use this image to open the product form.'}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={resetCapture} disabled={isWorking}>
                   ↺ Retake
                 </button>
                 {aiResult ? (
                   <button className="btn btn-primary" style={{ flex: 2, background: 'linear-gradient(135deg,var(--primary),#a78bfa)' }} onClick={confirmImage} disabled={isWorking}>
-                    {uploading ? 'Uploading...' : analyzing ? 'Analyzing...' : 'Use Image + Auto-Fill'}
+                    {uploading ? 'Opening Form...' : analyzing ? 'Analyzing...' : 'Use Auto-Fill'}
                   </button>
                 ) : (
                   <button className="btn btn-primary" style={{ flex: 2 }} onClick={confirmWithoutAI} disabled={isWorking}>
-                    {uploading ? 'Uploading...' : 'Use This Image'}
+                    {uploading ? 'Opening Form...' : 'Use This Image'}
                   </button>
                 )}
+                </div>
               </div>
             </div>
           )}
@@ -1026,6 +1598,11 @@ function AuthPage({ onSuccess }) {
     setOtpTimer(60)
     timerRef.current = setInterval(() => setOtpTimer(t => { if(t<=1){clearInterval(timerRef.current);return 0} return t-1 }), 1000)
   }
+  const enterDemoStore = () => {
+    localStorage.setItem(DEMO_VENDOR_MODE_KEY, '1')
+    const db = getDemoVendorDb()
+    onSuccess(db.user, db.shop)
+  }
 
   const sendOtp = async () => {
     if (!form.phone || form.phone.replace(/\D/g,'').length !== 10) { setError('Enter a valid 10-digit phone number'); return }
@@ -1038,7 +1615,15 @@ function AuthPage({ onSuccess }) {
     setOtpSending(false)
   }
 
-  const getLoc = () => navigator.geolocation?.getCurrentPosition(p => setLoc({ lat: p.coords.latitude, lng: p.coords.longitude }))
+  const getLoc = async () => {
+    setError('')
+    try {
+      const gps = await getCurrentGpsLocation()
+      setLoc({ lat: gps.lat, lng: gps.lng })
+    } catch (err) {
+      setError(err?.message || 'Unable to detect current location')
+    }
+  }
 
   const submit = async () => {
     setError(''); setLoading(true)
@@ -1060,7 +1645,7 @@ function AuthPage({ onSuccess }) {
   return (
     <div className="auth-page">
       <div className="auth-visual-dots" />
-      <div style={{ position: 'relative', zIndex: 1, width: '45%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 48 }}>
+      <div className="auth-visual" style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ textAlign: 'center', color: '#fff' }}>
           <div style={{ marginBottom: 16, animation: 'float 3s ease-in-out infinite',fontSize:20,fontWeight:900,color:'rgba(255,255,255,.3)' }}>DOTT</div>
           <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 36, letterSpacing: '-1px', marginBottom: 10 }}>
@@ -1085,8 +1670,9 @@ function AuthPage({ onSuccess }) {
         </div>
       </div>
 
-      <div style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px 20px',overflowY:'auto' }}>
-        <div style={{ width:'100%',maxWidth:420,background:'#fff',borderRadius:24,padding:36,boxShadow:'0 24px 80px rgba(0,0,0,.4)',animation:'scaleIn .25s cubic-bezier(.22,1,.36,1)' }}>
+      <div className="auth-form-side">
+        <div className="auth-form-wrap">
+        <div className="auth-card">
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:26,color:'var(--text)',letterSpacing:'-.5px' }}>
               {tab==='login'?'Welcome back':'Create Your Store'}
@@ -1094,7 +1680,7 @@ function AuthPage({ onSuccess }) {
             <div style={{ color:'var(--muted)',fontSize:14,marginTop:4 }}>{tab==='login'?'Sign in to your vendor dashboard':'Set up your store in minutes'}</div>
           </div>
 
-          <div style={{ display:'flex',background:'#f3f0ff',borderRadius:12,padding:4,gap:4,marginBottom:24 }}>
+          <div className="auth-tabs">
             {['login','register'].map(t => (
               <button key={t} onClick={()=>{setTab(t);setOtpStep('form');setOtpValue('');setError('')}} style={{ flex:1,padding:'10px',borderRadius:9,border:'none',cursor:'pointer',background:tab===t?'#fff':'transparent',color:tab===t?'var(--primary)':'var(--muted)',fontFamily:'var(--font)',fontWeight:700,fontSize:13,transition:'.2s',boxShadow:tab===t?'var(--shadow-sm)':'none' }}>
                 {t==='login'?'Sign In':'Register'}
@@ -1118,7 +1704,7 @@ function AuthPage({ onSuccess }) {
               <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={submit} disabled={loading||otpValue.length!==6}>
                 {loading?'Verifying...':'Verify & Create Account'}
               </button>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
                 <button onClick={()=>{setOtpStep('form');setOtpValue('')}} style={{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:13}}>← Change number</button>
                 {otpTimer>0
                   ?<span style={{fontSize:13,color:'var(--muted)'}}>Resend in {otpTimer}s</span>
@@ -1133,7 +1719,7 @@ function AuthPage({ onSuccess }) {
               </>}
               <div><label className="label">Email Address *</label><input className="input" type="email" placeholder="vendor@email.com" value={form.email} onChange={set('email')}/></div>
               <div><label className="label">Password *</label><input className="input" type="password" placeholder="Enter your password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&(tab==='login'?submit():sendOtp())}/></div>
-              <div onClick={getLoc} style={{display:'flex',alignItems:'center',gap:12,padding:'13px 16px',borderRadius:12,border:`1.5px solid ${loc?'var(--green)':'var(--border)'}`,background:loc?'#f0fdf4':'var(--bg)',cursor:'pointer',transition:'.2s'}}>
+              <div className="auth-location-card" onClick={getLoc} style={{borderColor:loc?'var(--green)':'var(--border)',background:loc?'#f0fdf4':'var(--bg)'}}>
                 <span style={{fontSize:22}}>{loc?'●':'○'}</span>
                 <div><div style={{fontWeight:700,fontSize:13}}>{loc?'Location captured':'Set shop location'}</div><div style={{color:'var(--muted)',fontSize:12}}>{loc?`${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`:'Used for delivery radius'}</div></div>
               </div>
@@ -1141,29 +1727,30 @@ function AuthPage({ onSuccess }) {
               {tab==='login'
                 ? <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={submit} disabled={loading}>{loading?'Signing in...':'→ Sign In'}</button>
                 : <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={sendOtp} disabled={otpSending}>{otpSending?'Sending OTP...':'→ Send OTP & Continue'}</button>}
-              {tab==='login' && (
-                <div style={{marginTop:4}}>
-                  <div style={{textAlign:'center',color:'var(--muted)',fontSize:12,marginBottom:10,textTransform:'uppercase',letterSpacing:'.8px',fontWeight:700}}>Demo Account</div>
-                  <button onClick={()=>setForm(f=>({...f,email:'rahul@dott.in',password:'password123'}))} style={{width:'100%',padding:'11px',borderRadius:10,border:'1.5px solid var(--border)',background:'var(--bg)',color:'var(--muted)',cursor:'pointer',fontSize:13,fontFamily:'var(--font)',fontWeight:700,transition:'.2s'}} onMouseEnter={e=>e.currentTarget.style.borderColor='var(--primary)'} onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}>
-                    rahul@dott.in / password123
-                  </button>
-                </div>
-              )}
             </div>
           )}
+        </div>
         </div>
       </div>
     </div>
   )
 }
 
-function Dashboard({ shop }) {
+function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings }) {
   const [analytics, setAnalytics] = useState(null)
   const [orders, setOrders] = useState([])
+  const [allOrders, setAllOrders] = useState([])
+  const [products, setProducts] = useState([])
+  const [lowStock, setLowStock] = useState([])
+  const [focusPanel, setFocusPanel] = useState('')
+  const [expandedRevenueOrder, setExpandedRevenueOrder] = useState(null)
 
   useEffect(() => {
     api.analytics().then(r => setAnalytics(r.data)).catch(() => {})
     api.shopOrders({ status: 'PENDING' }).then(r => setOrders(r.data)).catch(() => {})
+    api.shopOrders().then(r => setAllOrders(r.data)).catch(() => {})
+    api.myProducts().then(r => setProducts(r.data)).catch(() => {})
+    api.lowStock().then(r => setLowStock(r.data.items || [])).catch(() => {})
   }, [])
 
   const stats = [
@@ -1172,67 +1759,218 @@ function Dashboard({ shop }) {
     { label: "All Time", val: `₹${analytics?.allTime?.revenue || 0}`, sub: `${analytics?.allTime?.orders || 0} orders`, color: '#22c55e', letter: 'A' },
     { label: "Pending Returns", val: analytics?.pendingReturns ?? '—', sub: 'needs action', color: '#f97316', letter: 'R' },
   ]
+  const totalStock = products.reduce((sum, p) => sum + Number(p.stock || 0), 0)
+  const activeProducts = products.filter(p => p.isActive).length
+  const periodStart = Date.now() - (2 * 24 * 60 * 60 * 1000)
+  const deliveredLast2Days = allOrders.filter(o => {
+    if (o.status !== 'DELIVERED') return false
+    const stamp = o.deliveredAt || o.deliveredTime || o.placedAt
+    if (!stamp) return false
+    return new Date(stamp).getTime() >= periodStart
+  })
+  const grossLast2Days = deliveredLast2Days.reduce((sum, o) => sum + Number(o.total || 0), 0)
+  const platformFeeLast2Days = 0
+  const netPayableLast2Days = grossLast2Days
+  const healthCards = [
+    {label:'Amount generated', value: `₹${analytics?.month?.revenue || 0}`, sub: `${analytics?.month?.orders || 0} orders generated this month`, color:'#16a34a'},
+    {label:'Pending orders', value: `${orders.length}`, sub: orders.length > 0 ? 'Orders need quick action' : 'No pending orders right now', color:'#f59e0b'},
+    {label:'Stock left', value: `${totalStock}`, sub: lowStock.length > 0 ? `${lowStock.length} product${lowStock.length !== 1 ? 's' : ''} running low on stock` : 'All products have healthy stock', color:'#0ea5e9'},
+    {label:'Active products', value: `${activeProducts}`, sub: shop?.isOpen ? 'Products visible in your live store' : 'Open shop to make products visible', color:'#4aa8ff'},
+  ]
 
   return (
     <div className="page">
-      <div className="page-header">
+      <div
+        className="page-header"
+        style={{
+          background: 'linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%)',
+          border: '1px solid rgba(74,168,255,.55)',
+          borderRadius: 16,
+          padding: '14px 16px',
+          marginBottom: 16,
+          boxShadow: '0 14px 30px rgba(29,111,184,.28)',
+        }}
+      >
         <div>
-          <div className="page-title">Dashboard</div>
-          <div className="page-sub">{shop?.name} · {shop?.category}</div>
+          <div className="page-title" style={{ color: '#ffffff' }}>Dashboard</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{shop?.name} · {shop?.category}</div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <span className={`badge ${shop?.isOpen ? 'badge-success' : 'badge-danger'}`}>{shop?.isOpen ? '● Open' : '● Closed'}</span>
+        <div className="page-header-actions">
+          <span
+            className={`badge ${shop?.isOpen ? 'badge-success' : 'badge-danger'}`}
+            style={{
+              boxShadow: '0 4px 12px rgba(0,0,0,.16)',
+              background: shop?.isOpen ? 'rgba(220,252,231,.95)' : 'rgba(254,226,226,.95)',
+              color: shop?.isOpen ? '#166534' : '#991b1b',
+            }}
+          >
+            {shop?.isOpen ? '● Open' : '● Closed'}
+          </span>
           {shop?.isSuspended && <span className="badge badge-danger">Suspended</span>}
         </div>
       </div>
 
-      <div className="stat-grid">
-        {stats.map((s, i) => (
-          <div key={s.label} className="stat-card fade-up" style={{ animationDelay: `${i * 0.07}s` }}>
-            <div style={{ fontSize: 28, marginBottom: 10 }}>{s.icon}</div>
-            <div className="stat-val" style={{ color: s.color }}>{s.val}</div>
-            <div className="stat-label">{s.label}</div>
-            <div className="stat-sub">{s.sub}</div>
+      <div className="card fade-up" style={{ marginBottom: 18, padding: 0, overflow: 'hidden', border:'1px solid rgba(74,168,255,.2)', background: 'linear-gradient(140deg,#ecf7ff 0%,#ffffff 58%,#e9f6ff 100%)' }}>
+        <div style={{ padding: '18px', borderBottom: '1px solid rgba(74,168,255,.12)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:10 }}>
+            <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: '.08em', color: 'var(--primary)', textTransform: 'uppercase' }}>Store Snapshot</div>
+            <span style={{fontSize:11,fontWeight:800,padding:'5px 10px',borderRadius:999,background:shop?.isOpen?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)',color:shop?.isOpen?'#15803d':'#b91c1c'}}>
+              {shop?.isOpen ? 'Open now' : 'Currently closed'}
+            </span>
           </div>
-        ))}
+          <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 24, color: 'var(--text)', lineHeight:1.1 }}>{shop?.name}</div>
+          <div style={{ color: '#4f6b85', fontSize: 13, marginTop: 6 }}>Track sales, active orders, and stock health in one clean view.</div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>
+            <span style={{fontSize:11,fontWeight:800,padding:'6px 10px',borderRadius:999,background:'rgba(59,130,246,.1)',color:'#1d4ed8'}}>{orders.length} pending orders</span>
+            <span style={{fontSize:11,fontWeight:800,padding:'6px 10px',borderRadius:999,background:'rgba(14,165,233,.1)',color:'#0369a1'}}>{activeProducts} active products</span>
+            <span style={{fontSize:11,fontWeight:800,padding:'6px 10px',borderRadius:999,background:'rgba(245,158,11,.12)',color:'#b45309'}}>{lowStock.length} low stock</span>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 0, background:'#fff' }}>
+          {stats.map((s, i) => (
+            <div key={s.label} className="fade-up" style={{ animationDelay: `${i * 0.06}s`, padding: '16px 18px', borderRight: '1px solid rgba(74,168,255,.08)', borderBottom: '1px solid rgba(74,168,255,.08)' }}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px' }}>{s.label}</div>
+                <span style={{width:22,height:22,borderRadius:7,display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:900,background:`${s.color}20`,color:s.color}}>{s.letter}</span>
+              </div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 30, color: s.color, lineHeight: 1 }}>{s.val}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {orders.length > 0 && (
-        <div className="card fade-up" style={{ animationDelay: '.28s', borderColor: '#fde68a' }}>
-          <div className="card-title" style={{ color: '#92400e', display: 'flex', alignItems: 'center', gap: 8 }}>
-             {orders.length} Pending Order{orders.length > 1 ? 's' : ''} — Action Required
+        <div className="card fade-up" style={{ animationDelay: '.28s', borderColor: '#fde68a', background: 'linear-gradient(180deg,#fffdf2,#ffffff)' }}>
+          <div className="card-title" style={{ color: '#92400e', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            {orders.length} Pending Order{orders.length > 1 ? 's' : ''} need attention
           </div>
           {orders.slice(0, 2).map(o => (
             <div key={o.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border2)', gap: 12, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>#{o.orderCode} — {o.customer?.name}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>{o.items?.length} items · ₹{o.total} · {o.paymentMethod?.toUpperCase()}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4, lineHeight: 1.45 }}>
+                  Customer: {o.customer?.phone || 'No phone'}<br />
+                  Location: {o.deliveryAddress || 'No delivery address'}
+                </div>
               </div>
               <span className="badge badge-warning">Pending</span>
             </div>
           ))}
+          <button className="btn btn-ghost" style={{ width: '100%', marginTop: 10 }} onClick={onOpenOrders}>
+            <Icons.Orders /> Open Orders
+          </button>
         </div>
       )}
 
-      <div className="card fade-up" style={{ animationDelay: '.3s', marginTop: 16 }}>
-        <div className="card-title">Quick Tips</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[
-            {icon:'CAM', title:'Smart Camera', desc:'Use camera button to capture + AI enhance product images automatically'},
-            {icon:'ORD', title:'Orders', desc:'Accept orders fast — riders get notified instantly on acceptance'},
-            {icon:'ANA', title:'Analytics', desc:'Track revenue trends in the Analytics section'},
-            {icon:'SET', title:'Settings', desc:'Enable WhatsApp mode to get order alerts on your phone'},
-          ].map(({icon, title, desc}) => (
-            <div key={title} style={{ display: 'flex', gap: 10, padding: '12px', background: 'var(--bg)', borderRadius: 12, border: '1px solid var(--border2)' }}>
-              <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--primary)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 6, padding: '3px 6px', flexShrink: 0, alignSelf: 'flex-start', letterSpacing: '.3px' }}>{icon}</span>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>{title}</div>
-                <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>{desc}</div>
-              </div>
-            </div>
+      <div className="card fade-up" style={{ animationDelay: '.3s', marginTop: 16, background:'linear-gradient(180deg,#ffffff,#f8fbff)' }}>
+        <div className="card-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+          <span>Store Health</span>
+          <span style={{fontSize:11,fontWeight:800,padding:'6px 10px',borderRadius:999,background:'rgba(37,99,235,.1)',color:'#1d4ed8'}}>Live status</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
+          {healthCards.map(({ label, value, sub, color }) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => {
+                if (label === 'Pending orders') { onOpenOrders?.(); return }
+                if (label === 'Active products' || label === 'Stock left') { onOpenProducts?.(); return }
+                if (label === 'Amount generated') { setFocusPanel('revenue'); return }
+              }}
+              style={{ padding: '14px', background: '#fff', borderRadius: 14, border: '1px solid var(--border2)', boxShadow:'0 6px 18px rgba(15,23,42,.04)', textAlign:'left', cursor:'pointer' }}
+            >
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 8 }}>{label}</div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22, color }}>{value}</div>
+              <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 6, lineHeight: 1.45 }}>{sub}</div>
+            </button>
           ))}
         </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" style={{ flex: '1 1 220px' }} onClick={onOpenProducts}>
+            <Icons.Products /> Check Low Stock
+          </button>
+          <div style={{ flex: '1 1 220px', minWidth: 0, padding: '11px 14px', borderRadius: 12, background: 'var(--bg)', border: '1px solid var(--border2)', color: 'var(--muted)', fontSize: 12, lineHeight: 1.45 }}>
+            {lowStock.length > 0
+              ? `${lowStock.length} low-stock product${lowStock.length !== 1 ? 's are' : ' is'} ready for update in Products.`
+              : 'All products currently have safe stock levels.'}
+          </div>
+        </div>
       </div>
+
+      {focusPanel === 'revenue' && (
+        <div className="card fade-up" style={{marginTop:16,borderColor:'rgba(34,197,94,.28)',background:'linear-gradient(180deg,#f7fff9,#ffffff)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginBottom:12}}>
+            <div className="card-title" style={{margin:0}}>Last 2 Days Payout Summary</div>
+            <button className="btn btn-ghost btn-sm" onClick={()=>setFocusPanel('')}>Close</button>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:12}}>
+            <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Deliveries</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#0ea5e9'}}>{deliveredLast2Days.length}</div>
+            </div>
+            <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Generated Amount</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#16a34a'}}>₹{Math.round(grossLast2Days)}</div>
+            </div>
+            <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Platform Fee</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#16a34a'}}>₹0</div>
+              <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>No fee charged now</div>
+            </div>
+            <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Vendor Payable</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#0f766e'}}>₹{Math.round(netPayableLast2Days)}</div>
+            </div>
+          </div>
+          <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:10}}>
+            <button className="btn btn-primary" onClick={()=>onOpenEarnings?.()}><Icons.Analytics /> Open Earnings Tab</button>
+            <button className="btn btn-ghost" onClick={()=>onOpenOrders?.()}><Icons.Orders /> View All Orders</button>
+            <button className="btn btn-ghost" onClick={()=>onOpenProducts?.()}><Icons.Products /> View All Product Details</button>
+          </div>
+          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:8}}>
+            <button className="btn btn-ghost btn-sm" onClick={()=>setExpandedRevenueOrder(prev => prev === 'ALL' ? null : 'ALL')}>
+              {expandedRevenueOrder === 'ALL' ? 'Hide All Product Details' : 'Show All Product Details'}
+            </button>
+          </div>
+          <div style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>Delivered orders used in this 2-day calculation:</div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {deliveredLast2Days.length === 0 && (
+              <div style={{padding:'12px',borderRadius:10,border:'1px solid var(--border2)',background:'#fff',fontSize:13,color:'var(--muted)'}}>
+                No delivered orders found in the last 2 days.
+              </div>
+            )}
+            {deliveredLast2Days.map(o => (
+              <div key={o.id} style={{padding:'12px',borderRadius:10,border:'1px solid var(--border2)',background:'#fff'}}>
+                <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:14}}>#{o.orderCode} - ₹{o.total}</div>
+                    <div style={{fontSize:12,color:'var(--muted)'}}>{o.customer?.name || 'Customer'} - {o.customer?.phone || 'No phone'}</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setExpandedRevenueOrder(prev => prev === o.id ? null : o.id)}>
+                    {(expandedRevenueOrder === o.id || expandedRevenueOrder === 'ALL') ? 'Hide Details' : 'Product Details'}
+                  </button>
+                </div>
+                {(expandedRevenueOrder === o.id || expandedRevenueOrder === 'ALL') && (
+                  <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border2)'}}>
+                    <div style={{fontSize:12,color:'var(--muted)',marginBottom:6}}>Products</div>
+                    {(o.items || []).map((item, idx) => (
+                      <div key={`${o.id}-item-${idx}`} style={{fontSize:13,marginBottom:5}}>
+                        {item.name} x{item.qty}{item.size ? ` (${item.size})` : ''}
+                      </div>
+                    ))}
+                    <div style={{fontSize:12,color:'var(--muted)',marginTop:6}}>Delivery: {o.deliveryAddress || 'No address'}</div>
+                    <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>
+                      Generated: ₹{Math.round(Number(o.total || 0))} · Vendor Payable: ₹{Math.round(Number(o.total || 0))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1246,6 +1984,7 @@ function OrdersPage({ showToast }) {
   const [filter, setFilter] = useState('ALL_ACTIVE')
   const [actioning, setActioning] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
+  const [pickupOtpMap, setPickupOtpMap] = useState({})
 
   const load = useCallback(async () => {
     try { const r = await api.shopOrders(); setOrders(r.data) } catch (e) {}
@@ -1271,6 +2010,19 @@ function OrdersPage({ showToast }) {
     setActioning(o.id)
     try { await api.updateStatus(o.id, 'PACKING'); showToast('Preparation started', 'success'); load() }
     catch (e) { showToast(e.response?.data?.detail || 'Failed', 'error') }
+    setActioning(null)
+  }
+
+  const showPickupOtp = async (orderId, mode = 'generate') => {
+    setActioning(`pickup-${orderId}`)
+    try {
+      const r = mode === 'fetch' ? await api.getPickupOtp(orderId) : await api.generatePickupOtp(orderId)
+      setPickupOtpMap(prev => ({ ...prev, [orderId]: r.data.otp }))
+      showToast(mode === 'fetch' ? 'Pickup OTP loaded' : 'Pickup OTP generated', 'success')
+      load()
+    } catch (e) {
+      showToast(e.response?.data?.detail || 'Failed', 'error')
+    }
     setActioning(null)
   }
 
@@ -1324,33 +2076,6 @@ function OrdersPage({ showToast }) {
             )}
             <button onClick={load} style={{ background: 'rgba(255,255,255,.12)', border: '1px solid rgba(255,255,255,.2)', color: '#fff', borderRadius: 10, padding: '8px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'var(--font)' }}>↻</button>
           </div>
-        </div>
-      </div>
-
-      {/* Workflow explanation */}
-      <div style={{ background: '#fff', borderRadius: 16, border: '1.5px solid var(--border)', padding: '14px 18px', marginBottom: 18 }}>
-        <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 13, marginBottom: 12, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 7 }}>
-           Order Flow
-        </div>
-        <div style={{ display: 'flex', gap: 0, alignItems: 'center', overflowX: 'auto', paddingBottom: 4 }}>
-          {[
-            { label: 'New Order', color: '#f59e0b', who: 'Customer', abbr: 'NEW' },
-            { label: 'You Accept', color: '#6c47ff', who: 'Vendor ↑', abbr: 'ACC' },
-            { label: 'Rider Finds', color: '#0ea5e9', who: 'System', abbr: 'SYS' },
-            { label: 'You Prepare', color: '#8b5cf6', who: 'Vendor ↑', abbr: 'PREP' },
-            { label: 'Picked Up', color: '#06b6d4', who: 'Rider', abbr: 'PICK' },
-            { label: 'Delivering', color: '#f97316', who: 'Rider', abbr: 'DEL' },
-            { label: 'Delivered', color: '#22c55e', who: 'Rider', abbr: 'DONE' },
-          ].map((step, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 62 }}>
-                <div style={{ width: 34, height: 34, borderRadius: '50%', background: step.color + '15', border: `2px solid ${step.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{step.abbr}</div>
-                <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text)', textAlign: 'center', lineHeight: 1.3 }}>{step.label}</div>
-                <div style={{ fontSize: 8, color: step.who.includes('↑') ? step.color : 'var(--muted)', fontWeight: step.who.includes('↑') ? 800 : 600, background: step.who.includes('↑') ? step.color + '12' : 'transparent', padding: '1px 5px', borderRadius: 100 }}>{step.who.replace(' ↑', '')}</div>
-              </div>
-              {i < 6 && <div style={{ width: 16, height: 1.5, background: 'linear-gradient(90deg,#e5e7eb,#d1d5db)', flexShrink: 0, margin: '0 1px', marginTop: -18 }} />}
-            </div>
-          ))}
         </div>
       </div>
 
@@ -1413,6 +2138,9 @@ function OrdersPage({ showToast }) {
                         {o.customer?.name} · {o.customer?.phone}
                         <span style={{ margin: '0 5px' }}>·</span>
                         {new Date(o.placedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, lineHeight: 1.45 }}>
+                        Delivery location: {o.deliveryAddress || 'No address'}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -1519,7 +2247,28 @@ function OrdersPage({ showToast }) {
                       <div style={{ padding: '14px 16px', borderRadius: 14, background: 'linear-gradient(135deg,#f5f3ff,#ede9fe)', border: '1.5px solid #c4b5fd', textAlign: 'center' }}>
                         <div style={{ fontSize: 30, marginBottom: 6 }}>★</div>
                         <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 15, color: '#5b21b6', marginBottom: 3 }}>Pack the order</div>
-                        <div style={{ fontSize: 12, color: '#7c3aed' }}>Rider {o.rider?.name} will pick up when ready.<br/>Pack carefully and mark it clearly.</div>
+                        <div style={{ fontSize: 12, color: '#7c3aed', marginBottom: 12 }}>Rider {o.rider?.name} will pick up when ready.<br/>Pack carefully and give the pickup OTP only when the rider arrives.</div>
+                        {o.pickupOtpVerified ? (
+                          <div style={{padding:'12px 14px',borderRadius:12,background:'#ecfdf5',border:'1px solid #86efac',color:'#15803d',fontSize:12,fontWeight:800}}>
+                            Pickup verified. The rider entered the correct vendor OTP and the order has been handed over.
+                          </div>
+                        ) : (
+                          <div style={{display:'grid',gap:10}}>
+                            {pickupOtpMap[o.id] && (
+                              <div style={{padding:'14px 16px',borderRadius:16,background:'#fff',border:'1.5px solid #c4b5fd',boxShadow:'0 10px 24px rgba(91,33,182,.08)'}}>
+                                <div style={{fontSize:11,fontWeight:800,color:'#7c3aed',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:6}}>Vendor Pickup OTP</div>
+                                <div style={{fontSize:30,fontWeight:900,color:'#5b21b6',letterSpacing:'6px',fontFamily:'var(--font)'}}>{pickupOtpMap[o.id]}</div>
+                                <div style={{fontSize:11,color:'#6d28d9',marginTop:6}}>Ask the rider to enter this code in the rider app before pickup is marked complete.</div>
+                              </div>
+                            )}
+                            <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
+                              <button onClick={() => showPickupOtp(o.id, pickupOtpMap[o.id] ? 'generate' : (o.pickupOtpGeneratedAt ? 'fetch' : 'generate'))} disabled={actioning === `pickup-${o.id}`}
+                                style={{padding:'11px 16px',borderRadius:12,border:'none',background:'linear-gradient(135deg,#6d28d9,#8b5cf6)',color:'#fff',fontWeight:800,cursor:'pointer',boxShadow:'0 12px 24px rgba(109,40,217,.2)'}}>
+                                {actioning === `pickup-${o.id}` ? 'Loading...' : pickupOtpMap[o.id] ? 'Regenerate OTP' : o.pickupOtpGeneratedAt ? 'View Pickup OTP' : 'Generate Pickup OTP'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1593,6 +2342,21 @@ function FormSection({id, label, isOpen, onToggle, children}) {
 }
 
 function ProductFormModal({ initial, onClose, onSave, saving }) {
+  const CATEGORY_OPTIONS = ['Shirt','Kurti','Saree','Jeans','Dress','Lehenga','Fashion']
+  const COLOR_OPTIONS = ['Black','White','Grey','Blue','Navy','Red','Pink','Green','Yellow','Orange','Purple','Brown','Beige','Maroon','Teal']
+  const BRAND_LIBRARY = {
+    common: ['DOTT Fashion','DOTT Classics','Zara','H&M','Levis','Allen Solly','US Polo','Roadster','Max','Lifestyle','Pantaloons','Westside'],
+    Shirt: ['Allen Solly','US Polo','Levis','Roadster','Peter England','Louis Philippe','Van Heusen','Arrow','Blackberrys','Mufti','Wrangler','Flying Machine'],
+    Kurti: ['Biba','W for Woman','Aurelia','Global Desi','Libas','Rangriti','Anouk','Fabindia','Cotton Culture','Soch','Indya','Varanga'],
+    Saree: ['Fabindia','Soch','Manyavar','Kalanjali','Nalli','Pothys','Sudarshan Silks','Mimosa','Mitera','Varkala Silk Sarees'],
+    Jeans: ['Levis','Wrangler','Pepe Jeans','Flying Machine','Spykar','Lee','Jack & Jones','Roadster','Mufti','US Polo'],
+    Dress: ['Zara','H&M','Global Desi','AND','Only','Vero Moda','Forever New','Mango','Berrylush','Chemistry'],
+    Lehenga: ['Manyavar','Mohey','Indya','Soch','Kalki','Fabindia','Aachho','Libas','Biba','Aurelia'],
+    Fashion: ['DOTT Fashion','Zara','H&M','Fabindia','Global Desi','Max','Westside','Lifestyle','Pantaloons','Only'],
+    linen: ['Linen Club','Raymond Linen','Fabindia','Cotton Culture'],
+    cotton: ['Cotton Culture','Fabindia','Biba','W for Woman','Aurelia'],
+  }
+  const GENDER_OPTIONS = ['Men','Women','Unisex','Boys','Girls']
   const PRESET_COLORS = [
     {name:'Black',   hex:'#1a1a1a'},{name:'White',  hex:'#ffffff'},{name:'Navy',    hex:'#1e3a8a'},
     {name:'Red',     hex:'#dc2626'},{name:'Pink',   hex:'#ec4899'},{name:'Green',   hex:'#16a34a'},
@@ -1602,9 +2366,10 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
   ]
 
   const blank = {
-    name:'', description:'', price:'', category:'', imageUrl:'',
-    images:[], colors:[], brand:'', material:'', tags:[],
-    stock:10, hasSizes:false, sizes:[]
+    name:'', title:'', description:'', price:'', category:'', productType:'', color:'',
+    imageUrl:'', processedImageUrl:'', images:[], colors:[], brand:'', material:'', fabric:'',
+    gender:'', pattern:'', fit:'', occasion:'', sleeveType:'', length:'', tags:[],
+    stock:10, hasSizes:false, sizes:[], imageAiMeta:{}
   }
   const toForm = (d) => ({
     ...blank, ...d,
@@ -1612,13 +2377,36 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
     colors: Array.isArray(d?.colors) ? d.colors : [],
     images: Array.isArray(d?.images) ? d.images : [],
     tags: Array.isArray(d?.tags) ? d.tags : [],
+    imageAiMeta: typeof d?.imageAiMeta === 'object' && d?.imageAiMeta ? d.imageAiMeta : {},
   })
-  const [form, setForm] = useState(initial ? toForm(initial) : blank)
+  const isEdit = !!initial?.id
+  const draftKey = `${PRODUCT_FORM_DRAFT_PREFIX}_${isEdit ? `edit_${initial?.id}` : 'new'}`
+  const getDraftSnapshot = () => {
+    try {
+      const raw = localStorage.getItem(draftKey)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || !parsed.form) return null
+      return parsed
+    } catch {
+      return null
+    }
+  }
+  const [restoredDraftAt, setRestoredDraftAt] = useState(() => getDraftSnapshot()?.savedAt || null)
+  const [lastAutoSaveAt, setLastAutoSaveAt] = useState(null)
+  const [form, setForm] = useState(() => {
+    const fallback = initial ? toForm(initial) : blank
+    const snapshot = getDraftSnapshot()
+    if (!snapshot?.form) return fallback
+    const draftForm = toForm(snapshot.form)
+    return isEdit ? { ...draftForm, id: initial?.id } : draftForm
+  })
   const [showCamera, setShowCamera] = useState(false)
   const [cameraTarget, setCameraTarget] = useState('main')   // 'main' | colorIdx
   const [aiApplied, setAiApplied] = useState(false)
   const [aiFields, setAiFields] = useState({})
   const [tagInput, setTagInput] = useState('')
+  const [descriptionEdited, setDescriptionEdited] = useState(false)
   const [newColorName, setNewColorName] = useState('')
   const [newColorHex, setNewColorHex] = useState('#000000')
   const [activeColorIdx, setActiveColorIdx] = useState(null)
@@ -1627,21 +2415,124 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
   const imgRefs = { back: useRef(null), side: useRef(null), tag: useRef(null) }
   const colorImgRef = useRef(null)
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-  const isEdit = !!initial?.id
+  const categoryBrands = Array.from(new Set([...(BRAND_LIBRARY.common || []), ...(BRAND_LIBRARY[form.category] || [])]))
+  const categoryGenderDefaults = {
+    Shirt: 'Men',
+    Jeans: 'Men',
+    Kurti: 'Women',
+    Saree: 'Women',
+    Lehenga: 'Women',
+    Dress: 'Women',
+    Fashion: 'Unisex',
+  }
+  const normalizeCategory = (value='') => {
+    const raw = String(value || '').trim().toLowerCase()
+    const map = {
+      shirts:'Shirt', shirt:'Shirt',
+      kurtis:'Kurti', kurti:'Kurti', kurta:'Kurti',
+      sarees:'Saree', saree:'Saree',
+      jeans:'Jeans', pants:'Jeans', trousers:'Jeans',
+      dresses:'Dress', dress:'Dress',
+      lehenga:'Lehenga', lehanga:'Lehenga',
+      fashion:'Fashion'
+    }
+    return map[raw] || value
+  }
+  const colorHexByName = (name='') => PRESET_COLORS.find(c => c.name.toLowerCase() === String(name || '').toLowerCase())?.hex || '#888888'
+
+  const applyCategoryChange = (value='') => {
+    const normalized = normalizeCategory(value)
+    setDescriptionEdited(false)
+    setForm(f => ({
+      ...f,
+      category: normalized,
+      gender: categoryGenderDefaults[normalized] || f.gender || 'Unisex',
+    }))
+  }
+
+  const applyColorChange = (value='') => {
+    const chosen = String(value || '').trim()
+    if (!chosen) {
+      setForm(f => ({ ...f, color: '' }))
+      return
+    }
+    const hex = colorHexByName(chosen)
+    setDescriptionEdited(false)
+    setForm(f => {
+      const nextColors = Array.isArray(f.colors) ? [...f.colors] : []
+      if (nextColors.length === 0) {
+        nextColors.push({ name: chosen, hex, imageUrl: f.imageUrl || '', images: [] })
+      } else {
+        nextColors[0] = { ...nextColors[0], name: chosen, hex }
+      }
+      return { ...f, color: chosen, colors: nextColors }
+    })
+  }
+
+  const buildDescription = (draft) => {
+    const name = (draft.name || '').trim()
+    const category = (draft.category || '').trim()
+    const color = (draft.color || '').trim()
+    const gender = (draft.gender || '').trim()
+    const brand = (draft.brand || '').trim()
+    const baseName = name || [color, category].filter(Boolean).join(' ').trim() || 'Fashion product'
+    const audience = gender || 'Unisex'
+    const brandText = brand ? `${brand} ` : ''
+    return `${brandText}${baseName} for ${audience} with a clean catalogue-ready look, easy styling, and everyday comfort.`
+  }
+
+  useEffect(() => {
+    if (descriptionEdited) return
+    setForm(f => ({ ...f, description: buildDescription(f) }))
+  }, [form.name, form.category, form.color, form.gender, form.brand])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const savedAt = Date.now()
+        localStorage.setItem(draftKey, JSON.stringify({ savedAt, form }))
+        setLastAutoSaveAt(savedAt)
+      } catch {}
+    }, 450)
+    return () => clearTimeout(timer)
+  }, [form, draftKey])
+
+  const clearDraft = () => {
+    try { localStorage.removeItem(draftKey) } catch {}
+    setRestoredDraftAt(null)
+    setLastAutoSaveAt(null)
+  }
+
+  const formatDraftTime = (value) => {
+    if (!value) return ''
+    try {
+      return new Date(value).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    } catch {
+      return ''
+    }
+  }
+
+  const handleSave = async () => {
+    const ok = await onSave(form)
+    if (ok) clearDraft()
+  }
 
   // ── AI apply ──
   const applyAiResult = (ai) => {
     if (!ai) return
     const updates = {}; const filled = {}
     if (ai.name && !form.name)         { updates.name = ai.name; filled.name = true }
-    if (ai.category && !form.category) { updates.category = ai.category; filled.category = true }
+    if (ai.title)                      { updates.title = ai.title; filled.title = true }
+    if (ai.category && !form.category) { updates.category = normalizeCategory(ai.category); filled.category = true }
+    if (ai.productType)                { updates.productType = ai.productType; filled.productType = true }
     if (ai.brand)                      { updates.brand = ai.brand; filled.brand = true }
-    if (ai.color)                      { updates.color = ai.color }
-    if (ai.material)                   { updates.material = ai.material; filled.material = true }
+    if (ai.color)                      { updates.color = ai.color; filled.color = true }
+    if (ai.gender)                     { updates.gender = ai.gender; filled.gender = true }
+    if (!ai.gender && updates.category) { updates.gender = categoryGenderDefaults[updates.category] || 'Unisex'; filled.gender = true }
     if (ai.description && !form.description) { updates.description = ai.description; filled.description = true }
-    if (ai.suggestedPrice && !form.price)    { updates.price = ai.suggestedPrice; filled.price = true }
     if (ai.tags?.length)               { updates.tags = ai.tags; filled.tags = true }
-    if (ai.sizes && !form.hasSizes && ai.sizes.includes(',')) {
+    updates.imageAiMeta = ai
+    if (ai.sizes && ai.sizes.includes(',')) {
       updates.hasSizes = true
       updates.sizes = ai.sizes.split(',').map(s=>s.trim()).filter(Boolean).map(sz=>({size:sz,stock:5}))
       filled.sizes = true
@@ -1651,19 +2542,33 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
       const hex = PRESET_COLORS.find(c => c.name.toLowerCase()===ai.color.toLowerCase())?.hex || '#888888'
       updates.colors = [{ name: ai.color, hex, imageUrl: form.imageUrl, images: [] }]
       filled.colorAdded = true
+    } else if (ai.color && form.colors.length > 0) {
+      const hex = PRESET_COLORS.find(c => c.name.toLowerCase()===ai.color.toLowerCase())?.hex || '#888888'
+      updates.colors = [...form.colors]
+      updates.colors[0] = { ...updates.colors[0], name: ai.color, hex }
+      filled.colorAdded = true
     }
+    setDescriptionEdited(false)
     setForm(f => ({ ...f, ...updates }))
+    setExpandedSection('details')
     setAiFields(filled); setAiApplied(true)
   }
 
   // ── Image handlers ──
   const handleCapture = (url) => {
+    const payload = typeof url === 'string' ? { imageUrl: url, processedImageUrl: url } : (url || {})
+    const mainImageUrl = payload.imageUrl || payload.processedImageUrl || ''
     if (cameraTarget === 'main') {
-      setForm(f => ({ ...f, imageUrl: url }))
+      setForm(f => ({
+        ...f,
+        imageUrl: mainImageUrl,
+        processedImageUrl: payload.processedImageUrl || mainImageUrl,
+        imageAiMeta: payload.aiMeta || f.imageAiMeta,
+      }))
     } else if (typeof cameraTarget === 'number') {
       setForm(f => {
         const colors = [...f.colors]
-        colors[cameraTarget] = { ...colors[cameraTarget], imageUrl: url }
+        colors[cameraTarget] = { ...colors[cameraTarget], imageUrl: mainImageUrl }
         return { ...f, colors }
       })
     }
@@ -1735,6 +2640,16 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
           <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)'}}><Icons.Close/></button>
         </div>
 
+        <div style={{marginBottom:12,padding:'10px 12px',borderRadius:12,border:'1px solid var(--border2)',background:'linear-gradient(180deg,#f8fbff,#ffffff)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+          <div style={{fontSize:11,color:'var(--muted)',fontWeight:700}}>
+            {restoredDraftAt ? `Draft restored (${formatDraftTime(restoredDraftAt)})` : 'Autosave is ON'}
+            {lastAutoSaveAt ? ` · Last saved ${formatDraftTime(lastAutoSaveAt)}` : ''}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" style={{padding:'7px 10px',fontSize:11}} onClick={clearDraft}>
+            Clear Draft
+          </button>
+        </div>
+
         {aiApplied && (
           <div style={{background:'linear-gradient(135deg,var(--primary-light),rgba(167,139,250,.1))',border:'1.5px solid rgba(108,71,255,.2)',borderRadius:12,padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:20}}>AI</span>
@@ -1742,6 +2657,62 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
             <button onClick={()=>setAiApplied(false)} style={{background:'none',border:'none',color:'var(--muted)',cursor:'pointer',fontSize:16}}>×</button>
           </div>
         )}
+
+        {!!Object.keys(form.imageAiMeta || {}).length && (
+          <div style={{marginBottom:14,padding:14,borderRadius:14,border:'1px solid var(--border)',background:'linear-gradient(180deg,#fff,rgba(96,165,250,.06))'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:900,color:'var(--primary)',textTransform:'uppercase',letterSpacing:'.06em'}}>AI Listing Draft</div>
+                <div style={{fontSize:12,color:'var(--muted)'}}>Processed image, category, color, and fashion attributes are ready to review.</div>
+              </div>
+              {form.processedImageUrl && <img src={form.processedImageUrl} alt="Processed" style={{width:56,height:56,borderRadius:12,objectFit:'cover',border:'1px solid var(--border)'}}/>}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8}}>
+              {[
+                ['Category', form.category || '—'],
+                ['Color', form.color || '—'],
+                ['Brand', form.brand || '—'],
+                ['Gender', form.gender || '—'],
+                ['Sizes', (form.sizes || []).length ? `${form.sizes.length} selected` : '—'],
+                ['Price', form.price ? `Rs ${form.price}` : 'Manual'],
+              ].map(([label, value]) => (
+                <div key={label} style={{padding:'10px 12px',borderRadius:12,background:'rgba(255,255,255,.85)',border:'1px solid rgba(96,165,250,.14)'}}>
+                  <div style={{fontSize:10,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>{label}</div>
+                  <div style={{fontSize:13,fontWeight:800,color:'var(--text)',marginTop:3}}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{marginBottom:14,padding:'12px 14px',borderRadius:12,border:'1px solid rgba(96,165,250,.22)',background:'linear-gradient(180deg,#f8fbff,#ffffff)'}}>
+          <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.04em',marginBottom:8}}>Quick Steps</div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {[
+              { key:'details', label:'1. Fill Details' },
+              { key:'colors', label:'2. Confirm Colors' },
+              { key:'sizes', label:'3. Pick Sizes' },
+            ].map(step => (
+              <button
+                key={step.key}
+                type="button"
+                onClick={()=>setExpandedSection(step.key)}
+                style={{
+                  padding:'7px 12px',
+                  borderRadius:999,
+                  border:`1px solid ${expandedSection===step.key?'rgba(37,99,235,.35)':'var(--border)'}`,
+                  background:expandedSection===step.key?'rgba(37,99,235,.09)':'#fff',
+                  color:expandedSection===step.key?'#1d4ed8':'var(--muted)',
+                  fontSize:12,
+                  fontWeight:800,
+                  cursor:'pointer'
+                }}
+              >
+                {step.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* ── SECTION 1: IMAGES ── */}
         <FormSection id="images" label="PHOTO Product Images" isOpen={expandedSection==="images"} onToggle={()=>setExpandedSection(s=>s==="images"?null:"images")}>
@@ -1779,11 +2750,23 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
               </div>
             </div>
           </div>
+          {form.processedImageUrl && form.processedImageUrl !== form.imageUrl && (
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginTop:12}}>
+              <div style={{border:'1px solid var(--border)',borderRadius:12,padding:8}}>
+                <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,marginBottom:6}}>Original</div>
+                <img src={form.imageUrl} alt="Original" style={{width:'100%',aspectRatio:'1',objectFit:'cover',borderRadius:10}}/>
+              </div>
+              <div style={{border:'1px solid var(--border)',borderRadius:12,padding:8,background:'rgba(96,165,250,.04)'}}>
+                <div style={{fontSize:11,color:'var(--primary)',fontWeight:800,marginBottom:6}}>Processed Preview</div>
+                <img src={form.processedImageUrl} alt="Processed" style={{width:'100%',aspectRatio:'1',objectFit:'cover',borderRadius:10}}/>
+              </div>
+            </div>
+          )}
           <input className="input" placeholder="Or paste main image URL…" value={form.imageUrl||''} onChange={set('imageUrl')} style={{fontSize:12}}/>
         </FormSection>
 
         {/* ── SECTION 2: COLOR VARIANTS ── */}
-        <FormSection id="colors" label={` Color Variants ${form.colors.length>0?`(${form.colors.length})`:'— Optional'}`} isOpen={expandedSection==="colors"} onToggle={()=>setExpandedSection(s=>s==="colors"?null:"colors")}>
+        <FormSection id="colors" label={` Color Variants * ${form.colors.length>0?`(${form.colors.length})`:'(Required)'}`} isOpen={expandedSection==="colors"} onToggle={()=>setExpandedSection(s=>s==="colors"?null:"colors")}>
           {/* Preset color swatches */}
           <div style={{marginBottom:14}}>
             <div style={{fontSize:12,color:'var(--muted)',fontWeight:700,marginBottom:8}}>Quick-add preset colors</div>
@@ -1845,7 +2828,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
               ))}
             </div>
           )}
-          {form.colors.length===0&&<div style={{textAlign:'center',padding:'20px 0',color:'var(--muted)',fontSize:13}}>Add colors if this product comes in multiple variants. Customers can switch between them on the product page.</div>}
+          {form.colors.length===0&&<div style={{textAlign:'center',padding:'20px 0',color:'var(--muted)',fontSize:13}}>Add at least one color before saving this product.</div>}
         </FormSection>
 
         {/* ── SECTION 3: PRODUCT DETAILS ── */}
@@ -1856,26 +2839,68 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
                 <label className="label">Name * {aiFields.name&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
                 <input className={`input ${aiFields.name?'ai-glow':''}`} placeholder="Product name" value={form.name} onChange={set('name')}/>
               </div>
-              <div>
-                <label className="label">Price (₹) * {aiFields.price&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
-                <input className={`input ${aiFields.price?'ai-glow':''}`} type="number" min="0" placeholder="Selling price" value={form.price} onChange={set('price')}/>
-              </div>
             </div>
             <div className="grid-2">
+              <div>
+                <label className="label">Price (₹) *</label>
+                <input className="input" type="number" min="0" placeholder="Enter selling price manually" value={form.price} onChange={set('price')}/>
+              </div>
               <div>
                 <label className="label">Category {aiFields.category&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
-                <input className={`input ${aiFields.category?'ai-glow':''}`} placeholder="Fashion, Footwear…" value={form.category||''} onChange={set('category')}/>
-              </div>
-              <div>
-                <label className="label">Brand {aiFields.brand&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
-                <input className={`input ${aiFields.brand?'ai-glow':''}`} placeholder="Brand name" value={form.brand||''} onChange={set('brand')}/>
+                <select className={`input ${aiFields.category?'ai-glow':''}`} value={form.category||''} onChange={e=>applyCategoryChange(e.target.value)}>
+                  <option value="">Select category</option>
+                  {CATEGORY_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
               </div>
             </div>
             <div className="grid-2">
               <div>
-                <label className="label">Material {aiFields.material&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
-                <input className={`input ${aiFields.material?'ai-glow':''}`} placeholder="Cotton, Polyester…" value={form.material||''} onChange={set('material')}/>
+                <label className="label">Color * {aiFields.color&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
+                <select className={`input ${aiFields.color?'ai-glow':''}`} value={form.color||''} onChange={e=>applyColorChange(e.target.value)}>
+                  <option value="">Select color</option>
+                  {COLOR_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
               </div>
+              <div />
+            </div>
+            <div className="grid-2">
+              <div>
+                <label className="label">Brand {aiFields.brand&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
+                <select className={`input ${aiFields.brand?'ai-glow':''}`} value={form.brand||''} onChange={set('brand')}>
+                  <option value="">Select brand</option>
+                  {categoryBrands.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:8}}>
+                  {categoryBrands.slice(0,6).map(option => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={()=>setForm(f=>({...f,brand:option}))}
+                      style={{
+                        padding:'5px 10px',
+                        borderRadius:999,
+                        border:`1px solid ${form.brand===option?'rgba(59,130,246,.28)':'var(--border)'}`,
+                        background:form.brand===option?'rgba(59,130,246,.08)':'#fff',
+                        color:form.brand===option?'#2563eb':'var(--muted)',
+                        fontSize:11,
+                        fontWeight:800,
+                        cursor:'pointer'
+                      }}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="label">Gender {aiFields.gender&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
+                <select className={`input ${aiFields.gender?'ai-glow':''}`} value={form.gender||''} onChange={set('gender')}>
+                  <option value="">Select gender</option>
+                  {GENDER_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="grid-2">
               <div>
                 <label className="label">Stock</label>
                 <div style={{display:'flex',gap:6}}>
@@ -1884,10 +2909,11 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
                   <button onClick={()=>setForm(f=>({...f,stock:(f.stock||0)+1}))} style={{padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--border)',background:'var(--bg)',cursor:'pointer',fontWeight:900}}>+</button>
                 </div>
               </div>
+              <div />
             </div>
             <div>
               <label className="label">Description {aiFields.description&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
-              <textarea className={`input ${aiFields.description?'ai-glow':''}`} rows={3} value={form.description||''} onChange={set('description')} style={{resize:'none'}} placeholder="Product description for customers"/>
+              <textarea className={`input ${aiFields.description?'ai-glow':''}`} rows={3} value={form.description||''} onChange={e=>{setDescriptionEdited(true);setForm(f=>({...f,description:e.target.value}))}} style={{resize:'none'}} placeholder="Product description for customers"/>
             </div>
             {/* Tags */}
             <div>
@@ -1906,15 +2932,12 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
         </FormSection>
 
         {/* ── SECTION 4: SIZES ── */}
-        <FormSection id="sizes" label={` Size Variants ${form.hasSizes?`(${form.sizes.length} sizes)`:'— Optional'}`} isOpen={expandedSection==="sizes"} onToggle={()=>setExpandedSection(s=>s==="sizes"?null:"sizes")}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:form.hasSizes?14:0}}>
-            <div style={{color:'var(--muted)',fontSize:13}}>Enable for clothing with multiple sizes {aiFields.sizes&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</div>
-            <button className={`toggle ${form.hasSizes?'on':'off'}`} onClick={()=>setForm(f=>({...f,hasSizes:!f.hasSizes,sizes:f.hasSizes?[]:[{size:'S',stock:5},{size:'M',stock:5},{size:'L',stock:5},{size:'XL',stock:3}]}))}/>
-          </div>
-          {form.hasSizes&&(()=>{
+        <FormSection id="sizes" label={` Size Variants * ${form.sizes.length>0?`(${form.sizes.length} sizes)`:'(Required)'}`} isOpen={expandedSection==="sizes"} onToggle={()=>setExpandedSection(s=>s==="sizes"?null:"sizes")}>
+          <div style={{color:'var(--muted)',fontSize:13,marginBottom:14}}>Select at least one size for this product. {aiFields.sizes&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</div>
+          {(()=>{
             const sizes=form.sizes||[]
-            const addSize=(sz)=>{if(sizes.find(s=>s.size===sz))return;setForm(f=>({...f,sizes:[...f.sizes,{size:sz,stock:5}]}))}
-            const removeSize=(sz)=>setForm(f=>({...f,sizes:f.sizes.filter(s=>s.size!==sz)}))
+            const addSize=(sz)=>{if(sizes.find(s=>s.size===sz))return;setForm(f=>({...f,hasSizes:true,sizes:[...f.sizes,{size:sz,stock:5}]}))}
+            const removeSize=(sz)=>setForm(f=>{const next=f.sizes.filter(s=>s.size!==sz);return {...f,hasSizes:next.length>0,sizes:next}})
             const updateStock=(sz,val)=>setForm(f=>({...f,sizes:f.sizes.map(s=>s.size===sz?{...s,stock:Math.max(0,parseInt(val)||0)}:s)}))
             return(
               <div>
@@ -1942,7 +2965,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
 
         <div style={{display:'flex',gap:10,marginTop:4}}>
           <button className="btn btn-ghost" style={{flex:1}} onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" style={{flex:2}} disabled={saving||!form.name||!form.price} onClick={()=>onSave(form)}>
+          <button className="btn btn-primary" style={{flex:2}} disabled={saving||!form.name||!form.price||!form.category||!form.color||!form.gender||form.colors.length===0||form.sizes.length===0} onClick={handleSave}>
             {saving?'Saving…':isEdit?'Save Changes':'Add Product'}
           </button>
         </div>
@@ -1968,12 +2991,20 @@ function ProductsPage({ showToast }) {
   const [modal, setModal] = useState(null)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
+  const [cardMode, setCardMode] = useState(() => {
+    const saved = localStorage.getItem(PRODUCT_CARD_MODE_KEY)
+    return saved === 'compact' ? 'compact' : 'comfortable'
+  })
 
   const load = async () => { setLoading(true); try { const r = await api.myProducts(); setProducts(r.data) } catch (e) {}; setLoading(false) }
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    try { localStorage.setItem(PRODUCT_CARD_MODE_KEY, cardMode) } catch {}
+  }, [cardMode])
 
   const saveProduct = async (form) => {
     setSaving(true)
+    let ok = false
     const body = {
       ...form,
       price: parseFloat(form.price),
@@ -1982,15 +3013,30 @@ function ProductsPage({ showToast }) {
       images: JSON.stringify(form.images || []),
       colors: JSON.stringify(form.colors || []),
       tags: JSON.stringify(form.tags || []),
+      title: form.name || null,
+      productType: form.productType || form.category || null,
+      color: form.color || null,
       brand: form.brand || null,
       material: form.material || null,
+      fabric: form.fabric || null,
+      gender: form.gender || null,
+      pattern: form.pattern || null,
+      fit: form.fit || null,
+      occasion: form.occasion || null,
+      sleeveType: form.sleeveType || null,
+      length: form.length || null,
+      processedImageUrl: form.processedImageUrl || form.imageUrl || null,
+      imageAiMeta: JSON.stringify(form.imageAiMeta || {}),
+      hasSizes: (form.sizes || []).length > 0,
     }
     try {
       if (form.id) { await api.updateProduct(form.id, body); showToast('Product updated ✓', 'success') }
       else { await api.addProduct(body); showToast('Product added ✓', 'success') }
       setModal(null); load()
+      ok = true
     } catch (e) { showToast(e.response?.data?.detail || 'Save failed', 'error') }
     setSaving(false)
+    return ok
   }
 
   const toggle = async (p) => {
@@ -2007,17 +3053,27 @@ function ProductsPage({ showToast }) {
           <div className="page-title">Products</div>
           <div className="page-sub">{products.length} products · Click camera to capture photos</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setModal({})}>
-          <Icons.Plus /> Add Product
-        </button>
+        <div className="page-header-actions">
+          <button className="btn btn-primary" onClick={() => setModal({})}>
+            <Icons.Plus /> Add Product
+          </button>
+        </div>
       </div>
 
-      <div style={{ marginBottom: 20, display: 'flex', gap: 10 }}>
-        <input className="input" placeholder=" Search products…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 300 }} />
+      <div style={{ marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input className="input" placeholder="Search products…" value={search} onChange={e => setSearch(e.target.value)} style={{ width:'100%', maxWidth: 360 }} />
+        <div className="view-toggle">
+          <button type="button" className={`view-toggle-btn ${cardMode === 'comfortable' ? 'active' : ''}`} onClick={() => setCardMode('comfortable')}>
+            Comfortable
+          </button>
+          <button type="button" className={`view-toggle-btn ${cardMode === 'compact' ? 'active' : ''}`} onClick={() => setCardMode('compact')}>
+            Compact
+          </button>
+        </div>
       </div>
 
       {loading ? (
-        <div className="prod-grid">{[...Array(6)].map((_, i) => <div key={i} className="skeleton" style={{ height: 240 }} />)}</div>
+        <div className={`prod-grid ${cardMode === 'compact' ? 'compact' : ''}`}>{[...Array(6)].map((_, i) => <div key={i} className="skeleton" style={{ height: cardMode === 'compact' ? 190 : 240 }} />)}</div>
       ) : filtered.length === 0 ? (
         <div className="empty">
           <span className="empty-icon">BOX</span>
@@ -2025,9 +3081,9 @@ function ProductsPage({ showToast }) {
           <button className="btn btn-primary" onClick={() => setModal({})}>Add your first product</button>
         </div>
       ) : (
-        <div className="prod-grid">
+        <div className={`prod-grid ${cardMode === 'compact' ? 'compact' : ''}`}>
           {filtered.map((p, i) => (
-            <div key={p.id} className="prod-card fade-up" style={{ animationDelay: `${i * 0.05}s`, opacity: p.isActive ? 1 : .55 }}>
+            <div key={p.id} className={`prod-card fade-up ${cardMode === 'compact' ? 'compact' : ''}`} style={{ animationDelay: `${i * 0.05}s`, opacity: p.isActive ? 1 : .55 }}>
               <div style={{ position: 'relative' }}>
                 {p.imageUrl ? (
                   <img src={p.imageUrl} alt={p.name} className="pc-img" />
@@ -2042,7 +3098,8 @@ function ProductsPage({ showToast }) {
                 <div className="pc-meta">{p.category || 'Uncategorized'} · {p.hasSizes ? `${p.stock} total units` : `${p.stock} in stock`}</div>
                 <div className="pc-price">₹{p.price}</div>
                 {p.avgRating > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
-                  <Icons.Star /> {p.avgRating.toFixed(1)} ({p.reviewCount} reviews)
+                  <span style={{ width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icons.Star /></span>
+                  {p.avgRating.toFixed(1)} ({p.reviewCount} reviews)
                 </div>}
               </div>
               <div className="pc-actions">
@@ -2103,7 +3160,13 @@ function ReturnsPage({ shop, showToast }) {
         ))}
       </div>
       {filtered.length === 0 ? (
-        <div className="empty"><span className="empty-icon"></span><div>No {filter.toLowerCase()} returns</div></div>
+        <div className="card" style={{ textAlign:'center', padding:'28px 20px', background:'linear-gradient(180deg,#ffffff,#f8fbff)' }}>
+          <div style={{ width:52, height:52, borderRadius:'50%', margin:'0 auto 12px', background:'rgba(74,168,255,.1)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--primary)' }}>
+            <Icons.Returns />
+          </div>
+          <div style={{ fontWeight:800, fontSize:16, color:'var(--text)', marginBottom:6 }}>No {filter.toLowerCase()} returns</div>
+          <div style={{ color:'var(--muted)', fontSize:13 }}>Customer return requests will appear here when they come in.</div>
+        </div>
       ) : (
         filtered.map((r, i) => (
           <div key={r.id} className="card fade-up" style={{ animationDelay: `${i * 0.06}s`, marginBottom: 12 }}>
@@ -2111,11 +3174,17 @@ function ReturnsPage({ shop, showToast }) {
               <div>
                 <div style={{ fontWeight: 800, fontSize: 15 }}>Return #{r.id} — Order #{r.orderCode}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 2 }}>{r.customerName} · {r.customerPhone}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4, lineHeight: 1.45 }}>
+                  Address: {r.customerAddress || 'No address available'}
+                </div>
               </div>
               <span className="badge" style={{ background: `${RETURN_COLORS[r.status]}18`, color: RETURN_COLORS[r.status] }}>{r.status}</span>
             </div>
             <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '12px 14px', marginBottom: 12, fontSize: 13 }}>
               <strong>Reason:</strong> {r.reason}
+              <div style={{ marginTop: 6, color: 'var(--text)', fontWeight: 700 }}>
+                Refund amount: ₹{r.refundAmount || 0}
+              </div>
               {r.vendorNote && <div style={{ marginTop: 6, color: 'var(--muted)' }}><strong>Your note:</strong> {r.vendorNote}</div>}
             </div>
             {r.status === 'REQUESTED' && (
@@ -2232,18 +3301,24 @@ function PaymentDetailsForm({ user, onSave }) {
   )
 }
 
-function ShopSettings({ shop, setShop, showToast, user }) {
+function ShopSettings({ shop, setShop, showToast, user, onSignOut }) {
   const [form, setForm] = useState({ name: shop.name || '', description: shop.description || '', address: shop.address || '', city: shop.city || '', phone: shop.phone || '', deliveryTime: shop.deliveryTime || 25, minOrder: shop.minOrder || 0, imageUrl: shop.imageUrl || '', bannerUrl: '', storefrontUrl: '', acceptsReturns: shop.acceptsReturns || false, returnDays: shop.returnDays || 7, returnPolicyNote: shop.returnPolicyNote || '', whatsappMode: shop.whatsappMode || false, whatsappPhone: shop.whatsappPhone || '' })
   const [saving, setSaving] = useState(false)
   const [mapCoords, setMapCoords] = useState({ lat: shop.lat || 17.385, lng: shop.lng || 78.4867 })
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
 
-  const getLoc = () => navigator.geolocation?.getCurrentPosition(async p => {
-    const coords = { lat: p.coords.latitude, lng: p.coords.longitude }
-    setMapCoords(coords)
-    const geo = await reverseGeocode(coords.lat, coords.lng)
-    if (!form.address) setForm(f => ({ ...f, address: geo.full, city: geo.city }))
-  })
+  const getLoc = async () => {
+    try {
+      const gps = await getCurrentGpsLocation()
+      const coords = { lat: gps.lat, lng: gps.lng }
+      setMapCoords(coords)
+      const geo = await reverseGeocode(coords.lat, coords.lng)
+      if (!form.address) setForm(f => ({ ...f, address: geo.full, city: geo.city }))
+      showToast('Current location captured', 'success')
+    } catch (err) {
+      showToast(err?.message || 'Unable to detect current location', 'error')
+    }
+  }
 
   const save = async () => {
     setSaving(true)
@@ -2259,11 +3334,30 @@ function ShopSettings({ shop, setShop, showToast, user }) {
     catch (e) { showToast('Failed', 'error') }
   }
 
+  const profileSignals = [
+    !!form.name?.trim(),
+    !!form.phone?.trim(),
+    !!form.address?.trim(),
+    !!form.city?.trim(),
+    !!form.imageUrl?.trim(),
+    Number(form.deliveryTime) > 0,
+    !!(mapCoords.lat && mapCoords.lng),
+  ]
+  const profileReady = profileSignals.filter(Boolean).length
+  const profileScore = Math.round((profileReady / profileSignals.length) * 100)
+  const profileTone = profileScore >= 85 ? '#16a34a' : profileScore >= 60 ? '#2563eb' : '#f97316'
+
   return (
     <div className="page">
-      <div className="page-header">
-        <div className="page-title">Shop Settings</div>
-        <div style={{ display: 'flex', gap: 10 }}>
+      <div className="settings-hero fade-up">
+        <div>
+          <div className="settings-kicker">Store Control</div>
+          <div className="page-title" style={{ color: '#fff' }}>Shop Settings</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>
+            Keep your store profile fresh, delivery-ready, and easy for customers to trust.
+          </div>
+        </div>
+        <div className="settings-hero-actions">
           <button className={`btn ${shop.isOpen ? 'btn-danger' : 'btn-success'}`} onClick={toggleOpen}>
             {shop.isOpen ? '● Close Shop' : '● Open Shop'}
           </button>
@@ -2273,107 +3367,143 @@ function ShopSettings({ shop, setShop, showToast, user }) {
         </div>
       </div>
 
-      {/* Payment Details card */}
-      <div className="card fade-up" style={{marginBottom:20}}>
-        <div className="card-title"> Payment Details</div>
-        <PaymentDetailsForm user={user || {}} onSave={async(d)=>{try{await api.updatePayment(d);showToast('Payment details saved ✓','success')}catch(e){showToast('Save failed','error')}}}/>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        <div className="card fade-up">
-          <div className="card-title">Basic Info</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div><label className="label">Shop Name</label><input className="input" value={form.name} onChange={set('name')} /></div>
-            <div><label className="label">Description</label><textarea className="input" rows={2} value={form.description} onChange={set('description')} style={{ resize: 'none' }} /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} /></div>
-            <div>
+      <div className="settings-grid">
+        <div className="settings-col">
+          <div className="card fade-up">
+            <div className="card-title">Payment Details</div>
+            <PaymentDetailsForm
+              user={user || {}}
+              onSave={async (d) => {
+                try { await api.updatePayment(d); showToast('Payment details saved ✓', 'success') } catch (e) { showToast('Save failed', 'error') }
+              }}
+            />
+          </div>
+
+          <div className="card fade-up" style={{ animationDelay: '.04s' }}>
+            <div className="card-title">Basic Info</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div><label className="label">Shop Name</label><input className="input" value={form.name} onChange={set('name')} /></div>
+              <div><label className="label">Description</label><textarea className="input" rows={2} value={form.description} onChange={set('description')} style={{ resize: 'none' }} /></div>
+              <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={set('phone')} /></div>
+              <div>
                 <label className="label">Shop Images</label>
-                {/* Shop logo */}
-                <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:6}}>LOGO / MAIN PHOTO</div>
-                  <div style={{display:'flex',gap:10,alignItems:'center'}}>
-                    <div style={{width:64,height:64,borderRadius:12,overflow:'hidden',flexShrink:0,border:'1.5px solid var(--border)',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>
-                      {form.imageUrl?<img src={form.imageUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>:''}
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, marginBottom: 6 }}>LOGO / MAIN PHOTO</div>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <div style={{ width: 64, height: 64, borderRadius: 12, overflow: 'hidden', flexShrink: 0, border: '1.5px solid var(--border)', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
+                      {form.imageUrl ? <img src={form.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => e.target.style.display = 'none'} /> : ''}
                     </div>
-                    <label style={{flex:1,display:'flex',alignItems:'center',gap:8,padding:'10px 14px',borderRadius:10,border:'2px dashed var(--primary)',background:'var(--primary-light)',cursor:'pointer',color:'var(--primary)',fontWeight:700,fontSize:12}}>
+                    <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 10, border: '2px dashed var(--primary)', background: 'var(--primary-light)', cursor: 'pointer', color: 'var(--primary)', fontWeight: 700, fontSize: 12 }}>
                       <span></span> Upload Logo
-                      <input type="file" accept="image/*" style={{display:'none'}} onChange={async e=>{
-                        const file=e.target.files?.[0]; if(!file)return;
-                        try{const r=await api.uploadImage(file);setForm(f=>({...f,imageUrl:r.data.url}));}catch(err){}
-                        e.target.value=''
-                      }}/>
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async e => {
+                        const file = e.target.files?.[0]; if (!file) return
+                        try { const r = await api.uploadImage(file); setForm(f => ({ ...f, imageUrl: r.data.url })) } catch (err) {}
+                        e.target.value = ''
+                      }} />
                     </label>
                   </div>
                 </div>
-                {/* Banner */}
-                <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:6}}>BANNER IMAGE</div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, marginBottom: 6 }}>BANNER IMAGE</div>
                   <label className="shop-banner-slot">
                     {form.bannerUrl
-                      ?<img src={form.bannerUrl} alt="banner"/>
-                      :<div style={{textAlign:'center'}}><div style={{width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",opacity:.3}}><svg viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="1.5" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div><div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>Upload banner (wide photo)</div></div>}
-                    <input type="file" accept="image/*" style={{display:'none'}} onChange={async e=>{
-                      const file=e.target.files?.[0]; if(!file)return;
-                      try{const r=await api.uploadImage(file);setForm(f=>({...f,bannerUrl:r.data.url}));}catch(err){}
-                      e.target.value=''
-                    }}/>
+                      ? <img src={form.bannerUrl} alt="banner" />
+                      : <div style={{ textAlign: 'center' }}><div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .3 }}><svg viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="1.5" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg></div><div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Upload banner (wide photo)</div></div>}
+                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async e => {
+                      const file = e.target.files?.[0]; if (!file) return
+                      try { const r = await api.uploadImage(file); setForm(f => ({ ...f, bannerUrl: r.data.url })) } catch (err) {}
+                      e.target.value = ''
+                    }} />
                   </label>
                 </div>
-                {/* Storefront */}
                 <div>
-                  <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:6}}>STOREFRONT PHOTO</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700, marginBottom: 6 }}>STOREFRONT PHOTO</div>
                   <label className="shop-banner-slot">
                     {form.storefrontUrl
-                      ?<img src={form.storefrontUrl} alt="storefront"/>
-                      :<div style={{textAlign:'center'}}><div style={{width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",opacity:.3}}><svg viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="1.5" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div><div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>Upload storefront photo</div></div>}
-                    <input type="file" accept="image/*" style={{display:'none'}} onChange={async e=>{
-                      const file=e.target.files?.[0]; if(!file)return;
-                      try{const r=await api.uploadImage(file);setForm(f=>({...f,storefrontUrl:r.data.url}));}catch(err){}
-                      e.target.value=''
-                    }}/>
+                      ? <img src={form.storefrontUrl} alt="storefront" />
+                      : <div style={{ textAlign: 'center' }}><div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: .3 }}><svg viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="1.5" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg></div><div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Upload storefront photo</div></div>}
+                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async e => {
+                      const file = e.target.files?.[0]; if (!file) return
+                      try { const r = await api.uploadImage(file); setForm(f => ({ ...f, storefrontUrl: r.data.url })) } catch (err) {}
+                      e.target.value = ''
+                    }} />
                   </label>
                 </div>
-                <input className="input" placeholder="Or paste logo URL" value={form.imageUrl||''} onChange={set('imageUrl')} style={{fontSize:12,marginTop:8}}/>
+                <input className="input" placeholder="Or paste logo URL" value={form.imageUrl || ''} onChange={set('imageUrl')} style={{ fontSize: 12, marginTop: 8 }} />
               </div>
-            <div className="grid-2">
-              <div><label className="label">Delivery Time (min)</label><input className="input" type="number" value={form.deliveryTime} onChange={set('deliveryTime')} /></div>
-              <div><label className="label">Min Order (₹)</label><input className="input" type="number" value={form.minOrder} onChange={set('minOrder')} /></div>
+              <div className="grid-2">
+                <div><label className="label">Delivery Time (min)</label><input className="input" type="number" value={form.deliveryTime} onChange={set('deliveryTime')} /></div>
+                <div><label className="label">Min Order (₹)</label><input className="input" type="number" value={form.minOrder} onChange={set('minOrder')} /></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card fade-up" style={{ animationDelay: '.08s' }}>
+            <div className="card-title">Location</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div><label className="label">Address</label><textarea className="input" rows={2} value={form.address} onChange={set('address')} style={{ resize: 'none' }} /></div>
+              <div><label className="label">City</label><input className="input" value={form.city} onChange={set('city')} /></div>
+              <button className="btn btn-ghost" style={{ width: '100%' }} onClick={getLoc}><Icons.Loc /> Use Current Location</button>
+              <LeafletMap lat={mapCoords.lat} lng={mapCoords.lng} onPinMove={(lat, lng) => setMapCoords({ lat, lng })} height={190} />
             </div>
           </div>
         </div>
 
-        <div className="card fade-up" style={{ animationDelay: '.06s' }}>
-          <div className="card-title">Location</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div><label className="label">Address</label><textarea className="input" rows={2} value={form.address} onChange={set('address')} style={{ resize: 'none' }} /></div>
-            <div><label className="label">City</label><input className="input" value={form.city} onChange={set('city')} /></div>
-            <button className="btn btn-ghost" style={{ width: '100%' }} onClick={getLoc}><Icons.Loc /> Use Current Location</button>
-            <LeafletMap lat={mapCoords.lat} lng={mapCoords.lng} onPinMove={(lat, lng) => setMapCoords({ lat, lng })} height={180} />
-          </div>
-        </div>
-
-        <div className="card fade-up" style={{ animationDelay: '.12s' }}>
-          <div className="card-title">Return Policy</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
-              <div><div style={{ fontWeight: 700 }}>Accept Returns</div><div style={{ color: 'var(--muted)', fontSize: 12 }}>Allow customers to request returns</div></div>
-              <button className={`toggle ${form.acceptsReturns ? 'on' : 'off'}`} onClick={() => setForm(f => ({ ...f, acceptsReturns: !f.acceptsReturns }))} />
+        <div className="settings-col">
+          <div className="card fade-up" style={{ animationDelay: '.02s' }}>
+            <div className="card-title">Profile Health</div>
+            <div className="settings-health-grid">
+              <div className="settings-health-item">
+                <div className="settings-health-label">Profile Completion</div>
+                <div className="settings-health-value" style={{ color: profileTone }}>{profileScore}%</div>
+                <div className="settings-health-sub">{profileReady} of {profileSignals.length} fields ready</div>
+              </div>
+              <div className="settings-health-item">
+                <div className="settings-health-label">Store Visibility</div>
+                <div className="settings-health-value" style={{ color: shop.isOpen ? '#16a34a' : '#ef4444' }}>{shop.isOpen ? 'Open' : 'Closed'}</div>
+                <div className="settings-health-sub">{shop.isOpen ? 'Customers can discover your products' : 'Open store to receive more orders'}</div>
+              </div>
+              <div className="settings-health-item">
+                <div className="settings-health-label">Delivery Setup</div>
+                <div className="settings-health-value">{form.deliveryTime || 0}m</div>
+                <div className="settings-health-sub">Estimated delivery in your local radius</div>
+              </div>
+              <div className="settings-health-item">
+                <div className="settings-health-label">Returns</div>
+                <div className="settings-health-value" style={{ color: form.acceptsReturns ? '#16a34a' : '#f97316' }}>{form.acceptsReturns ? 'Enabled' : 'Off'}</div>
+                <div className="settings-health-sub">{form.acceptsReturns ? `${form.returnDays || 0} day return window` : 'Enable to improve conversion'}</div>
+              </div>
             </div>
-            {form.acceptsReturns && <>
-              <div><label className="label">Return Window (days)</label><input className="input" type="number" value={form.returnDays} onChange={set('returnDays')} /></div>
-              <div><label className="label">Policy Note</label><textarea className="input" rows={2} value={form.returnPolicyNote} onChange={set('returnPolicyNote')} style={{ resize: 'none' }} /></div>
-            </>}
           </div>
-        </div>
 
-        <div className="card fade-up" style={{ animationDelay: '.18s' }}>
-          <div className="card-title">WhatsApp Mode</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
-              <div><div style={{ fontWeight: 700 }}>WhatsApp Orders</div><div style={{ color: 'var(--muted)', fontSize: 12 }}>Get order alerts on WhatsApp</div></div>
-              <button className={`toggle ${form.whatsappMode ? 'on' : 'off'}`} onClick={() => setForm(f => ({ ...f, whatsappMode: !f.whatsappMode }))} />
+          <div className="card fade-up" style={{ animationDelay: '.12s' }}>
+            <div className="card-title">Return Policy</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
+                <div><div style={{ fontWeight: 700 }}>Accept Returns</div><div style={{ color: 'var(--muted)', fontSize: 12 }}>Allow customers to request returns</div></div>
+                <button className={`toggle ${form.acceptsReturns ? 'on' : 'off'}`} onClick={() => setForm(f => ({ ...f, acceptsReturns: !f.acceptsReturns }))} />
+              </div>
+              {form.acceptsReturns && <>
+                <div><label className="label">Return Window (days)</label><input className="input" type="number" value={form.returnDays} onChange={set('returnDays')} /></div>
+                <div><label className="label">Policy Note</label><textarea className="input" rows={2} value={form.returnPolicyNote} onChange={set('returnPolicyNote')} style={{ resize: 'none' }} /></div>
+              </>}
             </div>
-            {form.whatsappMode && <div><label className="label">WhatsApp Number</label><input className="input" placeholder="10-digit number" value={form.whatsappPhone} onChange={set('whatsappPhone')} /></div>}
           </div>
+
+          <div className="card fade-up" style={{ animationDelay: '.16s' }}>
+            <div className="card-title">WhatsApp Mode</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
+                <div><div style={{ fontWeight: 700 }}>WhatsApp Orders</div><div style={{ color: 'var(--muted)', fontSize: 12 }}>Get order alerts on WhatsApp</div></div>
+                <button className={`toggle ${form.whatsappMode ? 'on' : 'off'}`} onClick={() => setForm(f => ({ ...f, whatsappMode: !f.whatsappMode }))} />
+              </div>
+              {form.whatsappMode && <div><label className="label">WhatsApp Number</label><input className="input" placeholder="10-digit number" value={form.whatsappPhone} onChange={set('whatsappPhone')} /></div>}
+            </div>
+          </div>
+
+          <button className="btn settings-signout-btn" onClick={onSignOut}>
+            <Icons.Logout /> Sign Out
+          </button>
         </div>
       </div>
     </div>
@@ -2392,10 +3522,14 @@ function ShopSetup({ onCreated, showToast }) {
   const CATEGORIES = ['Fashion', 'Kurtas', 'Kurtis', 'Sarees', 'Jeans', 'T-Shirts', 'Dresses', 'Jackets', 'Footwear', 'Kids', 'Accessories', 'Ethnic Wear', 'Western Wear', 'Activewear', 'Nightwear']
 
   const getLoc = async () => {
-    navigator.geolocation?.getCurrentPosition(async p => {
-      const geo = await reverseGeocode(p.coords.latitude, p.coords.longitude)
-      setForm(f => ({ ...f, lat: p.coords.latitude, lng: p.coords.longitude, address: geo.full, city: geo.city }))
-    })
+    try {
+      const gps = await getCurrentGpsLocation()
+      const geo = await reverseGeocode(gps.lat, gps.lng)
+      setForm(f => ({ ...f, lat: gps.lat, lng: gps.lng, address: geo.full, city: geo.city }))
+      showToast('Current location captured', 'success')
+    } catch (err) {
+      showToast(err?.message || 'Unable to detect current location', 'error')
+    }
   }
 
   const submit = async () => {
@@ -2468,6 +3602,7 @@ function EarningsPage({ showToast }) {
   const [data, setData] = useState(null)
   const [lowStock, setLowStock] = useState([])
   const [loading, setLoading] = useState(true)
+  const vendorPlatformFeeActive = false
 
   useEffect(() => {
     Promise.all([api.vendorEarnings(), api.lowStock()])
@@ -2492,12 +3627,12 @@ function EarningsPage({ showToast }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
           {[
             ['Total Revenue', `₹${data.totalRevenue.toLocaleString('en-IN')}`, '#22c55e', ''],
-            ['Net Earnings', `₹${data.netEarnings.toLocaleString('en-IN')}`, '#6c47ff', ''],
+            ['Net Earnings', `₹${(vendorPlatformFeeActive ? data.netEarnings : data.totalRevenue).toLocaleString('en-IN')}`, '#6c47ff', ''],
             ['This Month', `₹${data.thisMonth?.revenue?.toLocaleString('en-IN')||0}`, '#f59e0b', ''],
             ['Orders Delivered', data.totalOrders, '#0ea5e9', 'BOX'],
-            ['Platform Fees', `₹${data.platformFees}`, '#ef4444', '️'],
+            ['Platform Fees', vendorPlatformFeeActive ? `₹${data.platformFees}` : '₹0', '#ef4444', '️'],
             ['Pending Payout', `₹${data.pendingPayout}`, '#8b5cf6', '…'],
-          ].map(({label, val, color, icon}) => (
+          ].map(([label, val, color, icon]) => (
             <div key={label} style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: '18px 20px', boxShadow: 'var(--shadow-sm)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{width:8,height:8,borderRadius:'50%',background:'rgba(108,71,255,.5)',flexShrink:0}}/>
@@ -2541,6 +3676,87 @@ function EarningsPage({ showToast }) {
   )
 }
 
+function OperationsHub({ shop, showToast, pendingCount }) {
+  const [tab, setTab] = useState('orders')
+  const [pendingReturns, setPendingReturns] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    api.shopReturns()
+      .then(r => {
+        if (!alive) return
+        const count = (r.data || []).filter(item => item.status === 'REQUESTED').length
+        setPendingReturns(count)
+      })
+      .catch(() => { if (alive) setPendingReturns(0) })
+    return () => { alive = false }
+  }, [shop?.id])
+
+  return (
+    <>
+      <div className="page" style={{ paddingBottom: 0 }}>
+        <div className="card hub-switch-card fade-up">
+          <div className="hub-switch-row">
+            <div className="hub-switch-title">Daily Operations</div>
+            <div className="hub-counts">
+              <span className="hub-count-pill">{pendingCount || 0} pending orders</span>
+              <span className="hub-count-pill">{pendingReturns} return requests</span>
+            </div>
+          </div>
+          <div className="tabs" style={{ marginBottom: 6 }}>
+            <button className={`tab-btn ${tab === 'orders' ? 'active' : ''}`} onClick={() => setTab('orders')}>Orders</button>
+            <button className={`tab-btn ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}>Returns</button>
+          </div>
+        </div>
+      </div>
+      {tab === 'orders' ? <OrdersPage showToast={showToast} /> : <ReturnsPage shop={shop} showToast={showToast} />}
+    </>
+  )
+}
+
+function InsightsHub({ showToast }) {
+  const [tab, setTab] = useState('analytics')
+  const [monthRevenue, setMonthRevenue] = useState(0)
+  const [pendingPayout, setPendingPayout] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    api.vendorEarnings()
+      .then(r => {
+        if (!alive) return
+        setMonthRevenue(Number(r.data?.thisMonth?.revenue || 0))
+        setPendingPayout(Number(r.data?.pendingPayout || 0))
+      })
+      .catch(() => {
+        if (!alive) return
+        setMonthRevenue(0)
+        setPendingPayout(0)
+      })
+    return () => { alive = false }
+  }, [])
+
+  return (
+    <>
+      <div className="page" style={{ paddingBottom: 0 }}>
+        <div className="card hub-switch-card fade-up">
+          <div className="hub-switch-row">
+            <div className="hub-switch-title">Business Insights</div>
+            <div className="hub-counts">
+              <span className="hub-count-pill">Month: ₹{monthRevenue}</span>
+              <span className="hub-count-pill">Pending payout: ₹{pendingPayout}</span>
+            </div>
+          </div>
+          <div className="tabs" style={{ marginBottom: 6 }}>
+            <button className={`tab-btn ${tab === 'analytics' ? 'active' : ''}`} onClick={() => setTab('analytics')}>Analytics</button>
+            <button className={`tab-btn ${tab === 'earnings' ? 'active' : ''}`} onClick={() => setTab('earnings')}>Earnings</button>
+          </div>
+        </div>
+      </div>
+      {tab === 'analytics' ? <AnalyticsPage /> : <EarningsPage showToast={showToast} />}
+    </>
+  )
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [shop, setShop] = useState(null)
@@ -2556,7 +3772,7 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('dott_vendor_access')
-    if (!token) { setLoading(false); return }
+    if (!token && !isVendorDemoMode()) { setLoading(false); return }
     Promise.all([api.me(), api.myShop()])
       .then(([u, s]) => { setUser(u.data); setShop(s.data) })
       .catch(() => {})
@@ -2572,6 +3788,7 @@ export default function App() {
   const signOut = async () => {
     try { await api.logout() } catch (e) {}
     localStorage.removeItem('dott_vendor_access'); localStorage.removeItem('dott_vendor_refresh')
+    localStorage.removeItem(DEMO_VENDOR_MODE_KEY)
     setUser(null); setShop(null)
   }
 
@@ -2585,16 +3802,22 @@ export default function App() {
     </>
   )
 
-  if (!user) return <><style>{CSS}</style><AuthPage onSuccess={u => { setUser(u); api.myShop().then(r => setShop(r.data)).catch(() => {}) }} /></>
+  if (!user) return <><style>{CSS}</style><AuthPage onSuccess={(u, providedShop) => { setUser(u); if (providedShop) setShop(providedShop); else api.myShop().then(r => setShop(r.data)).catch(() => {}) }} /></>
   if (!shop) return <><style>{CSS}</style><ShopSetup onCreated={s => setShop(s)} showToast={showToast} /></>
+
+  const activePage = (
+    page === 'orders' || page === 'returns'
+      ? 'operations'
+      : page === 'analytics' || page === 'earnings'
+        ? 'insights'
+        : page
+  )
 
   const NAV = [
     { id: 'dashboard', label: 'Dashboard', Icon: Icons.Dashboard },
-    { id: 'orders', label: 'Orders', Icon: Icons.Orders, count: pendingCount },
+    { id: 'operations', label: 'Orders', Icon: Icons.Orders, count: pendingCount },
     { id: 'products', label: 'Products', Icon: Icons.Products },
-    { id: 'returns', label: 'Returns', Icon: Icons.Returns },
-    { id: 'analytics', label: 'Analytics', Icon: Icons.Analytics },
-    { id: 'earnings', label: 'Earnings', Icon: Icons.Analytics },
+    { id: 'insights', label: 'Insights', Icon: Icons.Analytics },
     { id: 'settings', label: 'Settings', Icon: Icons.Settings },
   ]
 
@@ -2611,7 +3834,7 @@ export default function App() {
           <nav className="sidebar-nav">
             <div className="nav-section-title">Main</div>
             {NAV.map(({ id, label, Icon, count }) => (
-              <div key={id} className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => setPage(id)}>
+              <div key={id} className={`nav-item ${activePage === id ? 'active' : ''}`} onClick={() => setPage(id)}>
                 <Icon />
                 <span>{label}</span>
                 {count > 0 && <span className="nav-badge">{count}</span>}
@@ -2636,20 +3859,18 @@ export default function App() {
         {/* Main */}
         <main className="main-content">
           <div className="topbar">
-            <div className="topbar-title">{NAV.find(n => n.id === page)?.label}</div>
+            <div className="topbar-title">{NAV.find(n => n.id === activePage)?.label}</div>
             <div className="topbar-actions">
-              <div style={{ fontSize: 13, color: 'var(--muted)' }}>Welcome, <strong>{user.name}</strong></div>
+              <div className="topbar-welcome" style={{ fontSize: 13, color: 'var(--muted)' }}>Welcome, <strong>{user.name}</strong></div>
               {pendingCount > 0 && <span className="badge badge-warning">{pendingCount} pending</span>}
             </div>
           </div>
 
-          {page === 'dashboard' && <Dashboard shop={shop} />}
-          {page === 'orders' && <OrdersPage showToast={showToast} />}
-          {page === 'products' && <ProductsPage showToast={showToast} />}
-          {page === 'returns' && <ReturnsPage shop={shop} showToast={showToast} />}
-          {page === 'analytics' && <AnalyticsPage />}
-          {page === 'earnings' && <EarningsPage showToast={showToast} />}
-          {page === 'settings' && <ShopSettings shop={shop} setShop={setShop} showToast={showToast} user={user} />}
+          {activePage === 'dashboard' && <Dashboard shop={shop} user={user} onOpenProducts={() => setPage('products')} onOpenOrders={() => setPage('operations')} onOpenEarnings={() => setPage('insights')} />}
+          {activePage === 'operations' && <OperationsHub shop={shop} showToast={showToast} pendingCount={pendingCount} />}
+          {activePage === 'products' && <ProductsPage showToast={showToast} />}
+          {activePage === 'insights' && <InsightsHub showToast={showToast} />}
+          {activePage === 'settings' && <ShopSettings shop={shop} setShop={setShop} showToast={showToast} user={user} onSignOut={signOut} />}
         </main>
       </div>
 
