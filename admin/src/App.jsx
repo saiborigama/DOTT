@@ -27,6 +27,18 @@ ax.interceptors.response.use(r => r, async err => {
   return Promise.reject(err)
 })
 
+async function downloadCsv(path, filename) {
+  const res = await ax.get(path, { responseType: 'blob' })
+  const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 const api = {
   login:          d      => ax.post('/auth/login', d),
   me:             ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().user) : ax.get('/auth/me'),
@@ -140,8 +152,8 @@ const api = {
     }
     return ax.post(`/admin/settlements/invoices/${id}/pay`, d || {})
   },
-  exportOrders:   ()     => { if (isAdminDemoMode()) { toast('Demo orders export ready', 'success'); return } window.open(`${BASE}/admin/export/orders?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
-  exportUsers:    ()     => { if (isAdminDemoMode()) { toast('Demo users export ready', 'success'); return } window.open(`${BASE}/admin/export/users?token=${localStorage.getItem('dott_admin_access')}`, '_blank') },
+  exportOrders:   ()     => { if (isAdminDemoMode()) { toast('Demo orders export ready', 'success'); return Promise.resolve() } return downloadCsv('/admin/export/orders', 'dott-orders.csv') },
+  exportUsers:    ()     => { if (isAdminDemoMode()) { toast('Demo users export ready', 'success'); return Promise.resolve() } return downloadCsv('/admin/export/users', 'dott-users.csv') },
 }
 
 const DEMO_ADMIN_MODE = false
@@ -675,16 +687,10 @@ function Toasts() {
    AUTH PAGE
 ════════════════════════════════════════════════════════════ */
 function AuthPage({ onSuccess }) {
-  const [email, setEmail] = useState('admin@dott.in')
-  const [pass, setPass] = useState('password123')
+  const [email, setEmail] = useState('')
+  const [pass, setPass] = useState('')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
-  const enterDemoAdmin = () => {
-    localStorage.setItem(DEMO_ADMIN_MODE_KEY, '1')
-    const db = getDemoAdminDb()
-    onSuccess(db.user)
-  }
-
   const submit = async () => {
     setErr(''); setLoading(true)
     try {
@@ -1929,6 +1935,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   const [selectedPayment, setSelectedPayment] = useState(null)
   const [payContext, setPayContext] = useState(null)
   const [payMethod, setPayMethod] = useState('phonepe')
+  const [paymentReference, setPaymentReference] = useState('')
 
   const load = useCallback(async (active = filters) => {
     setLoading(true)
@@ -1983,49 +1990,45 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     const fromItems = items.reduce((sum, item) => sum + (Number(item?.price || 0) * Number(item?.qty || 1)), 0)
     return fromItems > 0 ? fromItems : Number(order?.subtotal || order?.total || 0)
   }
-  const vendorRowsBase = (ownerUsers.length ? ownerUsers.map(owner => {
-    const inv = vendorInvoices.find(v => v.vendorId === owner.id || v.vendorName === owner.name)
-    const shop = shops.find(s => s.ownerId === owner.id || s.ownerName === owner.name)
-    const totalSales = Number(inv?.totalSales || 0)
+  const vendorRowsBase = vendorInvoices.map(inv => {
+    const owner = ownerUsers.find(user => user.id === inv.vendorId)
+    const shop = shops.find(s => s.id === inv.shopId || s.ownerId === inv.vendorId)
+    const totalSales = Number(inv?.productValue || inv?.totalSales || 0)
     const paidAmount = Number(inv?.paidAmount || 0)
-    const pendingAmount = Math.max(0, totalSales - paidAmount)
-    return inv ? {
+    const pendingAmount = Number(inv?.pendingAmount ?? Math.max(0, totalSales - paidAmount))
+    return {
       ...inv,
-      vendorId: inv.vendorId || owner.id,
-      vendorName: inv.vendorName || owner.name,
+      vendorId: inv.vendorId || owner?.id,
+      shopId: inv.shopId || shop?.id || null,
+      vendorName: inv.vendorName || owner?.name || 'Vendor',
       shopName: inv.shopName || shop?.name || 'Shop',
       totalOrders: Number(inv.totalOrders || 0),
       totalSales,
+      productValue: Number(inv.productValue || totalSales),
+      deliveryCollected: Number(inv.deliveryCollected || 0),
+      riderEarning: Number(inv.riderEarning || 0),
       commissionPct: 0,
       commissionAmount: 0,
-      netPayable: totalSales,
+      netPayable: Number(inv.vendorPayout || inv.netPayable || totalSales),
       paidAmount,
       pendingAmount,
-    } : {
-      vendorId: owner.id,
-      vendorName: owner.name,
-      shopName: shop?.name || 'Shop',
-      totalOrders: 0,
-      totalSales: 0,
-      commissionPct: 0,
-      commissionAmount: 0,
-      netPayable: 0,
-      paidAmount: 0,
-      pendingAmount: 0,
-      status: 'NO_INVOICE',
-      latestInvoiceId: null,
+      invoiceIds: Array.isArray(inv.invoiceIds) ? inv.invoiceIds : [inv.latestInvoiceId || inv.id].filter(Boolean),
     }
-  }) : vendorInvoices)
+  })
   const vendorRows = Object.values(vendorRowsBase.reduce((acc, row) => {
-    const key = `${row.vendorId || row.vendorName}::${row.shopName || 'Shop'}`
+    const key = row.shopId ? `shop::${row.shopId}` : `vendor::${row.vendorId || row.vendorName || 'Vendor'}`
     if (!acc[key]) {
       acc[key] = {
         ...row,
         totalOrders: Number(row.totalOrders || 0),
         totalSales: Number(row.totalSales || 0),
+        productValue: Number(row.productValue || row.totalSales || 0),
+        deliveryCollected: Number(row.deliveryCollected || 0),
+        riderEarning: Number(row.riderEarning || 0),
         netPayable: Number(row.netPayable || row.totalSales || 0),
         paidAmount: Number(row.paidAmount || 0),
         pendingAmount: Number(row.pendingAmount || 0),
+        invoiceIds: Array.isArray(row.invoiceIds) ? row.invoiceIds : [row.latestInvoiceId].filter(Boolean),
       }
       return acc
     }
@@ -2033,10 +2036,14 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       ...acc[key],
       totalOrders: Number(acc[key].totalOrders || 0) + Number(row.totalOrders || 0),
       totalSales: Number(acc[key].totalSales || 0) + Number(row.totalSales || 0),
+      productValue: Number(acc[key].productValue || 0) + Number(row.productValue || row.totalSales || 0),
+      deliveryCollected: Number(acc[key].deliveryCollected || 0) + Number(row.deliveryCollected || 0),
+      riderEarning: Number(acc[key].riderEarning || 0) + Number(row.riderEarning || 0),
       netPayable: Number(acc[key].netPayable || 0) + Number(row.netPayable || row.totalSales || 0),
       paidAmount: Number(acc[key].paidAmount || 0) + Number(row.paidAmount || 0),
       pendingAmount: Number(acc[key].pendingAmount || 0) + Number(row.pendingAmount || 0),
       latestInvoiceId: row.latestInvoiceId || acc[key].latestInvoiceId,
+      invoiceIds: [...new Set([...(acc[key].invoiceIds || []), ...((row.invoiceIds || [row.latestInvoiceId]).filter(Boolean))])],
       status: row.status || acc[key].status,
     }
     return acc
@@ -2049,9 +2056,11 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       riderName: inv.riderName || rider.name,
       totalDeliveries: Number(inv.totalDeliveries || 0),
       earningsPerDelivery: Number(inv.earningsPerDelivery || 0),
+      deliveryCollected: Number(inv.deliveryCollected || 0),
       totalEarnings: Number(inv.totalEarnings || 0),
       paidAmount: Number(inv.paidAmount || 0),
       pendingAmount: Number(inv.pendingAmount || 0),
+      invoiceIds: Array.isArray(inv.invoiceIds) ? inv.invoiceIds : [inv.latestInvoiceId || inv.id].filter(Boolean),
     } : {
       riderId: rider.id,
       riderName: rider.name,
@@ -2064,18 +2073,19 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       latestInvoiceId: null,
     }
   }) : riderInvoices)
-  const selectedVendorInvoice = selectedVendor ? vendorRows.find(v => v.vendorId === selectedVendor) : null
-  const selectedVendorUser = selectedVendor ? users.find(u => u.id === selectedVendor) : null
+  const vendorRowKey = row => row?.shopId ? `shop::${row.shopId}` : `vendor::${row?.vendorId || row?.vendorName || 'Vendor'}`
+  const selectedVendorInvoice = selectedVendor ? vendorRows.find(v => vendorRowKey(v) === selectedVendor) : null
+  const selectedVendorUser = selectedVendorInvoice ? users.find(u => u.id === selectedVendorInvoice.vendorId) : null
   const selectedVendorShop = selectedVendor
-    ? shops.find(s => s.ownerId === selectedVendor || s.ownerName === selectedVendorInvoice?.vendorName || s.name === selectedVendorInvoice?.shopName)
+    ? shops.find(s => s.id === selectedVendorInvoice?.shopId || s.ownerId === selectedVendorInvoice?.vendorId)
     : null
   const selectedVendorOrders = selectedVendor
     ? orders.filter(o => {
-        const shopName = o.shop?.name || o.shopName || ''
-        const vendorName = o.vendor?.name || o.vendorName || o.ownerName || ''
+        const orderShopId = o.shop?.id || o.shopId || null
+        const orderVendorId = o.vendor?.id || o.vendorId || o.ownerId || null
         return (
-          shopName === selectedVendorInvoice?.shopName ||
-          vendorName === selectedVendorInvoice?.vendorName
+          (selectedVendorInvoice?.shopId && orderShopId === selectedVendorInvoice.shopId) ||
+          orderVendorId === selectedVendorInvoice?.vendorId
         )
       })
     : []
@@ -2118,7 +2128,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   const selectedRiderPayable2Days = selectedRiderGenerated2Days
 
   useEffect(() => {
-    if (!selectedVendor && vendorRows.length) setSelectedVendor(vendorRows[0].vendorId)
+    if (!selectedVendor && vendorRows.length) setSelectedVendor(vendorRowKey(vendorRows[0]))
     if (!selectedRider && riderRows.length) setSelectedRider(riderRows[0].riderId)
   }, [vendorRows, riderRows, selectedVendor, selectedRider])
 
@@ -2145,8 +2155,8 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     window.open(urls[app] || urls.upi, '_blank')
   }
 
-  const openVendorDetails = (vendorId) => {
-    setSelectedVendor(vendorId)
+  const openVendorDetails = (vendorRow) => {
+    setSelectedVendor(vendorRowKey(vendorRow))
     setVendorDetailTab('overview')
     setExpandedVendorOrderId(null)
     setShowAllVendorProducts(false)
@@ -2167,14 +2177,35 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       return
     }
     setPayMethod('phonepe')
+    setPaymentReference('')
     setPayContext(context)
   }
 
   const confirmPayout = async () => {
-    if (!payContext?.invoiceId) return
+    if (!payContext?.invoiceId && !payContext?.invoiceIds?.length) return
+    const reference = paymentReference.trim()
+    if (!reference) {
+      toast('Enter UTR / payment reference before marking paid', 'error')
+      return
+    }
+    const invoiceIds = payContext.invoiceIds?.length ? payContext.invoiceIds : [payContext.invoiceId]
     openPaymentLink(payMethod, payContext.upiId, payContext.amount, payContext.note)
-    await payInvoice(payContext.invoiceId, { method: payMethod })
-    setPayContext(null)
+    setPaying(payContext.invoiceId || invoiceIds[0])
+    try {
+      await Promise.all(invoiceIds.map(id => api.payInvoice(id, {
+        method: payMethod,
+        paymentReference: reference,
+        note: `${payContext.note || 'Settlement payout'} · ${payMethod.toUpperCase()} · Ref ${reference}`,
+      })))
+      toast('Payout recorded and locked', 'success')
+      await load(filters)
+      setPayContext(null)
+      setPaymentReference('')
+    } catch (e) {
+      toast('Payment update failed', 'error')
+    } finally {
+      setPaying(null)
+    }
   }
   const cards = [
     { label: 'Vendor Due', value: `₹${vendorRows.reduce((s, v) => s + (v.pendingAmount || 0), 0).toLocaleString('en-IN')}`, tone: '#6c47ff' },
@@ -2262,7 +2293,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           <span className="th">Vendor</span><span className="th">Orders</span><span className="th">Sales</span><span className="th">Commission</span><span className="th">Net</span><span className="th">Pending</span><span className="th">Action</span>
                         </div>
                         {vendorRows.map(v => (
-                          <div key={v.vendorId} className="sett-row">
+                          <div key={vendorRowKey(v)} className="sett-row">
                             <span><div style={{ fontWeight: 800 }}>{v.vendorName}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{v.shopName}</div></span>
                             <span>{v.totalOrders}</span>
                             <span>₹{v.totalSales.toLocaleString('en-IN')}</span>
@@ -2270,20 +2301,21 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                             <span>₹{v.netPayable.toLocaleString('en-IN')}</span>
                             <span style={{ color: v.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>₹{v.pendingAmount.toLocaleString('en-IN')}</span>
                             <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                              <button className="btn btn-ghost btn-sm" onClick={() => openVendorDetails(v.vendorId)}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openVendorDetails(v)}>
                                 Details
                               </button>
                               <button
                                 className="btn btn-primary btn-sm"
                                 disabled={!v.latestInvoiceId || v.pendingAmount <= 0 || (v.latestInvoiceId && paying === v.latestInvoiceId)}
                                 onClick={() => {
-                                  const vUser = users.find(u => u.id === v.vendorId || u.name === v.vendorName)
-                                  const vShop = shops.find(s => s.ownerId === v.vendorId || s.ownerName === v.vendorName || s.name === v.shopName)
+                                  const vUser = users.find(u => u.id === v.vendorId)
+                                  const vShop = shops.find(s => s.id === v.shopId || s.ownerId === v.vendorId)
                                   const upiId = (vUser?.paymentMethod || '').toLowerCase() === 'upi'
                                     ? (vUser?.upiId || '')
                                     : toUpiFromPhone(vShop?.phone || vUser?.phone)
                                   openPayMethodModal({
                                     invoiceId: v.latestInvoiceId,
+                                    invoiceIds: v.invoiceIds || [v.latestInvoiceId],
                                     amount: Number(v.pendingAmount || 0),
                                     payeeName: v.vendorName,
                                     upiId,
@@ -2304,12 +2336,18 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                     <div className="card" style={{ padding: 14 }} ref={detailPanelRef}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
                         <div>
-                          <div className="card-title" style={{ marginBottom: 4 }}>Vendor Payment Details (2 Days)</div>
+                          <div className="card-title" style={{ marginBottom: 4 }}>Vendor Settlement Details (2 Days)</div>
                           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedVendorInvoice.vendorName} · {selectedVendorInvoice.shopName}</div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('phonepe', (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone), selectedVendorInvoice.pendingAmount, `${selectedVendorInvoice.vendorName} settlement`)}>Pay PhonePe</button>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('gpay', (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone), selectedVendorInvoice.pendingAmount, `${selectedVendorInvoice.vendorName} settlement`)}>Pay GPay</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPayMethodModal({
+                            invoiceId: selectedVendorInvoice.latestInvoiceId,
+                            invoiceIds: selectedVendorInvoice.invoiceIds || [selectedVendorInvoice.latestInvoiceId],
+                            amount: Number(selectedVendorInvoice.pendingAmount || 0),
+                            payeeName: selectedVendorInvoice.vendorName,
+                            upiId: (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone),
+                            note: `${selectedVendorInvoice.vendorName} settlement`,
+                          })}>Pay / Mark Paid</button>
                         </div>
                       </div>
 
@@ -2333,9 +2371,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
 
                       {vendorDetailTab === 'overview' && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
-                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>2-day Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedVendorDelivered2Days.length}</div></div>
-                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Generated</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Math.round(selectedVendorGenerated2Days).toLocaleString('en-IN')}</div></div>
-                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pay Vendor</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Math.round(selectedVendorPayable2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Product Value</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Number(selectedVendorInvoice.productValue || selectedVendorGenerated2Days).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{selectedVendorInvoice.totalOrders || selectedVendorDelivered2Days.length} orders</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Delivery Collected</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedVendorInvoice.deliveryCollected || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Rider Earning</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f59e0b' }}>Rs {Number(selectedVendorInvoice.riderEarning || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Vendor Payout</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Number(selectedVendorInvoice.netPayable || selectedVendorPayable2Days).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Only product value is paid to vendor</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedVendorInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
                         </div>
                       )}
@@ -2384,14 +2423,17 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                             return (
                               <div key={oid} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · Rs {Number(o.total || o.subtotal || 0).toLocaleString('en-IN')}</div>
+                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · Product value Rs {Number(itemMerchandiseTotal(o) || 0).toLocaleString('en-IN')}</div>
                                   <button className="btn btn-ghost btn-sm" onClick={() => setExpandedVendorOrderId(prev => prev === oid ? null : oid)}>{showProducts ? 'Hide Products' : 'Product Details'}</button>
                                 </div>
                                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>{(o.customer?.name || o.customerName || 'Customer')} · {(o.deliveryAddress || o.address || 'No address')}</div>
                                 {showProducts && (
                                   <div style={{ marginTop: 8, borderTop: '1px solid var(--border2)', paddingTop: 8, fontSize: 12 }}>
                                     {items.length === 0 ? 'No product details for this order.' : items.map((it, idx) => (
-                                      <div key={`${oid}-${idx}`}>{(it.name || 'Product')} x{it.qty || 1}{it.size ? ` (${it.size})` : ''}</div>
+                                      <div key={`${oid}-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                                        <span>{(it.name || 'Product')} x{it.qty || 1}{it.size ? ` (${it.size})` : ''}</span>
+                                        <strong>Rs {Number((it.price || 0) * (it.qty || 1)).toLocaleString('en-IN')}</strong>
+                                      </div>
                                     ))}
                                   </div>
                                 )}
@@ -2433,6 +2475,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                                   const upiId = riderUser?.upiId || toUpiFromPhone(riderUser?.phone)
                                   openPayMethodModal({
                                     invoiceId: r.latestInvoiceId,
+                                    invoiceIds: r.invoiceIds || [r.latestInvoiceId],
                                     amount: Number(r.pendingAmount || 0),
                                     payeeName: r.riderName,
                                     upiId,
@@ -2457,8 +2500,14 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedRiderInvoice.riderName}</div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('phonepe', selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone), selectedRiderInvoice.pendingAmount, `${selectedRiderInvoice.riderName} payout`)}>Pay PhonePe</button>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPaymentLink('gpay', selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone), selectedRiderInvoice.pendingAmount, `${selectedRiderInvoice.riderName} payout`)}>Pay GPay</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => openPayMethodModal({
+                            invoiceId: selectedRiderInvoice.latestInvoiceId,
+                            invoiceIds: selectedRiderInvoice.invoiceIds || [selectedRiderInvoice.latestInvoiceId],
+                            amount: Number(selectedRiderInvoice.pendingAmount || 0),
+                            payeeName: selectedRiderInvoice.riderName,
+                            upiId: selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone),
+                            note: `${selectedRiderInvoice.riderName} payout`,
+                          })}>Pay / Mark Paid</button>
                         </div>
                       </div>
 
@@ -2484,6 +2533,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>2-day Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedRiderDelivered2Days.length}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Generated</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Math.round(selectedRiderGenerated2Days).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Delivery Collected</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedRiderInvoice.deliveryCollected || 0).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pay Rider</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Math.round(selectedRiderPayable2Days).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedRiderInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
                         </div>
@@ -2619,10 +2669,19 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
               UPI: {payContext.upiId || 'Not configured'}
             </div>
+            <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase' }}>UTR / payment reference</span>
+              <input
+                value={paymentReference}
+                onChange={e => setPaymentReference(e.target.value)}
+                placeholder="Enter UTR after payment"
+                style={{ padding: '11px 12px', border: '1.5px solid var(--border)', borderRadius: 10, fontWeight: 700, outline: 'none' }}
+              />
+            </label>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button className="btn btn-ghost" onClick={() => setPayContext(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmPayout} disabled={!payContext.upiId || Boolean(paying)}>
-                {paying ? 'Paying...' : `Pay via ${payMethod === 'phonepe' ? 'PhonePe' : 'GPay'}`}
+              <button className="btn btn-primary" onClick={confirmPayout} disabled={!payContext.upiId || Boolean(paying) || !paymentReference.trim()}>
+                {paying ? 'Recording...' : `Pay via ${payMethod === 'phonepe' ? 'PhonePe' : 'GPay'} & Lock`}
               </button>
             </div>
           </div>
@@ -2647,6 +2706,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               <div><strong>Date:</strong> {selectedPayment.paymentDate ? new Date(selectedPayment.paymentDate).toLocaleString() : '—'}</div>
               <div><strong>Shop:</strong> {selectedPayment.shopName || '—'}</div>
               <div><strong>Method:</strong> {selectedPayment.paymentMethod || 'UPI'}</div>
+              <div><strong>UTR / Ref:</strong> {selectedPayment.paymentReference || '—'}</div>
               <div><strong>Invoice:</strong> {selectedPayment.invoiceId || '—'}</div>
             </div>
             <div style={{ marginTop: 12, padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#f8fbff', fontSize: 12, color: 'var(--muted)' }}>

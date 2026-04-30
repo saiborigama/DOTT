@@ -671,9 +671,6 @@ const BANNERS = [
 const DEMO_ENABLED = false
 const DEMO_SHOPS = []
 const DEMO_PRODUCTS = []
-function buildDemoCatalog(){
-  return { shops: DEMO_SHOPS, products: DEMO_PRODUCTS }
-}
 
 const STATUS_META = {
   PENDING:          {label:'Order Placed',    color:'#b45309', bg:'#fffbeb'},
@@ -958,26 +955,26 @@ img{display:block}
 .hero-mini h3{font-size:16px;font-weight:900;margin-bottom:6px}
 .hero-mini p{font-size:12px;line-height:1.6;color:var(--mu)}
 .sec-wrap{
-  padding:18px 0 10px;background:rgba(255,255,255,.84);border:1px solid rgba(255,255,255,.72);border-radius:22px;
-  box-shadow:var(--sh1);margin-top:16px;backdrop-filter:blur(16px)
+  padding:16px 0 8px;background:rgba(255,255,255,.84);border:1px solid rgba(255,255,255,.72);border-radius:22px;
+  box-shadow:var(--sh1);margin-top:14px;backdrop-filter:blur(16px)
 }
-.sec-hd{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:12px;padding:0 16px}
+.sec-hd{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;padding:0 14px}
 .sec-title{font-size:18px;font-weight:900;color:var(--nv);letter-spacing:-.4px}
 .sec-sub{font-size:11px;color:var(--mu);margin-top:2px}
 .sec-link{font-size:13px;font-weight:700;color:var(--bl2);cursor:pointer;text-decoration:none;transition:.15s;padding:6px 12px;background:#edf8fb;border-radius:100px}
 .sec-link:hover{background:#d9f1f7;transform:translateY(-1px)}
 
 /* HORIZONTAL SCROLL */
-.hscroll{overflow-x:auto;scrollbar-width:none;padding:0 16px 6px}
+.hscroll{overflow-x:auto;scrollbar-width:none;padding:0 14px 4px}
 .hscroll::-webkit-scrollbar{display:none}
-.hs-inner{display:flex;gap:16px;min-width:max-content}
+.hs-inner{display:flex;gap:12px;min-width:max-content}
 
 /* PRODUCT GRID */
-.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;padding:0 16px}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:12px;padding:0 14px}
 
 /* PRODUCT CARD */
 .pc{
-  width:190px;flex-shrink:0;border-radius:18px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.92);
+  width:174px;flex-shrink:0;border-radius:18px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.92);
   border:1px solid rgba(228,221,212,.92);transition:all .24s cubic-bezier(.22,1,.36,1);box-shadow:var(--sh1);animation:fadeUp .35s ease both
 }
 .pc:hover{transform:translateY(-8px);box-shadow:var(--sh2);border-color:rgba(217,147,50,.6)}
@@ -988,21 +985,21 @@ img{display:block}
 .pc-wish{position:absolute;top:12px;right:12px;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border:1px solid rgba(15,17,17,.06);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all .2s;box-shadow:var(--sh0)}
 .pc-wish:hover{transform:scale(1.08) translateY(-1px)}
 .pc-wish.on{animation:heartPop .35s ease}
-.pc-body{padding:14px 14px 16px}
+.pc-body{padding:12px 12px 14px}
 .pc-meta-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .pc-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:#f6efe5;color:#835219;font-size:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}
-.pc-name{font-size:15px;font-weight:800;line-height:1.45;margin-bottom:7px;color:var(--tx);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:44px}
+.pc-name{font-size:14px;font-weight:800;line-height:1.4;margin-bottom:6px;color:var(--tx);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:40px}
 .pc-shop{font-size:11px;color:var(--bl2);margin-bottom:7px;display:flex;align-items:center;gap:4px;font-weight:700}
-.pc-stars{margin-bottom:9px}
-.pc-colors{display:flex;gap:5px;margin-bottom:10px;flex-wrap:wrap}
+.pc-stars{margin-bottom:7px}
+.pc-colors{display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap}
 .pc-cdot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1);cursor:pointer;transition:.15s}
 .pc-cdot:hover{transform:scale(1.3)}
 .pc-price-row{display:flex;align-items:baseline;gap:6px}
-.pc-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:10px}
-.pc-price{font-size:24px;font-weight:900;color:var(--tx);letter-spacing:-.7px}
+.pc-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:8px}
+.pc-price{font-size:22px;font-weight:900;color:var(--tx);letter-spacing:-.7px}
 .pc-mrp{display:block;font-size:11px;color:var(--mu);text-decoration:line-through;margin-top:3px}
 .pc-disc{display:inline-flex;font-size:11px;font-weight:800;color:#067d62;background:#e7f8f4;padding:3px 7px;border-radius:999px;margin-top:5px}
-.pc-addbtn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 16px;background:var(--nv-grad);border:1px solid rgba(16,32,51,.1);border-radius:999px;cursor:pointer;font-size:12px;font-weight:800;color:#fff;transition:all .18s;box-shadow:0 14px 26px rgba(16,32,51,.14)}
+.pc-addbtn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 14px;background:var(--nv-grad);border:1px solid rgba(16,32,51,.1);border-radius:999px;cursor:pointer;font-size:12px;font-weight:800;color:#fff;transition:all .18s;box-shadow:0 14px 26px rgba(16,32,51,.14)}
 .pc-addbtn:hover{transform:translateY(-1px);box-shadow:0 18px 32px rgba(16,32,51,.18)}
 .pc-addbtn:disabled{opacity:.5;cursor:not-allowed}
 .pc-qty{display:flex;align-items:center;gap:0;border:1px solid rgba(217,147,50,.35);border-radius:999px;overflow:hidden;background:#fff8ee;min-width:98px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
@@ -1012,16 +1009,16 @@ img{display:block}
 .pc-v{background:var(--bll);color:var(--bl2);font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;letter-spacing:.3px}
 
 /* SHOP CARD */
-.scard{border-radius:16px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--br);transition:all .2s cubic-bezier(.22,1,.36,1);width:220px;flex-shrink:0;box-shadow:var(--sh0)}
+.scard{border-radius:16px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--br);transition:all .2s cubic-bezier(.22,1,.36,1);width:206px;flex-shrink:0;box-shadow:var(--sh0)}
 .scard:hover{transform:translateY(-2px);box-shadow:var(--sh2);border-color:#ff9900}
-.scard-img{width:100%;height:146px;object-fit:cover}
-.scard-body{padding:14px}
+.scard-img{width:100%;height:136px;object-fit:cover}
+.scard-body{padding:12px}
 .scard-name{font-size:15px;font-weight:800;margin-bottom:5px;color:var(--nv);display:flex;align-items:center;gap:6px}
 .scard-meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mu);flex-wrap:wrap}
 .vbadge{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;font-size:9px;font-weight:800;padding:2px 7px;border-radius:100px;letter-spacing:.5px}
 
 /* DEAL GRID */
-.deal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:0 20px}
+.deal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 14px}
 @media(max-width:768px){.deal-grid{grid-template-columns:repeat(2,1fr)}}
 .deal-card{border-radius:24px;overflow:hidden;cursor:pointer;aspect-ratio:1;position:relative;background:var(--nv2);transition:all .22s;border:1px solid rgba(255,255,255,.24);box-shadow:var(--sh1)}
 .deal-card:hover{transform:translateY(-6px);box-shadow:var(--sh2)}
@@ -1238,7 +1235,7 @@ img{display:block}
   .auth-visual-stage{grid-template-columns:1fr 1fr;min-height:300px}
   .auth-form-box{min-height:auto;padding:22px 18px 30px}
 }
-@media(max-width:600px){.auth-left{display:block}.auth-right{min-height:auto}.auth-story{gap:16px}.auth-hero-title{font-size:42px;max-width:9ch}.auth-visual-stage{grid-template-columns:1fr;gap:12px;min-height:auto}.auth-visual-column.alt{display:none}.auth-scroll-ribbon{position:relative;left:auto;right:auto;bottom:auto;transform:none;margin-top:4px;overflow:hidden}.auth-form-box{padding:18px 14px 28px}.auth-card{width:100%;padding:24px 18px;border-radius:26px}.deal-grid{grid-template-columns:1fr 1fr}.pd-overlay{padding:0;align-items:flex-end}.pd-modal{border-radius:var(--r24) var(--r24) 0 0}.banner-wrap{margin:0 12px}.banner-slide{min-height:180px}.banner-body{display:none}.banner-nav{display:none}.banner-title{max-width:none;font-size:30px}.home-hero{gap:8px;padding-top:8px}.hero-panel{padding:14px 14px 12px}.hero-points{grid-template-columns:1fr}.pgrid{grid-template-columns:repeat(2,1fr)}.topnav{padding:10px 12px 0}.topnav-inner{gap:8px;height:auto;min-height:64px;padding:8px 10px;border-radius:20px}.topnav-loc{padding:0 4px 8px}.topnav-loc-card{padding:9px 10px;border-radius:16px}.topnav-loc-icon{width:30px;height:30px;border-radius:10px}.topnav-loc-copy strong{font-size:10px}.topnav-loc-copy span{font-size:11px}.topnav-loc-points{min-width:74px;padding:8px 10px;border-radius:14px;gap:6px}.topnav-loc-badge strong{font-size:11px}.topnav-loc-badge span{font-size:9px}.nav-logo{font-size:18px;min-width:56px}.search-box{min-width:0;flex:1}.search-inp{padding:12px 10px;font-size:13px}.search-image-btn{padding:0 10px;min-width:40px}.search-btn{padding:0 12px}.nav-acts{gap:6px}.nav-act{padding:8px;border-radius:14px;min-width:auto}.nav-act-lbl{display:none}.nav-acts .nav-act:not(:first-child):not(:last-child){display:none}.search-cat{display:none}.promo-bar{padding:0 12px}.wrap{padding:0 12px}.sec-wrap{margin-top:12px;border-radius:18px;padding-top:14px}.sec-hd,.hscroll,.deal-grid{padding-left:12px;padding-right:12px}.pc{width:156px}.scard{width:188px}}
+@media(max-width:600px){.auth-left{display:block}.auth-right{min-height:auto}.auth-story{gap:16px}.auth-hero-title{font-size:42px;max-width:9ch}.auth-visual-stage{grid-template-columns:1fr;gap:12px;min-height:auto}.auth-visual-column.alt{display:none}.auth-scroll-ribbon{position:relative;left:auto;right:auto;bottom:auto;transform:none;margin-top:4px;overflow:hidden}.auth-form-box{padding:18px 14px 28px}.auth-card{width:100%;padding:24px 18px;border-radius:26px}.deal-grid{grid-template-columns:1fr 1fr}.pd-overlay{padding:0;align-items:flex-end}.pd-modal{border-radius:var(--r24) var(--r24) 0 0}.banner-wrap{margin:0 12px}.banner-slide{min-height:180px}.banner-body{display:none}.banner-nav{display:none}.banner-title{max-width:none;font-size:30px}.home-hero{gap:8px;padding-top:8px}.hero-panel{padding:14px 14px 12px}.hero-points{grid-template-columns:1fr}.pgrid{grid-template-columns:repeat(2,1fr)}.topnav{padding:10px 12px 0}.topnav-inner{gap:8px;height:auto;min-height:64px;padding:8px 10px;border-radius:20px}.topnav-loc{padding:0 4px 8px}.topnav-loc-card{padding:9px 10px;border-radius:16px}.topnav-loc-icon{width:30px;height:30px;border-radius:10px}.topnav-loc-copy strong{font-size:10px}.topnav-loc-copy span{font-size:11px}.topnav-loc-points{min-width:74px;padding:8px 10px;border-radius:14px;gap:6px}.topnav-loc-badge strong{font-size:11px}.topnav-loc-badge span{font-size:9px}.nav-logo{font-size:18px;min-width:56px}.search-box{min-width:0;flex:1}.search-inp{padding:12px 10px;font-size:13px}.search-image-btn{padding:0 10px;min-width:40px}.search-btn{padding:0 12px}.nav-acts{gap:6px}.nav-act{padding:8px;border-radius:14px;min-width:auto}.nav-act-lbl{display:none}.nav-acts .nav-act:not(:first-child):not(:last-child){display:none}.search-cat{display:none}.promo-bar{padding:0 12px}.wrap{padding:0 12px}.sec-wrap{margin-top:12px;border-radius:18px;padding-top:12px}.sec-hd,.hscroll,.deal-grid{padding-left:10px;padding-right:10px}.hs-inner{gap:10px}.pc{width:148px}.scard{width:176px}}
 .promo-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:var(--gnl);border:1px solid rgba(22,163,74,.2);border-radius:100px;font-size:12px;font-weight:700;color:var(--gn);margin-top:8px}
 .order-timeline{background:var(--nv);border-radius:var(--r16);padding:18px;margin-top:12px;color:#fff}
 .rate-stars{display:flex;gap:6px}
@@ -1547,14 +1544,14 @@ img{display:block}
     background:rgba(255,255,255,.98)!important;
     backdrop-filter:blur(16px);
     box-shadow:0 -12px 28px rgba(56,73,89,.08);
-    min-height:72px;
+    min-height:66px;
     z-index:360!important;
-    padding-bottom:calc(env(safe-area-inset-bottom,0px) + 7px)!important;
+    padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6px)!important;
     transform:translateZ(0)
   }
   #bottom-nav button span:last-child{display:block!important;line-height:1.15!important}
-  main{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 86px)}
-  .search-shell,.acct-shell,.orders-shell,.pd-page{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 96px)}
+  main{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 78px)}
+  .search-shell,.acct-shell,.orders-shell,.pd-page{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 86px)}
 }
 @media(max-width:420px){
   .topnav{padding:8px 8px 0}
@@ -1581,20 +1578,25 @@ img{display:block}
   .catbar-inner{padding:0 6px}
   .cat-btn{padding:10px 9px;font-size:11px}
   .wrap{padding:0 8px}
-  .sec-wrap{margin-top:10px;padding-top:12px;border-radius:14px}
+  .sec-wrap{margin-top:10px;padding-top:10px;border-radius:14px}
   .sec-hd,.hscroll,.deal-grid,.pgrid{padding-left:8px;padding-right:8px}
-  .hs-inner{gap:10px}
-  .pc{width:146px}
-  .scard{width:172px}
+  .hs-inner{gap:8px}
+  .pc{width:140px}
+  .scard{width:164px}
   .search-hero-card,.search-panel{padding:12px!important;border-radius:16px}
   .search-tools-actions{grid-template-columns:1fr!important}
   .filterbar{top:72px}
   .filterbar-inner{grid-template-columns:1fr!important}
   .fselect{padding:8px 10px;font-size:11px}
-  #bottom-nav{min-height:68px;padding-top:4px}
+  #bottom-nav{min-height:62px;padding-top:4px}
   #bottom-nav button{gap:2px}
-  #bottom-nav button svg{width:20px;height:20px}
-  #bottom-nav button span:last-child{font-size:11px!important}
+  #bottom-nav button svg{width:19px;height:19px}
+  #bottom-nav button span:last-child{font-size:10px!important}
+}
+@media(max-width:340px){
+  #bottom-nav{min-height:58px}
+  #bottom-nav button svg{width:18px;height:18px}
+  #bottom-nav button span:last-child{font-size:9px!important}
 }
 
 .search-btn,
@@ -1851,12 +1853,60 @@ function ShopCard({shop,onClick}){
   )
 }
 
+function LegalModal({ type, onClose }) {
+  const isPrivacy = type === 'privacy'
+  const title = isPrivacy ? 'Privacy Policy' : 'Terms & Conditions'
+  const sections = isPrivacy
+    ? [
+        ['Information We Collect', 'We collect account details, addresses, order data, and optional location details when you allow location access.'],
+        ['How We Use Data', 'We use your information to show nearby shops, process orders, support delivery, and protect your account and transactions.'],
+        ['Location Access', 'Location helps us show nearby products, calculate delivery range, and support delivery routing when needed.'],
+        ['Security', 'We limit access to customer data and use stored account information only for marketplace operations and support.'],
+        ['Your Controls', 'You can request updates to your account information and ask for support about stored customer details.'],
+      ]
+    : [
+        ['Using DOTT', 'By using DOTT you agree to provide accurate information and use the platform only for lawful shopping and marketplace activity.'],
+        ['Orders And Delivery', 'Prices, availability, delivery times, and returns depend on shop availability, service range, and current order status.'],
+        ['Account Responsibility', 'You are responsible for your login credentials and for activity performed from your account.'],
+        ['Marketplace Services', 'DOTT connects customers, vendors, riders, and admins to support ordering, delivery, and service communication.'],
+        ['Policy Updates', 'We may update these terms as the product grows, improves safety, or adds new commerce features.'],
+      ]
+
+  return (
+    <div className="overlay" style={{ zIndex: 900, padding: 16 }}>
+      <div className="modal" style={{ width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto', padding: 0, borderRadius: 24 }}>
+        <div style={{ padding: '20px 20px 14px', background: 'linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)', borderBottom: '1px solid var(--br)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--pr)', textTransform: 'uppercase', letterSpacing: '.08em' }}>DOTT Legal</div>
+              <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--tx)', lineHeight: 1.1, marginTop: 4 }}>{title}</div>
+            </div>
+            <button onClick={onClose} style={{ border: '1.5px solid var(--br)', background: '#fff', borderRadius: 999, padding: '10px 16px', fontWeight: 800, color: 'var(--mu)', cursor: 'pointer' }}>Close</button>
+          </div>
+        </div>
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ padding: 14, borderRadius: 18, background: '#f8fbff', border: '1px solid var(--br)', color: 'var(--mu)', fontSize: 14, lineHeight: 1.6 }}>
+            This page covers the customer app experience including account access, browsing, ordering, delivery coordination, and support.
+          </div>
+          {sections.map(([head, body]) => (
+            <div key={head} style={{ padding: 16, borderRadius: 18, border: '1px solid var(--br)', background: '#fff' }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--tx)', marginBottom: 6 }}>{head}</div>
+              <div style={{ fontSize: 14, color: 'var(--mu)', lineHeight: 1.7 }}>{body}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // â”€â”€â”€ Auth Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   const[tab,setTab]=useState(initialTab)
   const[form,setForm]=useState({name:'',email:'',phone:'',password:'',totpCode:''})
   const[loading,setLoading]=useState(false)
   const[err,setErr]=useState('')
+  const[legalDoc,setLegalDoc]=useState('')
   const[otpStep,setOtpStep]=useState('form')
   const[otpDigits,setOtpDigits]=useState(['','','','','',''])
   const[otpSending,setOtpSending]=useState(false)
@@ -1891,10 +1941,6 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
     try{
       const r=await api.sendOtp(phone)
       setOtpStep('otp');startTimer()
-      if(r.data.dev_otp){
-        const digits=String(r.data.dev_otp).split('')
-        setOtpDigits(digits)
-      }
       setTimeout(()=>otpRefs[0].current?.focus(),100)
     }catch(e){setErr(e.response?.data?.detail||'OTP failed')}
     setOtpSending(false)
@@ -2028,12 +2074,12 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
               {tab==='login'?'Welcome back':'Create your account'}
             </div>
             <div className="auth-pane-sub">
-              {tab==='login'?'Continue your orders, wishlist, and checkout history.':'A richer full-screen sign-up flow with OTP verification and smoother onboarding.'}
+              {tab==='login'?'Continue your orders, wishlist, and checkout history.':'A richer full-screen sign-up flow with smoother onboarding.'}
             </div>
           </div>
           {tab==='register'&&(
             <div className="auth-register-strip">
-              {[['Fast setup','Phone verification, smooth onboarding, and saved details.'],['Style-first shopping','Wishlist, orders, and curated discovery in one account.'],['Premium access','Cleaner checkout flow and better local fashion browsing.']].map(([title,copy],i)=>(
+              {[['Fast setup','Smooth onboarding and saved details.'],['Style-first shopping','Wishlist, orders, and curated discovery in one account.'],['Premium access','Cleaner checkout flow and better local fashion browsing.']].map(([title,copy],i)=>(
                 <div key={title} className="auth-register-card" style={{animationDelay:`${i*0.06}s`}}>
                   <strong>{title}</strong>
                   <span>{copy}</span>
@@ -2049,7 +2095,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
           </div>
 
           {/* OTP verification step */}
-          {tab==='register'&&otpStep==='otp'?(
+          {false && tab==='register'&&otpStep==='otp'?(
             <div className="auth-scroll-panel" style={{animation:'slideRight .3s ease'}}>
               <div style={{textAlign:'center',padding:'20px',background:'linear-gradient(135deg,var(--orl),#fffbeb)',borderRadius:'var(--r12)',border:'2px solid var(--orm)',marginBottom:20}}>
                 <div style={{width:56,height:56,borderRadius:14,background:'var(--orl)',border:'2px solid var(--orm)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px'}}><svg width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='var(--ord)' strokeWidth='2' strokeLinecap='round'><rect x='5' y='2' width='14' height='20' rx='2' ry='2'/><line x1='12' y1='18' x2='12.01' y2='18'/></svg></div>
@@ -2104,7 +2150,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
                 <label>Email Address *</label>
               </div>
               <div className="auth-floating-label" style={{position:'relative'}}>
-                <input type={showPass?'text':'password'} placeholder=" " value={form.password} onChange={s('password')} onKeyDown={e=>e.key==='Enter'&&(tab==='login'?submit():sendOtp())}/>
+                <input type={showPass?'text':'password'} placeholder=" " value={form.password} onChange={s('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/>
                 <label>Password *</label>
                 <button onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'var(--mu)'}}>
                   {showPass?'Hide':'Show'}
@@ -2129,18 +2175,21 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
 
               {err&&<div style={{color:'var(--rd)',fontSize:12,padding:'9px 13px',background:'var(--rdl)',borderRadius:'var(--r8)',marginTop:4}}>{err}</div>}
 
-              <button className="auth-submit-btn" style={{marginTop:12}} onClick={tab==='login'?submit:sendOtp} disabled={loading||otpSending}>
+              <button className="auth-submit-btn" style={{marginTop:12}} onClick={submit} disabled={loading||otpSending}>
                 {loading||otpSending?(
                   <span style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
                     <span style={{width:18,height:18,border:'2.5px solid rgba(255,255,255,.4)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin 1s linear infinite',display:'inline-block'}}/>
-                    {otpSending?'Sending OTP...':'Signing in...'}
+                    {otpSending?'Please wait...':'Signing in...'}
                   </span>
-                ):tab==='login'?'Sign In':'Send OTP'}
+                ):tab==='login'?'Sign In':'Create Account'}
               </button>
 
               {tab==='register'&&(
-                <div style={{marginTop:10,fontSize:12,color:'var(--mu)',textAlign:'center'}}>
-                  By registering you agree to our Terms of Service & Privacy Policy
+                <div style={{marginTop:10,fontSize:12,color:'var(--mu)',textAlign:'center',lineHeight:1.7}}>
+                  By registering you agree to our{' '}
+                  <button className="auth-text-btn" onClick={()=>setLegalDoc('terms')}>Terms of Service</button>
+                  {' '}and{' '}
+                  <button className="auth-text-btn" onClick={()=>setLegalDoc('privacy')}>Privacy Policy</button>
                 </div>
               )}
 
@@ -3051,6 +3100,7 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
           />
         )}
       </div>
+      {legalDoc && <LegalModal type={legalDoc} onClose={()=>setLegalDoc('')} />}
     </div>
   )
 }
@@ -3325,15 +3375,12 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
     // Load shop if not passed as prop
     if(!shopProp&&product.shopId){
       api.getShops({}).then(r=>{
-        const found=(r.data||[]).find(s=>s.id===product.shopId) || DEMO_SHOPS.find(s=>s.id===product.shopId)
+        const found=(r.data||[]).find(s=>s.id===product.shopId)
         if(found)setShop(found)
-      }).catch(()=>{
-        const fallbackShop=DEMO_SHOPS.find(s=>s.id===product.shopId)
-        if(fallbackShop)setShop(fallbackShop)
-      })
+      }).catch(()=>{})
     }
     api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius}).then(r=>{
-      const source=(Array.isArray(r.data)&&r.data.length?r.data:buildDemoCatalog(userLoc).products)
+      const source=Array.isArray(r.data) ? r.data : []
       const ranked=source
         .filter(p=>p.id!==product.id)
         .map(p=>({
@@ -3349,7 +3396,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
         .slice(0,12)
       setRelatedProducts(ranked)
     }).catch(()=>{
-      const ranked=buildDemoCatalog(userLoc).products
+      const ranked=[]
         .filter(p=>p.id!==product.id)
         .map(p=>({
           ...p,
@@ -3931,15 +3978,12 @@ function ShopDetail({shop:initShop,cart,onCartUpdate,onBack,user,onProductClick,
   const shopDistanceKm=getShopDistanceKm(shop,userLoc)
 
   useEffect(()=>{
-    const demoProducts=DEMO_PRODUCTS
-      .filter(p=>p.shopId===initShop.id)
-      .map(p=>({...p,shopName:initShop.name,shopVerified:initShop.isVerified,shopLat:initShop.lat,shopLng:initShop.lng,distanceKm:initShop.distanceKm}))
     api.getProducts({shopId:initShop.id})
       .then(r=>{
-        const source=Array.isArray(r.data)&&r.data.length?r.data:demoProducts
+        const source=Array.isArray(r.data) ? r.data : []
         setProducts(source.map(p=>({...p,shopName:initShop.name,shopVerified:initShop.isVerified,shopLat:p.shopLat ?? initShop.lat,shopLng:p.shopLng ?? initShop.lng,distanceKm:typeof p.distanceKm==='number'?p.distanceKm:initShop.distanceKm})))
       })
-      .catch(()=>setProducts(demoProducts))
+      .catch(()=>setProducts([]))
       .finally(()=>setLoading(false))
   },[initShop.id])
 
@@ -4674,10 +4718,10 @@ function SearchPagePremium(props){
   const getNearbyCatalog=useCallback(async()=>{
     try{
       const all=await api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius})
-      const data=Array.isArray(all.data)&&all.data.length ? all.data : buildDemoCatalog(userLoc).products
+      const data=Array.isArray(all.data) ? all.data : []
       return applySearchFilters(data)
     }catch(e){
-      return applySearchFilters(buildDemoCatalog(userLoc).products)
+      return applySearchFilters([])
     }
   },[applySearchFilters,userLoc?.lat,userLoc?.lng,radius])
 
@@ -5170,16 +5214,15 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
   useEffect(()=>{
     const load=async()=>{
       setLoading(true)
-      const demoCatalog = buildDemoCatalog(userLoc)
       try{
         const[sr,pr]=await Promise.all([
           api.getShops({lat:userLoc?.lat,lng:userLoc?.lng,radius}),
           api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius})
         ])
-        const shopsData=Array.isArray(sr.data)&&sr.data.length?sr.data:demoCatalog.shops
-        const sourceProducts=Array.isArray(pr.data)&&pr.data.length?pr.data:demoCatalog.products
+        const shopsData=Array.isArray(sr.data)?sr.data:[]
+        const sourceProducts=Array.isArray(pr.data)?pr.data:[]
         const prods=sourceProducts.map(p=>{
-          const linkedShop=shopsData.find(s=>s.id===p.shopId) || demoCatalog.shops.find(s=>s.id===p.shopId)
+          const linkedShop=shopsData.find(s=>s.id===p.shopId)
           return {
             ...p,
             shopName: linkedShop?.name || p.shopName,
@@ -5200,16 +5243,8 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
         setShops(inRangeShops)
         setProducts(inRangeProducts)
       }catch(e){
-        const sortedDemoShops = sortShopsByLocation(demoCatalog.shops,userLoc)
-        const sortedDemoProducts = sortProductsByLocation(demoCatalog.products,userLoc)
-        const inRangeShops = sortedDemoShops.filter(s=>{
-          const km = getShopDistanceKm(s,userLoc)
-          if(km == null) return userLoc?.lat == null || userLoc?.lng == null
-          return km <= rangeLimit
-        })
-        const inRangeProducts = sortedDemoProducts.filter(p=>canOrderProduct(p,userLoc,rangeLimit))
-        setShops(inRangeShops)
-        setProducts(inRangeProducts)
+        setShops([])
+        setProducts([])
       }
       setLoading(false)
     }
@@ -5832,7 +5867,7 @@ export default function App(){
         let localHints = []
         try{
           const local = await api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius})
-          const localList = Array.isArray(local?.data) ? local.data : buildDemoCatalog(userLoc).products
+          const localList = Array.isArray(local?.data) ? local.data : []
           localHints = localList
             .map(item=>({
               name:item?.name || '',
@@ -6050,8 +6085,8 @@ export default function App(){
       </main>
 
       {/* Bottom nav (mobile) */}
-      {page!=='shop'&&page!=='product'&&<nav style={{display:'none',position:'fixed',bottom:0,left:0,right:0,background:'rgba(255,255,255,.98)',borderTop:'1px solid var(--br)',zIndex:showCart?360:300,padding:'7px 0 calc(env(safe-area-inset-bottom,0px) + 7px)',minHeight:72,boxShadow:'0 -12px 28px rgba(56,73,89,.08)',backdropFilter:'blur(16px)',transform:'translateZ(0)'}} id="bottom-nav">
-        <div style={{display:'flex',justifyContent:'space-around',alignItems:'stretch'}}>
+      {page!=='shop'&&page!=='product'&&<nav style={{display:'none',position:'fixed',bottom:0,left:0,right:0,background:'rgba(255,255,255,.98)',borderTop:'1px solid var(--br)',zIndex:showCart?360:300,padding:'6px max(6px, env(safe-area-inset-left, 0px)) calc(env(safe-area-inset-bottom,0px) + 6px) max(6px, env(safe-area-inset-right, 0px))',minHeight:66,boxShadow:'0 -12px 28px rgba(56,73,89,.08)',backdropFilter:'blur(16px)',transform:'translateZ(0)'}} id="bottom-nav">
+        <div style={{display:'grid',gridTemplateColumns:`repeat(${NAV_ITEMS.length}, minmax(0, 1fr))`,alignItems:'stretch',gap:2,maxWidth:520,margin:'0 auto'}}>
           {NAV_ITEMS.map(n=>(
             <button key={n.id} onClick={()=>{
               if(n.id!=='cart') setShowCart(false)
@@ -6065,9 +6100,9 @@ export default function App(){
               if(n.id==='cart'){setShowCart(true);return}
               setPage(n.id)
             }}
-              style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:3,padding:'5px 8px',minWidth:62,cursor:'pointer',color:activeNavId===n.id?'var(--or)':'#5b7994',transition:'.15s',border:'none',background:'transparent'}}>
-              <span style={{fontSize:22,position:'relative',lineHeight:1}}>{n.icon}{n.id==='wishlist'&&wishlistIds.length>0&&<span className="nav-badge">{wishlistIds.length}</span>}</span>
-              <span style={{fontSize:11,fontWeight:800,lineHeight:1.15,whiteSpace:'nowrap',letterSpacing:'.1px'}}>{n.label}</span>
+              style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,padding:'4px 2px',minWidth:0,width:'100%',cursor:'pointer',color:activeNavId===n.id?'var(--or)':'#5b7994',transition:'.15s',border:'none',background:activeNavId===n.id?'rgba(74,168,255,.08)':'transparent',borderRadius:14}}>
+              <span style={{fontSize:20,position:'relative',lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center'}}>{n.icon}{n.id==='wishlist'&&wishlistIds.length>0&&<span className="nav-badge">{wishlistIds.length}</span>}</span>
+              <span style={{fontSize:10,fontWeight:900,lineHeight:1.1,whiteSpace:'nowrap',letterSpacing:'.08px',maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis'}}>{n.label}</span>
             </button>
           ))}
         </div>

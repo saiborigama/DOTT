@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,13 +29,19 @@ class Settings(BaseSettings):
         "http://localhost:3004",
         "http://localhost:5173",
     ]
-    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_image_model: str = "gpt-5"
     image_cleanup_provider: str = "auto"
     remove_bg_api_key: str = ""
     firebase_service_account_json: str = ""
+    otp_sms_provider: str = "mock"
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+    twilio_messaging_service_sid: str = ""
+    twilio_default_country_code: str = "+91"
 
     @field_validator("public_base_url")
     @classmethod
@@ -47,12 +53,26 @@ class Settings(BaseSettings):
     def normalize_openai_base_url(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("otp_sms_provider")
+    @classmethod
+    def normalize_otp_provider(cls, value: str) -> str:
+        return (value or "mock").strip().lower()
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @model_validator(mode="after")
+    def validate_production_security(self):
+        public_url = (self.public_base_url or "").lower()
+        local_hosts = ("localhost", "127.0.0.1")
+        is_local = any(host in public_url for host in local_hosts)
+        if not is_local and self.secret_key == "change-me-before-production":
+            raise ValueError("Set a strong SECRET_KEY in backend/.env before using a non-local public URL.")
+        return self
 
 
 settings = Settings()

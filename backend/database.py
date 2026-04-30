@@ -1,7 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Enum, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from datetime import datetime
+from sqlalchemy.orm import sessionmaker, relationship, declarative_base
+from datetime import datetime, UTC
 import enum
 from config import settings
 
@@ -12,6 +11,9 @@ if DATABASE_URL.startswith("sqlite"):
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+def utc_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 def get_db():
     db = SessionLocal()
@@ -55,7 +57,7 @@ class User(Base):
     is_online  = Column(Boolean, default=False)
     is_blocked = Column(Boolean, default=False)
     is_verified= Column(Boolean, default=False)   # OTP verified
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     # Payment details
     bank_account   = Column(String, nullable=True)   # account number
     bank_ifsc      = Column(String, nullable=True)
@@ -78,7 +80,7 @@ class OTPStore(Base):
     otp        = Column(String, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     used       = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 class Shop(Base):
     __tablename__ = "shops"
@@ -109,7 +111,7 @@ class Shop(Base):
     return_policy_note = Column(Text, default="")
     whatsapp_mode      = Column(Boolean, default=False)
     whatsapp_phone     = Column(String)
-    created_at         = Column(DateTime, default=datetime.utcnow)
+    created_at         = Column(DateTime, default=utc_now)
     owner    = relationship("User", foreign_keys=[owner_id])
     products = relationship("Product", back_populates="shop")
 
@@ -146,7 +148,7 @@ class Product(Base):
     has_sizes   = Column(Boolean, default=False)
     is_active   = Column(Boolean, default=True)
     is_veg      = Column(Boolean, default=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    created_at  = Column(DateTime, default=utc_now)
     shop    = relationship("Shop", back_populates="products")
     reviews = relationship("Review", back_populates="product")
 
@@ -195,7 +197,7 @@ class Order(Base):
     pickup_otp_used  = Column(Boolean, default=False)
     pickup_otp_generated_at = Column(DateTime)
     pickup_otp_verified_at = Column(DateTime)
-    placed_at        = Column(DateTime, default=datetime.utcnow)
+    placed_at        = Column(DateTime, default=utc_now)
     confirmed_at     = Column(DateTime)
     delivered_at     = Column(DateTime)
     is_reviewed      = Column(Boolean, default=False)
@@ -226,7 +228,7 @@ class Review(Base):
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     rating      = Column(Integer, nullable=False)
     comment     = Column(Text)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    created_at  = Column(DateTime, default=utc_now)
     product  = relationship("Product", back_populates="reviews")
     customer = relationship("User", foreign_keys=[customer_id])
 
@@ -251,8 +253,8 @@ class ReturnRequest(Base):
     processed_at = Column(DateTime)
     status      = Column(Enum(ReturnStatusEnum), default=ReturnStatusEnum.REQUESTED)
     vendor_note = Column(Text)
-    created_at  = Column(DateTime, default=datetime.utcnow)
-    updated_at  = Column(DateTime, default=datetime.utcnow)
+    created_at  = Column(DateTime, default=utc_now)
+    updated_at  = Column(DateTime, default=utc_now)
     order    = relationship("Order", back_populates="return_request")
     customer = relationship("User", foreign_keys=[customer_id])
     shop     = relationship("Shop")
@@ -271,7 +273,7 @@ class Wishlist(Base):
     id         = Column(Integer, primary_key=True, index=True)
     user_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     user    = relationship("User")
     product = relationship("Product")
 
@@ -283,7 +285,7 @@ class Referral(Base):
     code          = Column(String, unique=True, nullable=False, index=True)
     is_used       = Column(Boolean, default=False)
     reward_points = Column(Integer, default=0)
-    created_at    = Column(DateTime, default=datetime.utcnow)
+    created_at    = Column(DateTime, default=utc_now)
     referrer  = relationship("User", foreign_keys=[referrer_id])
     referred  = relationship("User", foreign_keys=[referred_id])
 
@@ -299,7 +301,7 @@ class VerifiedSeller(Base):
     __tablename__ = "verified_sellers"
     id         = Column(Integer, primary_key=True, index=True)
     shop_id    = Column(Integer, ForeignKey("shops.id"), nullable=False, unique=True)
-    verified_at = Column(DateTime, default=datetime.utcnow)
+    verified_at = Column(DateTime, default=utc_now)
     badge_type  = Column(String, default="verified")  # verified / top_seller / trusted
     shop        = relationship("Shop")
 
@@ -315,7 +317,7 @@ class PromoCode(Base):
     is_active   = Column(Boolean, default=True)
     expires_at  = Column(DateTime, nullable=True)
     created_by  = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    created_at  = Column(DateTime, default=utc_now)
     creator     = relationship("User")
 
 class SavedAddress(Base):
@@ -327,7 +329,7 @@ class SavedAddress(Base):
     lat        = Column(Float)
     lng        = Column(Float)
     is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     user       = relationship("User")
 
 class DeliveryOTP(Base):
@@ -336,7 +338,7 @@ class DeliveryOTP(Base):
     order_id   = Column(Integer, ForeignKey("orders.id"), nullable=False, unique=True)
     otp        = Column(String, nullable=False)
     is_used    = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     order      = relationship("Order")
 
 class RiderRating(Base):
@@ -346,7 +348,7 @@ class RiderRating(Base):
     rider_id   = Column(Integer, ForeignKey("users.id"), nullable=False)
     customer_id= Column(Integer, ForeignKey("users.id"), nullable=False)
     rating     = Column(Integer, nullable=False)    # 1-5
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
     rider      = relationship("User", foreign_keys=[rider_id])
     customer   = relationship("User", foreign_keys=[customer_id])
 
@@ -361,6 +363,9 @@ class SettlementInvoice(Base):
     cycle_key         = Column(String, nullable=False, index=True)
     total_orders      = Column(Integer, default=0)
     total_sales       = Column(Float, default=0.0)
+    product_value     = Column(Float, default=0.0)
+    delivery_collected = Column(Float, default=0.0)
+    rider_earning_amount = Column(Float, default=0.0)
     commission_pct    = Column(Float, default=0.0)
     commission_amount = Column(Float, default=0.0)
     gross_earnings    = Column(Float, default=0.0)
@@ -369,8 +374,9 @@ class SettlementInvoice(Base):
     pending_amount    = Column(Float, default=0.0)
     status            = Column(String, default="PENDING")  # PENDING / PARTIAL / PAID
     order_ids_json    = Column(Text, default="[]")
-    created_at        = Column(DateTime, default=datetime.utcnow)
-    updated_at        = Column(DateTime, default=datetime.utcnow)
+    payout_locked_at  = Column(DateTime, nullable=True)
+    created_at        = Column(DateTime, default=utc_now)
+    updated_at        = Column(DateTime, default=utc_now)
     user              = relationship("User", foreign_keys=[user_id])
     shop              = relationship("Shop", foreign_keys=[shop_id])
 
@@ -383,7 +389,9 @@ class SettlementPayment(Base):
     shop_id           = Column(Integer, ForeignKey("shops.id"), nullable=True, index=True)
     amount            = Column(Float, default=0.0)
     payment_status    = Column(String, default="PAID")
-    payment_date      = Column(DateTime, default=datetime.utcnow, index=True)
+    payment_method    = Column(String, default="UPI")
+    payment_reference = Column(String, default="")
+    payment_date      = Column(DateTime, default=utc_now, index=True)
     period_start      = Column(DateTime, nullable=True)
     period_end        = Column(DateTime, nullable=True)
     notes             = Column(Text, default="")

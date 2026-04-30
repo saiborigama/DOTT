@@ -173,7 +173,7 @@ function saveDemoVendorDb(db) {
 function getDemoAnalytics(db) {
   const delivered = db.orders.filter(o => o.status === 'DELIVERED')
   const active = db.orders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
-  const totalRevenue = delivered.reduce((sum, o) => sum + Number(o.total || 0), 0)
+  const totalRevenue = delivered.reduce((sum, o) => sum + Number(o.subtotal || o.total || 0), 0)
   return {
     today: { revenue: 2498, orders: 2 },
     week: { revenue: 6840, orders: 6 },
@@ -481,6 +481,7 @@ const CSS = `
   --shadow-lg:0 18px 48px rgba(42,116,189,.18);
   --radius:14px;--radius-sm:10px;--radius-lg:20px;
 }
+
 html{scroll-behavior:smooth}
 body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);color:var(--text);font-family:var(--body);overflow-x:hidden}
 ::-webkit-scrollbar{width:4px;height:4px}
@@ -506,11 +507,11 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
 .skeleton{background:linear-gradient(90deg,#ede9ff 25%,#ddd8ff 50%,#ede9ff 75%);background-size:600px 100%;animation:shimmer 1.6s infinite;border-radius:8px}
 
 /* ── AUTH PAGE ── */
-.auth-page{min-height:100vh;display:flex;background:#fff;position:relative;overflow:hidden}
+.auth-page{min-height:100vh;display:flex;align-items:stretch;justify-content:center;background:#fff;position:relative;overflow:hidden}
 .auth-visual{width:48%;background:linear-gradient(180deg,#89c9ff 0%,#4aa8ff 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;overflow:hidden;padding:48px}
 .auth-visual::before{content:'';position:absolute;inset:0;background-image:radial-gradient(circle at 20% 20%,rgba(255,255,255,.45) 0%,transparent 50%),radial-gradient(circle at 80% 80%,rgba(17,95,161,.22) 0%,transparent 50%);pointer-events:none}
 .auth-visual-dots{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(255,255,255,.3) 1px,transparent 1px);background-size:28px 28px;animation:bgScroll 8s linear infinite;pointer-events:none}
-.auth-form-side{width:52%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 56px;background:#fff;overflow-y:auto}
+.auth-form-side{width:52%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 56px;background:#fff;overflow-y:auto;min-height:100vh}
 .auth-form-wrap{width:100%;max-width:420px}
 .auth-card{width:100%;max-width:420px;background:#fff;border-radius:24px;padding:36px;box-shadow:0 24px 80px rgba(0,0,0,.14);animation:scaleIn .25s cubic-bezier(.22,1,.36,1)}
 .auth-tabs{display:flex;background:#eaf4ff;border-radius:12px;padding:4px;gap:4px;margin-bottom:24px}
@@ -673,6 +674,45 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
 .img-process-overlay{position:absolute;inset:0;background:rgba(0,0,0,.7);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;border-radius:var(--radius);color:#fff;font-family:var(--font);font-weight:700;font-size:13px}
 .img-compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
 .img-compare img{width:100%;height:110px;object-fit:contain;border-radius:10px;background:#f9fafb;border:1.5px solid var(--border)}
+.camera-modal{max-width:480px!important;max-height:92dvh!important;padding:0!important;overflow:hidden!important;display:flex;flex-direction:column}
+.camera-modal-body{padding:12px 14px 16px;overflow-y:auto}
+.camera-hero{background:linear-gradient(135deg,var(--primary),#8b5cf6);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.camera-hero-title{color:#fff;font-family:var(--font);font-weight:800;font-size:13px;display:flex;align-items:center;gap:8px}
+.camera-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.camera-summary-card{background:#fff;border-radius:10px;padding:8px 10px;border:1px solid rgba(96,165,250,.16)}
+.camera-summary-label{font-size:9px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em}
+.camera-summary-value{font-size:12px;font-weight:800;color:var(--text);margin-top:2px}
+.camera-actions{position:sticky;bottom:0;background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%,#fff 100%);padding-top:12px;margin-top:8px}
+.vendor-flow-modal{max-width:560px!important;max-height:92dvh!important;padding:18px 16px 16px!important;overflow-y:auto!important}
+.vendor-modal-subtitle{font-size:12px;color:var(--muted);margin-top:3px}
+.vendor-summary{margin-bottom:14px;padding:12px;border-radius:14px;border:1px solid rgba(96,165,250,.2);background:linear-gradient(180deg,#f8fbff,#fff)}
+.vendor-summary-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.vendor-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.vendor-summary-card{padding:10px 12px;border-radius:12px;background:#fff;border:1px solid rgba(96,165,250,.12)}
+.vendor-summary-label{font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase}
+.vendor-summary-value{font-size:13px;font-weight:800;color:var(--text);margin-top:3px}
+.vendor-step-pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.vendor-step-pill{padding:7px 11px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:11px;font-weight:800;cursor:pointer}
+.vendor-step-pill.active{border-color:rgba(37,99,235,.35);background:rgba(37,99,235,.08);color:#1d4ed8}
+.vendor-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .vendor-brand-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .vendor-inline-actions{display:flex;gap:8px;align-items:center}
+  .vendor-stock-stepper{display:flex;gap:8px;align-items:center}
+  .vendor-stock-stepper .input{flex:1;text-align:center}
+  .vendor-preset-swatches{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .vendor-preset-swatch{width:32px;height:32px;border-radius:50%;cursor:pointer;border:2px solid rgba(0,0,0,.12);flex-shrink:0;position:relative}
+  .vendor-preset-swatch.active{border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,.14)}
+  .vendor-sticky-actions{position:sticky;bottom:-16px;background:linear-gradient(180deg,rgba(255,255,255,0),#fff 18%,#fff 100%);padding-top:12px;margin-top:10px}
+  .vendor-sticky-actions .btn{min-height:44px}
+  .vendor-mini-note{font-size:12px;color:var(--muted);line-height:1.45}
+  .vendor-section-stack{display:flex;flex-direction:column;gap:12px}
+  .vendor-compact-block{padding:12px;border:1px solid rgba(96,165,250,.14);border-radius:14px;background:linear-gradient(180deg,#fbfdff,#fff)}
+  .vendor-color-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1.5px solid var(--border2);border-radius:12px;background:#fff}
+  .vendor-color-name{font-size:14px;font-weight:800;color:var(--text)}
+  .vendor-section-subhead{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
+  .vendor-size-chip-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .vendor-size-list{display:flex;flex-direction:column;gap:8px}
+  .vendor-size-item{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border-radius:12px;border:1px solid var(--border)}
 
 /* ── AI AUTOFILL ── */
 .ai-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:100px;background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;font-size:11px;font-weight:800;font-family:var(--font)}
@@ -714,10 +754,10 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
 .hub-count-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--primary-light);color:var(--primary-dark);font-size:11px;font-weight:800}
 @media(max-width:980px){
   .layout{display:block}
-  .auth-page{display:block}
+  .auth-page{display:flex;flex-direction:column;align-items:center;justify-content:center}
   .auth-visual,.auth-form-side{width:100%}
   .auth-visual{min-height:220px;padding:28px 20px}
-  .auth-form-side{padding:20px 14px 32px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)}
+  .auth-form-side{min-height:100vh;padding:20px 14px 32px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)}
   .auth-card{max-width:none;padding:24px 18px;border-radius:20px}
   .auth-tabs{margin-bottom:18px}
   .auth-location-card{padding:12px 14px}
@@ -751,6 +791,7 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
   .table-wrap{overflow-x:auto}
   .order-head,.page-header,.topbar{align-items:flex-start}
   .modal{padding:22px 18px}
+  .camera-summary-grid,.vendor-summary-grid,.vendor-field-grid{grid-template-columns:1fr}
   .prod-card .pc-actions{flex-direction:column}
   .prod-card .pc-actions .btn{width:100%}
   .table-head span,.table-row > *{flex:1 1 140px;min-width:0}
@@ -766,10 +807,26 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
   .topbar-actions{gap:8px}
   .topbar-actions > *{width:100%}
   .page-title{font-size:22px}
+  .overlay{padding:10px}
+  .modal{border-radius:18px;max-height:94dvh}
+  .camera-modal-body{padding:10px 12px 14px}
+  .camera-hero{padding:10px 12px}
+  .img-compare img{height:92px}
+  .vendor-flow-modal{padding:14px 12px 14px!important}
+  .vendor-inline-actions,.vendor-stock-stepper{flex-wrap:wrap}
+  .vendor-inline-actions > *,.vendor-stock-stepper > *{width:100%}
+  .vendor-stock-stepper button{width:100%}
+  .vendor-brand-chips{gap:5px}
+  .vendor-step-pills{gap:6px}
+  .vendor-summary-card{padding:10px}
+  .vendor-color-row{padding:10px}
+  .vendor-size-item{align-items:flex-start;flex-wrap:wrap}
+  .vendor-size-item > span:last-of-type{width:100%}
   .table-head{display:none}
   .table-row{padding:12px;gap:10px;border-radius:14px;background:var(--surface);margin-bottom:10px;border:1px solid var(--border2)}
   .table-row:last-child{margin-bottom:0}
-  .auth-form-side{padding:14px 12px 24px}
+  .auth-page{display:flex;align-items:center;justify-content:center}
+  .auth-form-side{min-height:100svh;padding:14px 12px 24px;justify-content:center}
   .auth-card{padding:22px 16px;border-radius:18px}
   .auth-location-card,.auth-tabs{gap:8px}
 }
@@ -780,6 +837,22 @@ const STATUS_COLOR = { PENDING: '#f59e0b', CONFIRMED: '#3b82f6', PACKING: '#8b5c
 const STATUS_LABEL = { PENDING: 'Pending', CONFIRMED: 'Confirmed', PACKING: 'Packing', PICKED_UP: 'Picked Up', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' }
 const PRODUCT_FORM_DRAFT_PREFIX = 'dott_vendor_product_form_draft_v1'
 const PRODUCT_CARD_MODE_KEY = 'dott_vendor_products_card_mode'
+function merchandiseTotal(order) {
+  const items = Array.isArray(order?.items) ? order.items : []
+  const fromItems = items.reduce((sum, item) => sum + (Number(item?.price || 0) * Number(item?.qty || 1)), 0)
+  if (fromItems > 0) return fromItems
+  const subtotal = Number(order?.subtotal || 0)
+  const total = Number(order?.total || 0)
+  const nonVendorCharges =
+    Number(order?.deliveryFee || 0) +
+    Number(order?.platformFee || 0) +
+    Number(order?.gstAmount || 0)
+  const adjustedTotal = Math.max(0, total - nonVendorCharges)
+  if (total > 0 && nonVendorCharges > 0 && (subtotal <= 0 || Math.abs(subtotal - total) < 0.01 || subtotal > total)) {
+    return adjustedTotal
+  }
+  return subtotal > 0 ? subtotal : adjustedTotal
+}
 
 /* ── ICONS ── */
 
@@ -841,6 +914,35 @@ const Icons = {
   Star: () => <svg viewBox="0 0 24 24" fill="#f59e0b" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
 }
 
+function formatVendorMoney(value) {
+  return `${String.fromCharCode(0x20B9)}${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+}
+
+function formatVendorDate(value) {
+  if (!value) return 'Not paid yet'
+  try {
+    return new Date(value).toLocaleString([], {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return 'Not available'
+  }
+}
+
+function formatVendorCycle(start, end) {
+  if (!start || !end) return 'Current cycle unavailable'
+  try {
+    const startText = new Date(start).toLocaleDateString([], { day: '2-digit', month: 'short' })
+    const endText = new Date(end).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })
+    return `${startText} - ${endText}`
+  } catch {
+    return 'Current cycle unavailable'
+  }
+}
 /* ── SMART IMAGE PROCESSOR (canvas-based) ── */
 async function processProductImage(file) {
   return new Promise((resolve, reject) => {
@@ -1249,6 +1351,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
   const fileRef = useRef(null)
 
   const [mode, setMode] = useState('camera')  // 'camera'|'preview'|'upload'
+  const [pickerMode, setPickerMode] = useState('gallery')
   const [capturedUrl, setCapturedUrl] = useState(null)
   const [processing, setProcessing] = useState(false)
   const [baseProcessedData, setBaseProcessedData] = useState(null)
@@ -1263,13 +1366,36 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
 
   const startCamera = async () => {
     try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setError('Camera is not supported on this phone. Use Upload Photo instead.')
+        setMode('upload')
+        return
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 1280, height: 720 } })
       streamRef.current = stream
       if (videoRef.current) videoRef.current.srcObject = stream
-    } catch (e) { setError('Camera not available.'); setMode('upload') }
+      setError('')
+    } catch (e) {
+      setError('Camera could not open. Use Upload Photo instead.')
+      setMode('upload')
+    }
   }
 
   const stopCamera = () => { streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null }
+
+  const openFilePicker = (nextMode = 'gallery') => {
+    setPickerMode(nextMode)
+    setError('')
+    setMode('upload')
+    setTimeout(() => fileRef.current?.click(), 0)
+  }
+
+  const retryCamera = async () => {
+    stopCamera()
+    setMode('camera')
+    setError('')
+    await startCamera()
+  }
 
   const capturePhoto = () => {
     const video = videoRef.current
@@ -1384,24 +1510,23 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
 
   return (
     <div className="overlay" style={{ zIndex: 500 }}>
-      <div className="modal" style={{ maxWidth: 520, padding: 0, overflow: 'hidden' }}>
-        {/* Header */}
-        <div style={{ background: 'linear-gradient(135deg,var(--primary),#a78bfa)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ color: '#fff', fontFamily: 'var(--font)', fontWeight: 800, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="modal camera-modal">
+        <div className="camera-hero">
+          <div className="camera-hero-title">
             <Icons.Camera /> Smart Product Camera
             <span style={{ background: 'rgba(255,255,255,.2)', borderRadius: 100, padding: '2px 6px', fontSize: 9, fontWeight: 700, letterSpacing: '.4px' }}>AI POWERED</span>
           </div>
           <button onClick={onClose} style={{ background: 'rgba(255,255,255,.2)', border: 'none', color: '#fff', borderRadius: 8, cursor: 'pointer', padding: '5px 7px', display: 'flex' }}><Icons.Close /></button>
         </div>
 
-          <div style={{ padding: 14 }}>
+          <div className="camera-modal-body">
           {/* Camera mode */}
           {mode === 'camera' && !error && (
             <div>
               <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: 12, background: '#000', maxHeight: 240, objectFit: 'cover', display: 'block' }} />
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-                <button className="btn btn-ghost" style={{ flex: 1, padding: '10px 12px' }} onClick={() => fileRef.current?.click()}>
-                  <Icons.Upload /> Gallery
+                <button className="btn btn-ghost" style={{ flex: 1, padding: '10px 12px' }} onClick={() => openFilePicker('gallery')}>
+                  <Icons.Upload /> Upload
                 </button>
                 <button className="btn btn-primary" style={{ flex: 2, padding: '10px 12px' }} onClick={capturePhoto}>
                   <Icons.Camera /> Capture
@@ -1428,10 +1553,10 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
                   </div>
                 </div>
                 <div style={{display:'flex',gap:10}}>
-                  <button className="btn btn-primary" style={{flex:1,padding:'10px 12px'}} onClick={() => fileRef.current?.click()}>
+                  <button className="btn btn-primary" style={{flex:1,padding:'10px 12px'}} onClick={() => openFilePicker('gallery')}>
                     <Icons.Upload /> Upload Photo
                   </button>
-                  <button className="btn btn-ghost" style={{flex:1,padding:'10px 12px'}} onClick={() => { setMode('camera'); setError(''); startCamera() }}>
+                  <button className="btn btn-ghost" style={{flex:1,padding:'10px 12px'}} onClick={retryCamera}>
                     <Icons.Camera /> Open Camera
                   </button>
                 </div>
@@ -1445,8 +1570,10 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}>
                 <div>
                   <div style={{fontSize:14,fontWeight:900,color:'var(--text)'}}>Product Preview</div>
-                  <div style={{fontSize:11,color:'var(--muted)'}}>
-                    {lastUploadName || 'Captured image'}
+                  <div style={{fontSize:11,color:'var(--muted)',lineHeight:1.4}}>
+                    <span style={{display:'inline-block',maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',verticalAlign:'bottom'}}>
+                      {lastUploadName || 'Captured image'}
+                    </span>
                     {aiResult ? ' ready for auto-fill.' : ' ready to use.'}
                     {error === 'Quick AI draft ready' ? ' A quick product draft was generated locally.' : ''}
                     {!aiResult && error ? ' You can continue and add details manually.' : ''}
@@ -1507,26 +1634,22 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
                     <span className="ai-badge">AI Detected</span>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>Confidence: {aiResult.confidence || 'medium'}</span>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <div className="camera-summary-grid">
                     {[
                       {k:'Product',  v:aiResult.name},
                       {k:'Category', v:aiResult.category},
                       {k:'Brand',    v:aiResult.brand},
                       {k:'Color',    v:aiResult.color},
-                      {k:'Material', v:aiResult.material},
-                      {k:'MRP',      v:aiResult.mrp ? '₹'+aiResult.mrp : null},
-                      {k:'Price',    v:aiResult.suggestedPrice ? '₹'+aiResult.suggestedPrice : null},
-                      {k:'Type',     v:aiResult.productType},
                     ].filter(({v}) => v).map(({k,v}) => (
-                      <div key={k} style={{ background: '#fff', borderRadius: 8, padding: '7px 10px', border: '1px solid rgba(108,71,255,.12)' }}>
-                        <div style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px' }}>{k}</div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginTop: 2 }}>{v}</div>
+                      <div key={k} className="camera-summary-card">
+                        <div className="camera-summary-label">{k}</div>
+                        <div className="camera-summary-value">{v}</div>
                       </div>
                     ))}
                   </div>
                   {aiResult.tags?.length > 0 && (
                     <div style={{ marginTop: 8, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                      {aiResult.tags.map(t => <span key={t} className="tag-chip">#{t}</span>)}
+                      {aiResult.tags.slice(0, 3).map(t => <span key={t} className="tag-chip">#{t}</span>)}
                     </div>
                   )}
                 </div>
@@ -1541,7 +1664,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
                 </div>
               )}
 
-              <div style={{position:'sticky',bottom:-2,background:'linear-gradient(180deg,rgba(255,255,255,0),#fff 28%)',paddingTop:14,marginTop:6}}>
+              <div className="camera-actions">
                 <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:8,textAlign:'center'}}>
                   {aiResult ? 'Use auto-fill to open the product form with AI-filled fields.' : 'Use this image to open the product form.'}
                 </div>
@@ -1563,7 +1686,7 @@ function CameraCapture({ onCapture, onAnalyze, onClose }) {
             </div>
           )}
 
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleFileUpload} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" accept="image/*" capture={pickerMode === 'camera' ? 'environment' : undefined} onChange={handleFileUpload} style={{ display: 'none' }} />
         </div>
       </div>
     </div>
@@ -1580,6 +1703,50 @@ function Toast({ msg, type, onClose }) {
 /* ══════════════════════════════════════════════════════════
    AUTH PAGE — full page with animated background
 ══════════════════════════════════════════════════════════ */
+function LegalModal({ type, onClose }) {
+  const isPrivacy = type === 'privacy'
+  const title = isPrivacy ? 'Privacy Policy' : 'Terms & Conditions'
+  const sections = isPrivacy
+    ? [
+        ['Business Details', 'Vendor information such as name, phone, email, shop location, products, and settlement data is used to operate your store on DOTT.'],
+        ['Operational Usage', 'We use vendor data to process orders, manage products, support customer service, and calculate delivery and settlement workflows.'],
+        ['Location And Store Data', 'Shop location is used to determine service area, nearby product visibility, and delivery support.'],
+        ['Security', 'Access to vendor account data should be restricted to approved admin and support workflows only.'],
+        ['Vendor Control', 'You can review and update your store details, product catalogue, and account information.'],
+      ]
+    : [
+        ['Store Usage', 'By using DOTT Vendor, you agree to provide accurate store and product information and use the platform lawfully.'],
+        ['Products And Pricing', 'You are responsible for your catalogue, stock, pricing, product details, and fulfillment readiness.'],
+        ['Orders And Fulfillment', 'Accepted orders should be prepared on time and handed over according to the DOTT delivery workflow.'],
+        ['Account Security', 'You are responsible for your sign-in credentials and activity performed from your store account.'],
+        ['Policy Updates', 'DOTT may update workflow, compliance, and operating rules as the marketplace grows.'],
+      ]
+
+  return (
+    <div className="overlay" style={{ zIndex: 900, padding: 16 }}>
+      <div className="modal" style={{ width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto', padding: 0, borderRadius: 24 }}>
+        <div style={{ padding: '20px 20px 14px', background: 'linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)', borderBottom: '1px solid var(--border2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '.08em' }}>DOTT Vendor Legal</div>
+              <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--text)', lineHeight: 1.1, marginTop: 4 }}>{title}</div>
+            </div>
+            <button onClick={onClose} style={{ border: '1.5px solid var(--border2)', background: '#fff', borderRadius: 999, padding: '10px 16px', fontWeight: 800, color: 'var(--muted)', cursor: 'pointer' }}>Close</button>
+          </div>
+        </div>
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {sections.map(([head, body]) => (
+            <div key={head} style={{ padding: 16, borderRadius: 18, border: '1px solid var(--border2)', background: '#fff' }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 6 }}>{head}</div>
+              <div style={{ fontSize: 14, color: 'var(--muted)', lineHeight: 1.7 }}>{body}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AuthPage({ onSuccess }) {
   const [tab, setTab] = useState('login')
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' })
@@ -1591,6 +1758,7 @@ function AuthPage({ onSuccess }) {
   const [otpValue, setOtpValue] = useState('')
   const [otpSending, setOtpSending] = useState(false)
   const [otpTimer, setOtpTimer] = useState(0)
+  const [legalDoc, setLegalDoc] = useState('')
   const timerRef = useRef(null)
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
 
@@ -1598,19 +1766,12 @@ function AuthPage({ onSuccess }) {
     setOtpTimer(60)
     timerRef.current = setInterval(() => setOtpTimer(t => { if(t<=1){clearInterval(timerRef.current);return 0} return t-1 }), 1000)
   }
-  const enterDemoStore = () => {
-    localStorage.setItem(DEMO_VENDOR_MODE_KEY, '1')
-    const db = getDemoVendorDb()
-    onSuccess(db.user, db.shop)
-  }
-
   const sendOtp = async () => {
     if (!form.phone || form.phone.replace(/\D/g,'').length !== 10) { setError('Enter a valid 10-digit phone number'); return }
     setOtpSending(true); setError('')
     try {
       const r = await api.sendOtp(form.phone.replace(/\D/g,''))
       setOtpStep('otp'); startTimer()
-      if (r.data.dev_otp) setOtpValue(r.data.dev_otp)  // auto-fill in dev
     } catch(e) { setError(e.response?.data?.detail || 'Failed to send OTP') }
     setOtpSending(false)
   }
@@ -1689,7 +1850,7 @@ function AuthPage({ onSuccess }) {
           </div>
 
           {/* OTP Step for registration */}
-          {tab==='register' && otpStep==='otp' ? (
+          {false && tab==='register' && otpStep==='otp' ? (
             <div style={{display:'flex',flexDirection:'column',gap:14}}>
               <div style={{textAlign:'center',padding:'16px',background:'var(--primary-light)',borderRadius:14,border:'1.5px solid var(--primary)'}}>
                 <div style={{width:52,height:52,borderRadius:12,background:'rgba(108,71,255,.15)',border:'2px solid rgba(108,71,255,.3)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 8px'}}><svg width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='#6c47ff' strokeWidth='2' strokeLinecap='round'><rect x='5' y='2' width='14' height='20' rx='2' ry='2'/><line x1='12' y1='18' x2='12.01' y2='18'/></svg></div>
@@ -1718,7 +1879,7 @@ function AuthPage({ onSuccess }) {
                 <div><label className="label">Phone Number *</label><input className="input" placeholder="10-digit mobile number" value={form.phone} onChange={set('phone')}/></div>
               </>}
               <div><label className="label">Email Address *</label><input className="input" type="email" placeholder="vendor@email.com" value={form.email} onChange={set('email')}/></div>
-              <div><label className="label">Password *</label><input className="input" type="password" placeholder="Enter your password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&(tab==='login'?submit():sendOtp())}/></div>
+              <div><label className="label">Password *</label><input className="input" type="password" placeholder="Enter your password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
               <div className="auth-location-card" onClick={getLoc} style={{borderColor:loc?'var(--green)':'var(--border)',background:loc?'#f0fdf4':'var(--bg)'}}>
                 <span style={{fontSize:22}}>{loc?'●':'○'}</span>
                 <div><div style={{fontWeight:700,fontSize:13}}>{loc?'Location captured':'Set shop location'}</div><div style={{color:'var(--muted)',fontSize:12}}>{loc?`${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`:'Used for delivery radius'}</div></div>
@@ -1726,18 +1887,28 @@ function AuthPage({ onSuccess }) {
               {error && <div style={{color:'#dc2626',fontSize:13,padding:'10px 14px',background:'#fef2f2',borderRadius:10,fontWeight:600,border:'1px solid #fecaca'}}>{error}</div>}
               {tab==='login'
                 ? <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={submit} disabled={loading}>{loading?'Signing in...':'→ Sign In'}</button>
-                : <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={sendOtp} disabled={otpSending}>{otpSending?'Sending OTP...':'→ Send OTP & Continue'}</button>}
+                : <button className="btn btn-primary" style={{width:'100%',padding:'13px',fontSize:15}} onClick={submit} disabled={loading}>{loading?'Creating store...':'Create Store'}</button>}
+              {tab==='register' && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.7 }}>
+                  By registering you agree to our{' '}
+                  <button type="button" className="auth-text-btn" onClick={() => setLegalDoc('terms')}>Terms & Conditions</button>
+                  {' '}and{' '}
+                  <button type="button" className="auth-text-btn" onClick={() => setLegalDoc('privacy')}>Privacy Policy</button>
+                </div>
+              )}
             </div>
           )}
         </div>
         </div>
       </div>
+      {legalDoc && <LegalModal type={legalDoc} onClose={() => setLegalDoc('')} />}
     </div>
   )
 }
 
 function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings }) {
   const [analytics, setAnalytics] = useState(null)
+  const [payoutData, setPayoutData] = useState(null)
   const [orders, setOrders] = useState([])
   const [allOrders, setAllOrders] = useState([])
   const [products, setProducts] = useState([])
@@ -1747,18 +1918,13 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
 
   useEffect(() => {
     api.analytics().then(r => setAnalytics(r.data)).catch(() => {})
+    api.vendorEarnings().then(r => setPayoutData(r.data)).catch(() => {})
     api.shopOrders({ status: 'PENDING' }).then(r => setOrders(r.data)).catch(() => {})
     api.shopOrders().then(r => setAllOrders(r.data)).catch(() => {})
     api.myProducts().then(r => setProducts(r.data)).catch(() => {})
     api.lowStock().then(r => setLowStock(r.data.items || [])).catch(() => {})
   }, [])
 
-  const stats = [
-    { label: "Today's Revenue", val: `₹${analytics?.today?.revenue || 0}`, sub: `${analytics?.today?.orders || 0} orders`, color: '#6c47ff', letter: 'T' },
-    { label: "This Month", val: `₹${analytics?.month?.revenue || 0}`, sub: `${analytics?.month?.orders || 0} orders`, color: '#0ea5e9', letter: 'M' },
-    { label: "All Time", val: `₹${analytics?.allTime?.revenue || 0}`, sub: `${analytics?.allTime?.orders || 0} orders`, color: '#22c55e', letter: 'A' },
-    { label: "Pending Returns", val: analytics?.pendingReturns ?? '—', sub: 'needs action', color: '#f97316', letter: 'R' },
-  ]
   const totalStock = products.reduce((sum, p) => sum + Number(p.stock || 0), 0)
   const activeProducts = products.filter(p => p.isActive).length
   const periodStart = Date.now() - (2 * 24 * 60 * 60 * 1000)
@@ -1768,11 +1934,23 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
     if (!stamp) return false
     return new Date(stamp).getTime() >= periodStart
   })
-  const grossLast2Days = deliveredLast2Days.reduce((sum, o) => sum + Number(o.total || 0), 0)
+  const grossLast2Days = deliveredLast2Days.reduce((sum, o) => sum + merchandiseTotal(o), 0)
   const platformFeeLast2Days = 0
   const netPayableLast2Days = grossLast2Days
+  const latestInvoice = payoutData?.invoices?.[0] || null
+  const latestPayout = payoutData?.paymentHistory?.[0] || null
+  const payoutHistory = Array.isArray(payoutData?.paymentHistory) ? payoutData.paymentHistory : []
+  const liveOrdersCount = allOrders.filter(o => ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY'].includes(String(o?.status || '').toUpperCase())).length
+  const endingOrdersCount = allOrders.filter(o => ['DELIVERED', 'CANCELLED', 'RETURN_REQUESTED', 'RETURN_PICKUP_SCHEDULED', 'RETURNED', 'REFUNDED'].includes(String(o?.status || '').toUpperCase())).length
+  const cycleOrderCount = latestInvoice?.totalOrders ?? deliveredLast2Days.length
+  const stats = [
+    { label: '2-Day Revenue', val: formatVendorMoney(latestInvoice?.productValue ?? grossLast2Days), sub: `${cycleOrderCount} delivered order${cycleOrderCount === 1 ? '' : 's'}`, color: '#6c47ff', letter: '2D' },
+    { label: '2-Day Orders', val: `${cycleOrderCount}`, sub: 'Current payout cycle count', color: '#0ea5e9', letter: 'OC' },
+    { label: 'Live Orders', val: `${liveOrdersCount}`, sub: liveOrdersCount > 0 ? 'Need active attention' : 'No live orders right now', color: '#22c55e', letter: 'L' },
+    { label: 'Ending Orders', val: `${endingOrdersCount}`, sub: 'Delivered, cancelled, or return flow', color: '#f97316', letter: 'E' },
+  ]
   const healthCards = [
-    {label:'Amount generated', value: `₹${analytics?.month?.revenue || 0}`, sub: `${analytics?.month?.orders || 0} orders generated this month`, color:'#16a34a'},
+    {label:'Vendor payout', value: formatVendorMoney(payoutData?.pendingAmount || grossLast2Days || 0), sub: `${cycleOrderCount} delivered orders in current payout cycle � Open Insights for payment history`, color:'#16a34a'},
     {label:'Pending orders', value: `${orders.length}`, sub: orders.length > 0 ? 'Orders need quick action' : 'No pending orders right now', color:'#f59e0b'},
     {label:'Stock left', value: `${totalStock}`, sub: lowStock.length > 0 ? `${lowStock.length} product${lowStock.length !== 1 ? 's' : ''} running low on stock` : 'All products have healthy stock', color:'#0ea5e9'},
     {label:'Active products', value: `${activeProducts}`, sub: shop?.isOpen ? 'Products visible in your live store' : 'Open shop to make products visible', color:'#4aa8ff'},
@@ -1793,7 +1971,7 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
       >
         <div>
           <div className="page-title" style={{ color: '#ffffff' }}>Dashboard</div>
-          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{shop?.name} · {shop?.category}</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{shop?.name} � {shop?.category}</div>
         </div>
         <div className="page-header-actions">
           <span
@@ -1804,7 +1982,7 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
               color: shop?.isOpen ? '#166534' : '#991b1b',
             }}
           >
-            {shop?.isOpen ? '● Open' : '● Closed'}
+            {shop?.isOpen ? 'Open' : 'Closed'}
           </span>
           {shop?.isSuspended && <span className="badge badge-danger">Suspended</span>}
         </div>
@@ -1849,7 +2027,7 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
             <div key={o.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border2)', gap: 12, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>#{o.orderCode} — {o.customer?.name}</div>
-                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>{o.items?.length} items · ₹{o.total} · {o.paymentMethod?.toUpperCase()}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>{o.items?.length} items · Product value ₹{Math.round(merchandiseTotal(o))} · {o.paymentMethod?.toUpperCase()}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4, lineHeight: 1.45 }}>
                   Customer: {o.customer?.phone || 'No phone'}<br />
                   Location: {o.deliveryAddress || 'No delivery address'}
@@ -1877,7 +2055,7 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
               onClick={() => {
                 if (label === 'Pending orders') { onOpenOrders?.(); return }
                 if (label === 'Active products' || label === 'Stock left') { onOpenProducts?.(); return }
-                if (label === 'Amount generated') { setFocusPanel('revenue'); return }
+                if (label === 'Vendor payout') { setFocusPanel('revenue'); return }
               }}
               style={{ padding: '14px', background: '#fff', borderRadius: 14, border: '1px solid var(--border2)', boxShadow:'0 6px 18px rgba(15,23,42,.04)', textAlign:'left', cursor:'pointer' }}
             >
@@ -1908,21 +2086,36 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:12}}>
             <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
               <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Deliveries</div>
-              <div style={{fontSize:24,fontWeight:900,color:'#0ea5e9'}}>{deliveredLast2Days.length}</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#0ea5e9'}}>{latestInvoice?.totalOrders ?? deliveredLast2Days.length}</div>
             </div>
             <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
-              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Generated Amount</div>
-              <div style={{fontSize:24,fontWeight:900,color:'#16a34a'}}>₹{Math.round(grossLast2Days)}</div>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Product Value</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#16a34a'}}>{formatVendorMoney(latestInvoice?.productValue ?? grossLast2Days)}</div>
             </div>
             <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
-              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Platform Fee</div>
-              <div style={{fontSize:24,fontWeight:900,color:'#16a34a'}}>₹0</div>
-              <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>No fee charged now</div>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Paid Already</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#2563eb'}}>{formatVendorMoney(latestInvoice?.paidAmount ?? payoutData?.paidAmount ?? 0)}</div>
+              <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>This stays visible even after pending becomes zero</div>
             </div>
             <div style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
-              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Vendor Payable</div>
-              <div style={{fontSize:24,fontWeight:900,color:'#0f766e'}}>₹{Math.round(netPayableLast2Days)}</div>
+              <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>Pending Payout</div>
+              <div style={{fontSize:24,fontWeight:900,color:'#0f766e'}}>{formatVendorMoney(latestInvoice?.pendingAmount ?? payoutData?.pendingAmount ?? netPayableLast2Days)}</div>
             </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10,marginBottom:12}}>
+            {[
+              ['Last payout', latestPayout ? formatVendorMoney(latestPayout.amount) : 'Not paid yet'],
+              ['Last paid date', formatVendorDate(latestPayout?.paymentDate)],
+              ['Cycle', formatVendorCycle(latestInvoice?.periodStart, latestInvoice?.periodEnd)],
+              ['Payment method', latestPayout?.paymentMethod || 'Pending'],
+              ['Reference / UTR', latestPayout?.paymentReference || 'Will appear after admin pays'],
+              ['Remaining pending', formatVendorMoney(latestInvoice?.pendingAmount ?? payoutData?.pendingAmount ?? 0)],
+            ].map(([label, value]) => (
+              <div key={label} style={{padding:'12px',borderRadius:12,border:'1px solid var(--border2)',background:'#fff'}}>
+                <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase',marginBottom:6}}>{label}</div>
+                <div style={{fontSize:13,fontWeight:800,color:'var(--text2)',lineHeight:1.45}}>{value}</div>
+              </div>
+            ))}
           </div>
           <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:10}}>
             <button className="btn btn-primary" onClick={()=>onOpenEarnings?.()}><Icons.Analytics /> Open Earnings Tab</button>
@@ -1945,7 +2138,7 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
               <div key={o.id} style={{padding:'12px',borderRadius:10,border:'1px solid var(--border2)',background:'#fff'}}>
                 <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}>
                   <div>
-                    <div style={{fontWeight:800,fontSize:14}}>#{o.orderCode} - ₹{o.total}</div>
+                    <div style={{fontWeight:800,fontSize:14}}>#{o.orderCode} - Product value ₹{Math.round(merchandiseTotal(o))}</div>
                     <div style={{fontSize:12,color:'var(--muted)'}}>{o.customer?.name || 'Customer'} - {o.customer?.phone || 'No phone'}</div>
                   </div>
                   <button className="btn btn-ghost btn-sm" onClick={()=>setExpandedRevenueOrder(prev => prev === o.id ? null : o.id)}>
@@ -1962,12 +2155,46 @@ function Dashboard({ shop, user, onOpenProducts, onOpenOrders, onOpenEarnings })
                     ))}
                     <div style={{fontSize:12,color:'var(--muted)',marginTop:6}}>Delivery: {o.deliveryAddress || 'No address'}</div>
                     <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>
-                      Generated: ₹{Math.round(Number(o.total || 0))} · Vendor Payable: ₹{Math.round(Number(o.total || 0))}
+                      Product value: ₹{Math.round(merchandiseTotal(o))} · Vendor payout: ₹{Math.round(merchandiseTotal(o))}
                     </div>
                   </div>
                 )}
               </div>
             ))}
+          </div>
+          <div style={{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border2)'}}>
+            <div style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>Full payout history</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {payoutHistory.length === 0 && (
+                <div style={{padding:'12px',borderRadius:10,border:'1px solid var(--border2)',background:'#fff',fontSize:13,color:'var(--muted)'}}>
+                  No payout has been marked yet. Once admin pays, the date, amount, method, and UTR will appear here.
+                </div>
+              )}
+              {payoutHistory.map((payment) => (
+                <div key={payment.id} style={{padding:'12px',borderRadius:10,border:'1px solid var(--border2)',background:'#fff',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:10}}>
+                  <div>
+                    <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,textTransform:'uppercase'}}>Paid amount</div>
+                    <div style={{fontSize:15,fontWeight:900,color:'#166534'}}>{formatVendorMoney(payment.amount)}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,textTransform:'uppercase'}}>Paid on</div>
+                    <div style={{fontSize:13,fontWeight:700,color:'var(--text2)'}}>{formatVendorDate(payment.paymentDate)}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,textTransform:'uppercase'}}>Method</div>
+                    <div style={{fontSize:13,fontWeight:700,color:'var(--text2)'}}>{payment.paymentMethod || 'UPI'}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,textTransform:'uppercase'}}>Reference / UTR</div>
+                    <div style={{fontSize:13,fontWeight:700,color:'var(--text2)'}}>{payment.paymentReference || 'Not added'}</div>
+                  </div>
+                  <div style={{gridColumn:'1 / -1'}}>
+                    <div style={{fontSize:11,color:'var(--muted)',fontWeight:800,textTransform:'uppercase'}}>Cycle</div>
+                    <div style={{fontSize:13,fontWeight:700,color:'var(--text2)'}}>{formatVendorCycle(payment.periodStart, payment.periodEnd)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -1987,7 +2214,21 @@ function OrdersPage({ showToast }) {
   const [pickupOtpMap, setPickupOtpMap] = useState({})
 
   const load = useCallback(async () => {
-    try { const r = await api.shopOrders(); setOrders(r.data) } catch (e) {}
+    try {
+      const r = await api.shopOrders()
+      const incoming = Array.isArray(r?.data) ? r.data : []
+      const normalized = incoming.map((order, index) => ({
+        ...order,
+        id: order?.id ?? `fallback-order-${index}`,
+        status: order?.status || 'PENDING',
+        items: Array.isArray(order?.items) ? order.items : [],
+        customer: order?.customer || {},
+        rider: order?.rider || null,
+      }))
+      setOrders(normalized)
+    } catch (e) {
+      setOrders([])
+    }
     setLoading(false)
   }, [])
 
@@ -2045,9 +2286,10 @@ function OrdersPage({ showToast }) {
     { id: 'CANCELLED',  label: 'Cancelled', filter: o => o.status === 'CANCELLED' },
   ]
 
+  const safeOrders = Array.isArray(orders) ? orders : []
   const activeTab = FILTER_TABS.find(t => t.id === filter) || FILTER_TABS[0]
-  const filtered  = orders.filter(activeTab.filter)
-  const pendingCount = orders.filter(o => o.status === 'PENDING').length
+  const filtered  = safeOrders.filter(activeTab.filter)
+  const pendingCount = safeOrders.filter(o => o.status === 'PENDING').length
 
   const getOrderStep = (status) => {
     if (status === 'CONFIRMED') return 1
@@ -2066,7 +2308,7 @@ function OrdersPage({ showToast }) {
         <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22, letterSpacing: '-.5px' }}>Orders</div>
-            <div style={{ opacity: .65, fontSize: 13, marginTop: 3 }}>{orders.filter(o=>!['DELIVERED','CANCELLED'].includes(o.status)).length} active · auto-refreshes every 8s</div>
+            <div style={{ opacity: .65, fontSize: 13, marginTop: 3 }}>{safeOrders.filter(o=>!['DELIVERED','CANCELLED'].includes(o.status)).length} active · auto-refreshes every 8s</div>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {pendingCount > 0 && (
@@ -2082,7 +2324,7 @@ function OrdersPage({ showToast }) {
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
         {FILTER_TABS.map(tab => {
-          const cnt = orders.filter(tab.filter).length
+          const cnt = safeOrders.filter(tab.filter).length
           return (
             <button key={tab.id} onClick={() => setFilter(tab.id)}
               style={{ padding: '7px 14px', borderRadius: 100, border: `1.5px solid ${filter === tab.id ? 'var(--primary)' : 'var(--border)'}`,
@@ -2144,7 +2386,7 @@ function OrdersPage({ showToast }) {
                       </div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--primary)' }}>₹{o.total}</div>
+                      <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--primary)' }}>₹{Math.round(merchandiseTotal(o))}</div>
                       <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700 }}>{o.paymentMethod}</div>
                       {!['PENDING','CANCELLED','DELIVERED'].includes(o.status) && <div style={{marginTop:6}}><DeliveryCountdownSync placedAt={o.placedAt} deadline={o.deliveryDeadline||o.countdown?.deadline} serverNow={o.countdown?.serverNow} /></div>}
                     </div>
@@ -2288,7 +2530,7 @@ function OrdersPage({ showToast }) {
                         <span style={{ fontSize: 24 }}>✓</span>
                         <div>
                           <div style={{ fontWeight: 800, fontSize: 13, color: '#15803d' }}>Order Delivered!</div>
-                          <div style={{ fontSize: 12, color: '#4b7c5a' }}>₹{o.subtotal} will be credited after platform fee deduction</div>
+                          <div style={{ fontSize: 12, color: '#4b7c5a' }}>₹{Math.round(merchandiseTotal(o))} product value will be included in your payout</div>
                         </div>
                       </div>
                     )}
@@ -2410,7 +2652,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
   const [newColorName, setNewColorName] = useState('')
   const [newColorHex, setNewColorHex] = useState('#000000')
   const [activeColorIdx, setActiveColorIdx] = useState(null)
-  const [expandedSection, setExpandedSection] = useState('images')  // 'images'|'colors'|'sizes'|'details'
+  const [expandedSection, setExpandedSection] = useState('details')  // 'images'|'colors'|'sizes'|'details'
 
   const imgRefs = { back: useRef(null), side: useRef(null), tag: useRef(null) }
   const colorImgRef = useRef(null)
@@ -2628,14 +2870,17 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
   return (
     <>
     <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal" style={{maxWidth:660,maxHeight:'93vh',overflowY:'auto'}}>
+      <div className="modal vendor-flow-modal">
         {/* Header */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            <div style={{fontFamily:'var(--font)',fontWeight:900,fontSize:18,color:'var(--text)'}}>
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <div style={{fontFamily:'var(--font)',fontWeight:900,fontSize:18,color:'var(--text)'}}>
               {isEdit ? '️ Edit Product' : '+ Add Product'}
+              </div>
+              {aiApplied && <span className="ai-badge">AI</span>}
             </div>
-            {aiApplied && <span className="ai-badge">AI AI Filled</span>}
+            <div className="vendor-modal-subtitle">Simple listing flow: details, color, sizes, then save.</div>
           </div>
           <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)'}}><Icons.Close/></button>
         </div>
@@ -2659,60 +2904,45 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
         )}
 
         {!!Object.keys(form.imageAiMeta || {}).length && (
-          <div style={{marginBottom:14,padding:14,borderRadius:14,border:'1px solid var(--border)',background:'linear-gradient(180deg,#fff,rgba(96,165,250,.06))'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}>
+          <div className="vendor-summary">
+            <div className="vendor-summary-top">
               <div>
-                <div style={{fontSize:12,fontWeight:900,color:'var(--primary)',textTransform:'uppercase',letterSpacing:'.06em'}}>AI Listing Draft</div>
-                <div style={{fontSize:12,color:'var(--muted)'}}>Processed image, category, color, and fashion attributes are ready to review.</div>
+                <div style={{fontSize:12,fontWeight:900,color:'var(--primary)',textTransform:'uppercase',letterSpacing:'.06em'}}>AI draft ready</div>
+                <div className="vendor-mini-note">Only review category, color, brand, and sizes before saving.</div>
               </div>
               {form.processedImageUrl && <img src={form.processedImageUrl} alt="Processed" style={{width:56,height:56,borderRadius:12,objectFit:'cover',border:'1px solid var(--border)'}}/>}
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8}}>
+            <div className="vendor-summary-grid">
               {[
                 ['Category', form.category || '—'],
                 ['Color', form.color || '—'],
                 ['Brand', form.brand || '—'],
-                ['Gender', form.gender || '—'],
-                ['Sizes', (form.sizes || []).length ? `${form.sizes.length} selected` : '—'],
-                ['Price', form.price ? `Rs ${form.price}` : 'Manual'],
+                ['Sizes', form.sizes?.length ? `${form.sizes.length} selected` : 'Choose'],
               ].map(([label, value]) => (
-                <div key={label} style={{padding:'10px 12px',borderRadius:12,background:'rgba(255,255,255,.85)',border:'1px solid rgba(96,165,250,.14)'}}>
-                  <div style={{fontSize:10,fontWeight:800,color:'var(--muted)',textTransform:'uppercase'}}>{label}</div>
-                  <div style={{fontSize:13,fontWeight:800,color:'var(--text)',marginTop:3}}>{value}</div>
+                <div key={label} className="vendor-summary-card">
+                  <div className="vendor-summary-label">{label}</div>
+                  <div className="vendor-summary-value">{value}</div>
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        <div style={{marginBottom:14,padding:'12px 14px',borderRadius:12,border:'1px solid rgba(96,165,250,.22)',background:'linear-gradient(180deg,#f8fbff,#ffffff)'}}>
-          <div style={{fontSize:11,fontWeight:800,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.04em',marginBottom:8}}>Quick Steps</div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <div className="vendor-step-pills">
             {[
-              { key:'details', label:'1. Fill Details' },
-              { key:'colors', label:'2. Confirm Colors' },
-              { key:'sizes', label:'3. Pick Sizes' },
+              { key:'details', label:'1. Details' },
+              { key:'colors', label:'2. Colors' },
+              { key:'sizes', label:'3. Sizes' },
             ].map(step => (
               <button
                 key={step.key}
+                className={`vendor-step-pill ${expandedSection===step.key?'active':''}`}
                 type="button"
                 onClick={()=>setExpandedSection(step.key)}
-                style={{
-                  padding:'7px 12px',
-                  borderRadius:999,
-                  border:`1px solid ${expandedSection===step.key?'rgba(37,99,235,.35)':'var(--border)'}`,
-                  background:expandedSection===step.key?'rgba(37,99,235,.09)':'#fff',
-                  color:expandedSection===step.key?'#1d4ed8':'var(--muted)',
-                  fontSize:12,
-                  fontWeight:800,
-                  cursor:'pointer'
-                }}
               >
                 {step.label}
               </button>
             ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── SECTION 1: IMAGES ── */}
         <FormSection id="images" label="PHOTO Product Images" isOpen={expandedSection==="images"} onToggle={()=>setExpandedSection(s=>s==="images"?null:"images")}>
@@ -2768,18 +2998,16 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
         {/* ── SECTION 2: COLOR VARIANTS ── */}
         <FormSection id="colors" label={` Color Variants * ${form.colors.length>0?`(${form.colors.length})`:'(Required)'}`} isOpen={expandedSection==="colors"} onToggle={()=>setExpandedSection(s=>s==="colors"?null:"colors")}>
           {/* Preset color swatches */}
-          <div style={{marginBottom:14}}>
-            <div style={{fontSize:12,color:'var(--muted)',fontWeight:700,marginBottom:8}}>Quick-add preset colors</div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <div className="vendor-compact-block" style={{marginBottom:12}}>
+            <div className="vendor-section-subhead">Pick main product colors</div>
+            <div className="vendor-mini-note" style={{marginBottom:10}}>Tap one preset or add one custom color. Keep this short and simple.</div>
+            <div className="vendor-preset-swatches">
               {PRESET_COLORS.map(pc=>{
                 const already = form.colors.find(c=>c.name===pc.name)
                 return(
                   <div key={pc.name} onClick={()=>!already&&addPresetColor(pc)} title={pc.name}
-                    style={{width:28,height:28,borderRadius:'50%',background:pc.hex,cursor:already?'default':'pointer',
-                      border:`2.5px solid ${already?'var(--primary)':'rgba(0,0,0,.12)'}`,
-                      boxShadow:already?'0 0 0 2px var(--primary-light)':'none',
-                      transform:already?'scale(1.1)':'scale(1)',transition:'.15s',flexShrink:0,
-                      opacity:already?.5:1,position:'relative'}}>
+                    className={`vendor-preset-swatch ${already?'active':''}`}
+                    style={{background:pc.hex,opacity:already?.5:1}}>
                     {already&&<span style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#fff',fontWeight:900,textShadow:'0 1px 3px rgba(0,0,0,.5)'}}>✓</span>}
                   </div>
                 )
@@ -2788,28 +3016,28 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
           </div>
 
           {/* Custom color row */}
-          <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center'}}>
-            <input type="color" value={newColorHex} onChange={e=>setNewColorHex(e.target.value)} style={{width:40,height:38,borderRadius:8,border:'1.5px solid var(--border)',cursor:'pointer',padding:2}}/>
-            <input className="input" placeholder="Color name (e.g. Midnight Blue)" value={newColorName} onChange={e=>setNewColorName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addColor()} style={{flex:1}}/>
-            <button className="btn btn-primary btn-sm" onClick={addColor} style={{flexShrink:0}}>+ Add</button>
+          <div className="vendor-inline-actions" style={{marginBottom:14}}>
+            <input type="color" value={newColorHex} onChange={e=>setNewColorHex(e.target.value)} style={{width:44,height:40,borderRadius:10,border:'1.5px solid var(--border)',cursor:'pointer',padding:2}}/>
+            <input className="input" placeholder="Custom color name" value={newColorName} onChange={e=>setNewColorName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addColor()} style={{flex:1}}/>
+            <button className="btn btn-primary btn-sm" onClick={addColor} style={{flexShrink:0}}>Add color</button>
           </div>
 
           {/* Added color variants */}
           {form.colors.length > 0 && (
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div className="vendor-section-stack">
               {form.colors.map((c,idx)=>(
                 <div key={idx} style={{border:`2px solid ${activeColorIdx===idx?'var(--primary)':'var(--border2)'}`,borderRadius:12,padding:'10px 12px',background:activeColorIdx===idx?'var(--primary-light)':'var(--surface)',transition:'.15s',cursor:'pointer'}}
                   onClick={()=>setActiveColorIdx(activeColorIdx===idx?null:idx)}>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div className="vendor-color-row">
                     <div style={{width:26,height:26,borderRadius:'50%',background:c.hex,border:'2px solid rgba(0,0,0,.12)',flexShrink:0,boxShadow:`inset 0 1px 3px rgba(0,0,0,.2)`}}/>
-                    <span style={{fontWeight:700,fontSize:13,flex:1}}>{c.name}</span>
+                    <span className="vendor-color-name" style={{flex:1}}>{c.name}</span>
                     {c.imageUrl && <img src={c.imageUrl} alt="" style={{width:32,height:32,borderRadius:6,objectFit:'cover',border:'1px solid var(--border)'}}/>}
                     <button onClick={e=>{e.stopPropagation();removeColor(idx)}} style={{background:'none',border:'none',color:'#ef4444',cursor:'pointer',fontSize:16,padding:'0 4px'}}>×</button>
                   </div>
                   {activeColorIdx===idx&&(
                     <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid rgba(108,71,255,.15)'}}>
-                      <div style={{fontSize:11,color:'var(--muted)',fontWeight:700,marginBottom:8}}>Photo for this color</div>
-                      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                      <div className="vendor-section-subhead">Photo for this color</div>
+                      <div className="vendor-inline-actions">
                         {c.imageUrl
                           ?<img src={c.imageUrl} alt="" style={{width:60,height:60,borderRadius:10,objectFit:'cover',border:'1.5px solid var(--border)',flexShrink:0}}/>
                           :<div style={{width:60,height:60,borderRadius:10,border:'2px dashed var(--border)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}></div>}
@@ -2828,19 +3056,19 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
               ))}
             </div>
           )}
-          {form.colors.length===0&&<div style={{textAlign:'center',padding:'20px 0',color:'var(--muted)',fontSize:13}}>Add at least one color before saving this product.</div>}
+          {form.colors.length===0&&<div style={{textAlign:'center',padding:'14px 0',color:'var(--muted)',fontSize:13}}>Add at least one selling color before saving.</div>}
         </FormSection>
 
         {/* ── SECTION 3: PRODUCT DETAILS ── */}
         <FormSection id="details" label=" Product Details" isOpen={expandedSection==="details"} onToggle={()=>setExpandedSection(s=>s==="details"?null:"details")}>
-          <div style={{display:'flex',flexDirection:'column',gap:12}}>
-            <div className="grid-2">
+          <div className="vendor-section-stack">
+            <div className="vendor-field-grid">
               <div>
                 <label className="label">Name * {aiFields.name&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
                 <input className={`input ${aiFields.name?'ai-glow':''}`} placeholder="Product name" value={form.name} onChange={set('name')}/>
               </div>
             </div>
-            <div className="grid-2">
+            <div className="vendor-field-grid">
               <div>
                 <label className="label">Price (₹) *</label>
                 <input className="input" type="number" min="0" placeholder="Enter selling price manually" value={form.price} onChange={set('price')}/>
@@ -2853,7 +3081,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
                 </select>
               </div>
             </div>
-            <div className="grid-2">
+            <div className="vendor-field-grid">
               <div>
                 <label className="label">Color * {aiFields.color&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
                 <select className={`input ${aiFields.color?'ai-glow':''}`} value={form.color||''} onChange={e=>applyColorChange(e.target.value)}>
@@ -2863,7 +3091,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
               </div>
               <div />
             </div>
-            <div className="grid-2">
+            <div className="vendor-field-grid">
               <div>
                 <label className="label">Brand {aiFields.brand&&<span className="ai-badge" style={{padding:'1px 6px',fontSize:9}}>AI</span>}</label>
                 <select className={`input ${aiFields.brand?'ai-glow':''}`} value={form.brand||''} onChange={set('brand')}>
@@ -2900,7 +3128,7 @@ function ProductFormModal({ initial, onClose, onSave, saving }) {
                 </select>
               </div>
             </div>
-            <div className="grid-2">
+            <div className="vendor-field-grid">
               <div>
                 <label className="label">Stock</label>
                 <div style={{display:'flex',gap:6}}>
@@ -3613,6 +3841,10 @@ function EarningsPage({ showToast }) {
 
   if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}><div className="spinner"/></div>
 
+  const latestInvoice = data?.invoices?.[0] || null
+  const latestPayout = data?.paymentHistory?.[0] || null
+  const payoutHistory = Array.isArray(data?.paymentHistory) ? data.paymentHistory : []
+
   return (
     <div className="page fade-up">
       <div className="page-header">
@@ -3626,12 +3858,12 @@ function EarningsPage({ showToast }) {
       {data && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
           {[
-            ['Total Revenue', `₹${data.totalRevenue.toLocaleString('en-IN')}`, '#22c55e', ''],
-            ['Net Earnings', `₹${(vendorPlatformFeeActive ? data.netEarnings : data.totalRevenue).toLocaleString('en-IN')}`, '#6c47ff', ''],
-            ['This Month', `₹${data.thisMonth?.revenue?.toLocaleString('en-IN')||0}`, '#f59e0b', ''],
+            ['Product Value', formatVendorMoney(data.productValue ?? data.totalRevenue), '#22c55e', ''],
+            ['Paid Already', formatVendorMoney(data.paidAmount), '#2563eb', ''],
+            ['Pending Payout', formatVendorMoney(data.pendingAmount ?? data.pendingPayout), '#f59e0b', ''],
             ['Orders Delivered', data.totalOrders, '#0ea5e9', 'BOX'],
             ['Platform Fees', vendorPlatformFeeActive ? `₹${data.platformFees}` : '₹0', '#ef4444', '️'],
-            ['Pending Payout', `₹${data.pendingPayout}`, '#8b5cf6', '…'],
+            ['Last Payout', latestPayout ? formatVendorMoney(latestPayout.amount) : 'Not paid yet', '#8b5cf6', '…'],
           ].map(([label, val, color, icon]) => (
             <div key={label} style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: '18px 20px', boxShadow: 'var(--shadow-sm)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -3641,6 +3873,76 @@ function EarningsPage({ showToast }) {
               <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22, color }}>{val}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {data && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 24 }}>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 18, boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 6 }}>Cycle Start / End</div>
+            <div style={{ fontWeight: 800, color: 'var(--text2)', lineHeight: 1.5 }}>{formatVendorCycle(latestInvoice?.periodStart, latestInvoice?.periodEnd)}</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 18, boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 6 }}>Last Paid Date</div>
+            <div style={{ fontWeight: 800, color: 'var(--text2)', lineHeight: 1.5 }}>{formatVendorDate(latestPayout?.paymentDate)}</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 18, boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 6 }}>Payment Method</div>
+            <div style={{ fontWeight: 800, color: 'var(--text2)', lineHeight: 1.5 }}>{latestPayout?.paymentMethod || 'Pending'}</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 18, boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 6 }}>Reference / UTR</div>
+            <div style={{ fontWeight: 800, color: 'var(--text2)', lineHeight: 1.5 }}>{latestPayout?.paymentReference || 'Will appear after admin pays'}</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 18, boxShadow: 'var(--shadow-sm)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '.6px', marginBottom: 6 }}>Remaining Pending</div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 24, color: '#0f766e' }}>{formatVendorMoney(latestInvoice?.pendingAmount ?? data.pendingAmount)}</div>
+          </div>
+        </div>
+      )}
+
+      {data && (
+        <div style={{ background: '#fff', borderRadius: 14, border: '1px solid var(--border)', padding: 20, boxShadow: 'var(--shadow-sm)', marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, color: 'var(--text2)' }}>Full Payout History</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Every paid cycle stays visible here even after pending becomes zero.</div>
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--green2)', background: 'rgba(34,197,94,.08)', border: '1px solid rgba(34,197,94,.18)', padding: '6px 10px', borderRadius: 999 }}>
+              {payoutHistory.length} payment{payoutHistory.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {payoutHistory.length === 0 && (
+              <div style={{ borderRadius: 12, border: '1px solid var(--border2)', background: '#f8fbff', padding: 14, fontSize: 13, color: 'var(--muted)' }}>
+                No payouts have been marked yet. Once admin pays, the amount, date, method, and UTR will appear here.
+              </div>
+            )}
+            {payoutHistory.map((payment) => (
+              <div key={payment.id} style={{ borderRadius: 12, border: '1px solid var(--border2)', background: '#f8fbff', padding: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Paid Amount</div>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: '#16a34a', fontFamily: 'var(--font)' }}>{formatVendorMoney(payment.amount)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Paid On</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{formatVendorDate(payment.paymentDate)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Method</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{payment.paymentMethod || 'UPI'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Reference / UTR</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{payment.paymentReference || 'Not added'}</div>
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 800, marginBottom: 4 }}>Settlement Cycle</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{formatVendorCycle(payment.periodStart, payment.periodEnd)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

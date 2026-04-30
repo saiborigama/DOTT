@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from passlib.exc import MissingBackendError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -12,14 +13,23 @@ ALGORITHM = settings.jwt_algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 REFRESH_TOKEN_EXPIRE_DAYS = settings.refresh_token_expire_days
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+bcrypt_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    hashed_value = str(hashed or "")
+    if not hashed_value:
+        return False
+    try:
+        if hashed_value.startswith("$2"):
+            return bcrypt_context.verify(plain, hashed_value)
+        return pwd_context.verify(plain, hashed_value)
+    except MissingBackendError:
+        return False
 
 def create_access_token(user_id: int) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -29,11 +39,16 @@ def create_refresh_token(user_id: int) -> str:
     expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     return jwt.encode({"sub": str(user_id), "exp": expire, "type": "refresh"}, SECRET_KEY, algorithm=ALGORITHM)
 
-def decode_token(token: str) -> int:
+def decode_token(token: str, expected_type: str = "access") -> int:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = payload.get("type")
+        if expected_type and token_type != expected_type:
+            raise HTTPException(status_code=401, detail="Invalid token type")
         return int(payload["sub"])
-    except JWTError:
+    except HTTPException:
+        raise
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 def get_current_user(
@@ -42,7 +57,7 @@ def get_current_user(
 ) -> User:
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    user_id = decode_token(credentials.credentials)
+    user_id = decode_token(credentials.credentials, expected_type="access")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -57,7 +72,7 @@ def get_optional_user(
     if not credentials:
         return None
     try:
-        user_id = decode_token(credentials.credentials)
+        user_id = decode_token(credentials.credentials, expected_type="access")
         return db.query(User).filter(User.id == user_id).first()
-    except:
+    except Exception:
         return None

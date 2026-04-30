@@ -201,6 +201,66 @@ function DeliveryStepStrip({ status }) {
   )
 }
 
+function OtpActionModal({ open, mode, value, setValue, loading, onClose, onSubmit }) {
+  if (!open) return null
+  const title = mode === 'pickup' ? 'Confirm pickup with vendor OTP' : 'Confirm delivery with customer OTP'
+  const note = mode === 'pickup'
+    ? 'Enter the 6-digit pickup OTP shown in the vendor app.'
+    : 'Enter the 6-digit delivery OTP shown by the customer.'
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420, width: 'calc(100vw - 28px)', borderRadius: 24, padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22, color: 'var(--text2)', lineHeight: 1.1 }}>{title}</div>
+            <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 6, lineHeight: 1.45 }}>{note}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><Ic.Close width="16" height="16" /></button>
+        </div>
+
+        <div style={{ padding: '14px 16px', borderRadius: 18, background: 'linear-gradient(180deg,#f8fcff,#eef7ff)', border: '1px solid rgba(106,161,227,.18)', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>OTP Code</div>
+          <input
+            value={value}
+            onChange={e => setValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={6}
+            placeholder="------"
+            style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', fontSize: 28, letterSpacing: '8px', fontWeight: 900, color: 'var(--text2)', textAlign: 'center', fontFamily: 'var(--font)' }}
+          />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 10 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-green" disabled={loading || value.length !== 6} onClick={onSubmit}>
+            {loading ? 'Checking...' : mode === 'pickup' ? 'Verify Pickup OTP' : 'Confirm Delivery'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function formatRiderMoney(value) {
+  return `Rs ${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+}
+
+function formatRiderDate(value) {
+  if (!value) return 'Not settled yet'
+  try {
+    return new Date(value).toLocaleString([], {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return 'Not available'
+  }
+}
+
 function createDemoRiderDb() {
   const now = Date.now()
   const user = {
@@ -443,8 +503,8 @@ function openUpiPaymentLink(app, upiId, amount, note) {
 }
 
 const api = {
-  sendOtp: phone => isRiderDemoMode() ? demoResponse({ sent: true, phone, dev_otp: '123456' }) : ax.post('/otp/send', { phone }),
-  verifyOtp: (phone, otp) => isRiderDemoMode() ? demoResponse({ verified: true, phone, otp }) : ax.post('/otp/verify', { phone, otp }),
+  sendOtp: phone => ax.post('/otp/send', { phone }),
+  verifyOtp: (phone, otp) => ax.post('/otp/verify', { phone, otp }),
   updatePayment: d => {
     if (isRiderDemoMode()) {
       const db = getDemoRiderDb()
@@ -788,7 +848,7 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
   .card{padding:12px}
   .history-item{align-items:flex-start}
   .auth-side{display:none!important}
-  .auth-main{padding:20px 12px!important}
+  .auth-main{min-height:100svh!important;padding:20px 12px!important;align-items:center!important;justify-content:center!important}
   .auth-card{max-width:none!important;padding:22px 16px!important;border-radius:20px!important}
   .auth-toggle,.auth-loc-row,.mobile-stack{flex-direction:column!important}
   .mobile-stack > *{width:100%}
@@ -942,15 +1002,132 @@ function MapLocationModal({ currentLat, currentLng, onSave, onClose }) {
   )
 }
 
+function RiderNavigationModal({ order, riderLoc, mode, onModeChange, onClose }) {
+  if (!order) return null
+  const isShop = mode === 'shop'
+  const title = isShop ? 'Shop route' : 'Customer route'
+  const lat = isShop ? order?.shop?.lat : order?.deliveryLat
+  const lng = isShop ? order?.shop?.lng : order?.deliveryLng
+  const name = isShop ? (order?.shop?.name || 'Shop') : (order?.customer?.name || 'Customer')
+  const address = isShop ? (order?.shop?.address || 'Shop address not available') : (order?.deliveryAddress || 'Customer address not available')
+  const validDest = lat != null && lng != null
+  const source = riderLoc?.lat != null && riderLoc?.lng != null ? `${riderLoc.lat},${riderLoc.lng}` : ''
+  const dest = validDest ? `${lat},${lng}` : ''
+  const iframeSrc = validDest
+    ? (source
+        ? `https://www.google.com/maps?saddr=${encodeURIComponent(source)}&daddr=${encodeURIComponent(dest)}&output=embed`
+        : `https://www.google.com/maps?q=${encodeURIComponent(dest)}&output=embed`)
+    : ''
+  return (
+    <div className="map-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="map-modal" style={{ maxWidth: 520 }}>
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--text2)' }}>{title}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>#{order.orderCode} · {name}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><Ic.Close width="16" height="16" /></button>
+        </div>
+
+        <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className={mode === 'shop' ? 'btn btn-green btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => onModeChange('shop')} style={{ borderRadius: 999 }}>
+              Pickup Shop
+            </button>
+            <button className={mode === 'customer' ? 'btn btn-green btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => onModeChange('customer')} style={{ borderRadius: 999 }}>
+              Customer Drop
+            </button>
+          </div>
+
+          <div style={{ padding: '12px 14px', borderRadius: 14, background: '#f7fbff', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 6 }}>{isShop ? 'Pickup point' : 'Delivery point'}</div>
+            <div style={{ fontWeight: 800, color: 'var(--text2)', marginBottom: 4 }}>{name}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{address}</div>
+            {validDest && <div style={{ fontSize: 12, color: '#388bfd', fontWeight: 800, marginTop: 6 }}>{lat}, {lng}</div>}
+          </div>
+
+          {validDest ? (
+            <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid var(--border)', background: '#edf6ff' }}>
+              <iframe
+                title={`${title}-${order.orderCode}`}
+                src={iframeSrc}
+                style={{ width: '100%', height: 260, border: 'none' }}
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+            </div>
+          ) : (
+            <div style={{ padding: '14px', borderRadius: 14, background: 'rgba(248,81,73,.07)', border: '1px solid rgba(248,81,73,.2)', color: '#f85149', fontSize: 12, fontWeight: 700 }}>
+              No map coordinates are available for this stop yet.
+            </div>
+          )}
+
+          <div className="mobile-stack" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Close</button>
+            <div style={{ flex: 2, padding: '10px 12px', borderRadius: 12, background: '#eaf6ff', color: '#1769aa', fontSize: 12, fontWeight: 800, textAlign: 'center' }}>
+              Directions are shown inside DOTT Rider
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    AUTH PAGE â€” full page with animated background
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+function LegalModal({ type, onClose }) {
+  const isPrivacy = type === 'privacy'
+  const title = isPrivacy ? 'Privacy Policy' : 'Terms & Conditions'
+  const sections = isPrivacy
+    ? [
+        ['Rider Details', 'Rider account information, delivery activity, location, and settlement details are used to support delivery operations on DOTT.'],
+        ['Operational Usage', 'We use rider data to assign deliveries, calculate earnings, support COD settlement, and improve dispatch flow.'],
+        ['Location Access', 'Location is required for nearby order matching, delivery directions, and live rider workflow support.'],
+        ['Security', 'Rider account and route data should only be used for marketplace delivery operations and approved support workflows.'],
+        ['Your Controls', 'You can update rider details and request account support for profile corrections.'],
+      ]
+    : [
+        ['Using DOTT Rider', 'By using DOTT Rider, you agree to provide accurate account details and perform delivery activity lawfully and responsibly.'],
+        ['Order Handling', 'Accepted deliveries should be handled according to the pickup, OTP, cash collection, and delivery workflow of the platform.'],
+        ['Cash Settlement', 'COD collections and rider settlements must follow the platform settlement rules and reporting process.'],
+        ['Account Responsibility', 'You are responsible for your sign-in credentials and delivery activity performed from your rider account.'],
+        ['Policy Updates', 'DOTT may update rider workflow, dispatch rules, and compliance steps as the platform grows.'],
+      ]
+
+  return (
+    <div className="overlay" style={{ zIndex: 900, padding: 16 }}>
+      <div className="modal" style={{ width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto', padding: 0, borderRadius: 24 }}>
+        <div style={{ padding: '20px 20px 14px', background: 'linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--green2)', textTransform: 'uppercase', letterSpacing: '.08em' }}>DOTT Rider Legal</div>
+              <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--text2)', lineHeight: 1.1, marginTop: 4 }}>{title}</div>
+            </div>
+            <button onClick={onClose} style={{ border: '1.5px solid var(--border)', background: '#fff', borderRadius: 999, padding: '10px 16px', fontWeight: 800, color: 'var(--muted)', cursor: 'pointer' }}>Close</button>
+          </div>
+        </div>
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {sections.map(([head, body]) => (
+            <div key={head} style={{ padding: 16, borderRadius: 18, border: '1px solid var(--border)', background: '#fff' }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text2)', marginBottom: 6 }}>{head}</div>
+              <div style={{ fontSize: 14, color: 'var(--muted)', lineHeight: 1.7 }}>{body}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AuthPage({ onSuccess }) {
   const [tab, setTab] = useState('login')
   const [form, setForm] = useState({ name:'', email:'', phone:'', password:'' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [loc, setLoc] = useState(null)
+  const [legalDoc, setLegalDoc] = useState('')
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [otpStep, setOtpStep] = useState('form')
   const [otpValue, setOtpValue] = useState('')
@@ -958,11 +1135,6 @@ function AuthPage({ onSuccess }) {
   const [otpTimer, setOtpTimer] = useState(0)
   const timerRef = useRef(null)
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-  const enterDemoRider = () => {
-    localStorage.setItem(DEMO_RIDER_MODE_KEY, '1')
-    const db = getDemoRiderDb()
-    onSuccess(db.user)
-  }
 
   const startTimer = () => {
     setOtpTimer(60)
@@ -974,9 +1146,8 @@ function AuthPage({ onSuccess }) {
     if (phone.length !== 10) { setError('Enter valid 10-digit phone'); return }
     setOtpSending(true); setError('')
     try {
-      const r = await api.sendOtp(phone)
+      await api.sendOtp(phone)
       setOtpStep('otp'); startTimer()
-      if (r.data.dev_otp) setOtpValue(r.data.dev_otp)
     } catch(e) { setError(e.response?.data?.detail || 'Failed to send OTP') }
     setOtpSending(false)
   }
@@ -1027,7 +1198,7 @@ function AuthPage({ onSuccess }) {
           ))}
         </div>
       </div>
-      <div className="auth-main" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px 20px' }}>
+      <div className="auth-main" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px 20px',minHeight:'100vh' }}>
         <div className="auth-card" style={{ width:'100%',maxWidth:400,background:'var(--card)',borderRadius:24,padding:32,border:'1px solid var(--border)',boxShadow:'0 24px 64px rgba(42,116,189,.16)',animation:'slideUp .4s cubic-bezier(.22,1,.36,1)' }}>
           <div style={{ marginBottom:22 }}>
             <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:24,color:'var(--text2)' }}>{tab==='login'?'Welcome back':'Join as Rider'}</div>
@@ -1041,7 +1212,7 @@ function AuthPage({ onSuccess }) {
             ))}
           </div>
 
-          {tab==='register' && otpStep==='otp' ? (
+          {false && tab==='register' && otpStep==='otp' ? (
             <div style={{display:'flex',flexDirection:'column',gap:14}}>
               <div style={{textAlign:'center',padding:16,background:'rgba(63,185,80,.08)',borderRadius:14,border:'1px solid rgba(63,185,80,.2)'}}>
                 <div style={{width:44,height:44,borderRadius:12,background:'rgba(63,185,80,.1)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 8px'}}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3fb950" strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 014.72 12 19.79 19.79 0 011.61 3.38 2 2 0 013.6 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.91 8.9a16 16 0 006.07 6.07l.97-1.06a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg></div>
@@ -1068,7 +1239,7 @@ function AuthPage({ onSuccess }) {
                 <div><label className="label">Phone *</label><input className="input" placeholder="10-digit number" value={form.phone} onChange={set('phone')}/></div>
               </>}
               <div><label className="label">Email</label><input className="input" type="email" placeholder="rider@email.com" value={form.email} onChange={set('email')}/></div>
-              <div><label className="label">Password</label><input className="input" type="password" placeholder="Password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&(tab==='login'?submit():sendOtp())}/></div>
+              <div><label className="label">Password</label><input className="input" type="password" placeholder="Password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
               <div className="auth-loc-row" style={{display:'flex',gap:8}}>
                 <div onClick={getLoc} style={{flex:1,display:'flex',alignItems:'center',gap:8,padding:'11px 13px',borderRadius:12,border:`1.5px solid ${loc?'var(--green2)':'var(--border)'}`,background:loc?'rgba(63,185,80,.07)':'var(--surface)',cursor:'pointer',transition:'.2s'}}>
                   <span style={{fontSize:18}}>{loc?'OK':''}</span>
@@ -1082,11 +1253,20 @@ function AuthPage({ onSuccess }) {
               {error && <div style={{color:'#f85149',fontSize:13,padding:'10px 14px',background:'rgba(248,81,73,.07)',borderRadius:10,fontWeight:600}}>{error}</div>}
               {tab==='login'
                 ? <button className="btn btn-green" style={{width:'100%',padding:'13px',fontSize:14}} onClick={submit} disabled={loading}>{loading?'Signing in...':'Sign In'}</button>
-                : <button className="btn btn-green" style={{width:'100%',padding:'13px',fontSize:14}} onClick={sendOtp} disabled={otpSending}>{otpSending?'Sending OTP...':'Send OTP and Continue'}</button>}
+                : <button className="btn btn-green" style={{width:'100%',padding:'13px',fontSize:14}} onClick={submit} disabled={loading}>{loading?'Creating account...':'Join Rider'}</button>}
+              {tab==='register' && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.7 }}>
+                  By registering you agree to our{' '}
+                  <button type="button" style={{ background:'none', border:'none', color:'var(--green2)', fontWeight:800, cursor:'pointer', padding:0 }} onClick={() => setLegalDoc('terms')}>Terms & Conditions</button>
+                  {' '}and{' '}
+                  <button type="button" style={{ background:'none', border:'none', color:'var(--green2)', fontWeight:800, cursor:'pointer', padding:0 }} onClick={() => setLegalDoc('privacy')}>Privacy Policy</button>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
+      {legalDoc && <LegalModal type={legalDoc} onClose={() => setLegalDoc('')} />}
       {showMapPicker && <MapLocationModal currentLat={loc?.lat ?? getStoredRiderLocation()?.lat} currentLng={loc?.lng ?? getStoredRiderLocation()?.lng} onSave={(coords)=>{setLoc(coords); saveStoredRiderLocation(coords); setShowMapPicker(false)}} onClose={()=>setShowMapPicker(false)}/>}
     </div>
   )
@@ -1211,6 +1391,8 @@ function HomeTab({
   const monthEarn = earnings?.month?.earned || 0
   const pendingCod = Number(codSummary?.pendingAmount || 0)
   const company = codSummary?.companyAccount || {}
+  const paymentHistory = Array.isArray(codSummary?.paymentHistory) ? codSummary.paymentHistory : []
+  const lastSettlement = paymentHistory[0] || null
 
   const settleCod = async (method) => {
     if (!pendingCod) {
@@ -1273,16 +1455,29 @@ function HomeTab({
         <div className="cod-grid">
           <div className="cod-stat">
             <div className="cod-stat-label">Collected COD</div>
-            <div className="cod-stat-value">Rs {Number(codSummary?.totalCollected || 0).toFixed(0)}</div>
+            <div className="cod-stat-value">{formatRiderMoney(codSummary?.totalCollected || 0)}</div>
           </div>
           <div className="cod-stat">
             <div className="cod-stat-label">Settled</div>
-            <div className="cod-stat-value" style={{ color: '#22c55e' }}>Rs {Number(codSummary?.settledAmount || 0).toFixed(0)}</div>
+            <div className="cod-stat-value" style={{ color: '#22c55e' }}>{formatRiderMoney(codSummary?.settledAmount || 0)}</div>
           </div>
           <div className="cod-stat">
             <div className="cod-stat-label">Pending</div>
-            <div className="cod-stat-value" style={{ color: pendingCod > 0 ? '#f97316' : '#22c55e' }}>Rs {pendingCod.toFixed(0)}</div>
+            <div className="cod-stat-value" style={{ color: pendingCod > 0 ? '#f97316' : '#22c55e' }}>{formatRiderMoney(pendingCod)}</div>
           </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 10, marginTop: 10 }}>
+          {[
+            ['Last settled', lastSettlement ? formatRiderMoney(lastSettlement.amount) : 'No payment yet'],
+            ['Paid on', formatRiderDate(lastSettlement?.paymentDate)],
+            ['Method', lastSettlement?.paymentMethod || 'Pending'],
+            ['Reference', lastSettlement?.paymentReference || 'Will appear after settlement'],
+          ].map(([label, value]) => (
+            <div key={label} style={{ padding: 12, borderRadius: 12, background: '#fff', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4 }}>{label}</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text2)', lineHeight: 1.45 }}>{value}</div>
+            </div>
+          ))}
         </div>
         <div style={{ marginTop: 10, padding: 12, borderRadius: 12, background: '#f8fbff', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 5 }}>Company payout details</div>
@@ -1297,6 +1492,41 @@ function HomeTab({
           <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'gpay'} onClick={() => settleCod('gpay')}>
             {settling === 'gpay' ? 'Processing...' : 'Settle via GPay'}
           </button>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+            <div className="section-title" style={{ margin: 0, fontSize: 16 }}>Settlement History</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--green2)', background: 'rgba(63,185,80,.08)', border: '1px solid rgba(63,185,80,.18)', padding: '6px 10px', borderRadius: 999 }}>
+              {paymentHistory.length} record{paymentHistory.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {paymentHistory.length === 0 && (
+              <div style={{ borderRadius: 12, border: '1px solid var(--border)', background: '#f8fbff', padding: 14, fontSize: 13, color: 'var(--muted)' }}>
+                No COD settlement has been logged yet. Once you settle to the company, the amount, date, method, and reference will stay here.
+              </div>
+            )}
+            {paymentHistory.map((payment) => (
+              <div key={payment.id} style={{ borderRadius: 12, border: '1px solid var(--border)', background: '#f8fbff', padding: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 4 }}>Amount</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: '#22c55e', fontFamily: 'var(--font)' }}>{formatRiderMoney(payment.amount)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 4 }}>Date</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{formatRiderDate(payment.paymentDate)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 4 }}>Method</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{payment.paymentMethod || 'UPI'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', marginBottom: 4 }}>Reference</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>{payment.paymentReference || 'Not added'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1510,12 +1740,16 @@ function NearbyTab({ isOnline, loc, showToast, onAccepted, deliveryRangeKm, orde
 }
 
 /* â”€â”€ ACTIVE DELIVERIES â”€â”€ */
-function ActiveTab({ showToast }) {
+function ActiveTab({ showToast, riderLoc }) {
   const [orders, setOrders] = useState([])
   const [returnPickups, setReturnPickups] = useState([])
   const [loading, setLoading] = useState(true)
   const [actioning, setActioning] = useState(null)
   const [expandedOrderId, setExpandedOrderId] = useState(null)
+  const [navOrder, setNavOrder] = useState(null)
+  const [navMode, setNavMode] = useState('customer')
+  const [otpModal, setOtpModal] = useState({ open: false, mode: 'pickup', order: null })
+  const [otpInput, setOtpInput] = useState('')
 
   const load = async () => {
     try {
@@ -1532,19 +1766,20 @@ function ActiveTab({ showToast }) {
     return () => clearInterval(t)
   }, [])
 
+  const openOtpModal = (mode, order) => {
+    setOtpInput('')
+    setOtpModal({ open: true, mode, order })
+  }
+
+  const closeOtpModal = () => {
+    if (actioning) return
+    setOtpInput('')
+    setOtpModal({ open: false, mode: 'pickup', order: null })
+  }
+
   const advance = async (o) => {
     if (o.status === 'PACKING') {
-      const otp = window.prompt('Enter the 6-digit pickup OTP shown in the vendor app:')
-      if (!otp) return
-      setActioning(o.id)
-      try {
-        await api.verifyPickupOtp(o.id, otp.trim())
-        showToast('Pickup confirmed. Order marked as picked up.', 'success')
-        load()
-      } catch (e) {
-        showToast(e.response?.data?.detail || 'Wrong pickup OTP', 'error')
-      }
-      setActioning(null)
+      openOtpModal('pickup', o)
       return
     }
     const next = NEXT[o.status]
@@ -1558,10 +1793,15 @@ function ActiveTab({ showToast }) {
     setActioning(null)
   }
 
-  const openMaps = (o) => {
-    const dest = o.status === 'PACKING' ? `${o.shop?.lat},${o.shop?.lng}` : `${o.deliveryLat},${o.deliveryLng}`
-    if (dest && !dest.includes('null')) window.location.href = `https://maps.google.com/?daddr=${dest}`
-    else showToast('No navigation data', 'error')
+  const openMaps = (o, mode) => {
+    const nextMode = mode || (o.status === 'PACKING' ? 'shop' : 'customer')
+    const hasDest = nextMode === 'shop' ? (o?.shop?.lat != null && o?.shop?.lng != null) : (o?.deliveryLat != null && o?.deliveryLng != null)
+    if (!hasDest) {
+      showToast('No navigation data', 'error')
+      return
+    }
+    setNavMode(nextMode)
+    setNavOrder(o)
   }
 
   const advanceReturn = async (o, pickupStatus) => {
@@ -1572,6 +1812,26 @@ function ActiveTab({ showToast }) {
       load()
     } catch (e) { showToast('Update failed', 'error') }
     setActioning(null)
+  }
+
+  const submitOtpModal = async () => {
+    if (!otpModal?.order || otpInput.length !== 6) return
+    setActioning(otpModal.order.id)
+    try {
+      if (otpModal.mode === 'pickup') {
+        await api.verifyPickupOtp(otpModal.order.id, otpInput.trim())
+        showToast('Pickup confirmed. Order marked as picked up.', 'success')
+      } else {
+        await api.confirmDeliveryOtp(otpModal.order.id, otpInput.trim())
+        showToast('Delivery confirmed!', 'success')
+      }
+      await load()
+      setActioning(null)
+      closeOtpModal()
+    } catch (e) {
+      showToast(e.response?.data?.detail || (otpModal.mode === 'pickup' ? 'Wrong pickup OTP' : 'Wrong OTP'), 'error')
+      setActioning(null)
+    }
   }
 
   return (
@@ -1605,7 +1865,15 @@ function ActiveTab({ showToast }) {
               <div style={{ color:'var(--muted)', fontSize:11, marginTop:3 }}>Window: {o.pickupTimeWindow || 'Today'}</div>
             </div>
             <div className="mobile-stack" style={{ display:'flex', gap:10 }}>
-              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => o.customerLat && (window.location.href = `https://maps.google.com/?q=${o.customerLat},${o.customerLng}`)}>Navigate</button>
+              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => openMaps({
+                orderCode: o.orderCode,
+                status: 'RETURN_PICKUP',
+                customer: { name: o.customerName || 'Customer' },
+                deliveryAddress: o.customerAddress,
+                deliveryLat: o.customerLat,
+                deliveryLng: o.customerLng,
+                shop: { name: 'Return pickup', address: o.customerAddress, lat: o.customerLat, lng: o.customerLng },
+              }, 'customer')}>Navigate</button>
               {o.pickupStatus !== 'COMPLETED' && (
                 <button className="btn btn-orange" style={{ flex:1 }} disabled={actioning===`return-${o.id}`} onClick={() => advanceReturn(o, o.pickupStatus === 'RIDER_ACCEPTED' ? 'NAVIGATING' : o.pickupStatus === 'NAVIGATING' ? 'PICKED_UP' : 'COMPLETED')}>
                   {actioning===`return-${o.id}` ? 'Updating...' : o.pickupStatus === 'RIDER_ACCEPTED' ? 'Start Pickup' : o.pickupStatus === 'NAVIGATING' ? 'Mark Picked Up' : 'Complete Pickup'}
@@ -1634,7 +1902,7 @@ function ActiveTab({ showToast }) {
                 <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 1 }}>{o.shop?.address?.substring(0, 50)}</div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                   {o.shop?.phone && <a href={`tel:${o.shop.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#388bfd', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(56,139,253,.1)' }}>Call Shop</a>}
-                  {o.shop?.lat && <button onClick={() => { window.location.href = `https://maps.google.com/?q=${o.shop.lat},${o.shop.lng}` }} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#388bfd', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(56,139,253,.1)', border:'none', cursor:'pointer' }}>Map</button>}
+                  {o.shop?.lat && <button onClick={() => openMaps(o, 'shop')} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#388bfd', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(56,139,253,.1)', border:'none', cursor:'pointer' }}>Map</button>}
                 </div>
               </div>
               <div>
@@ -1642,7 +1910,7 @@ function ActiveTab({ showToast }) {
                 <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 1 }}>{o.deliveryAddress}</div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                   {o.customer?.phone && <a href={`tel:${o.customer.phone}`} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#3fb950', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(63,185,80,.1)' }}>Call Customer</a>}
-                  {o.deliveryLat && <button onClick={() => { window.location.href = `https://maps.google.com/?q=${o.deliveryLat},${o.deliveryLng}` }} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#f0883e', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(240,136,62,.1)', border:'none', cursor:'pointer' }}>Dest Map</button>}
+                  {o.deliveryLat && <button onClick={() => openMaps(o, 'customer')} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#f0883e', fontSize: 11, textDecoration: 'none', fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'rgba(240,136,62,.1)', border:'none', cursor:'pointer' }}>Dest Map</button>}
                 </div>
               </div>
             </div>}
@@ -1668,15 +1936,7 @@ function ActiveTab({ showToast }) {
               </button>
               {o.status === 'OUT_FOR_DELIVERY' ? (
                 <button className="btn btn-green" style={{ flex: 2, fontSize: 13 }}
-                  onClick={() => {
-                    const otp = window.prompt('Enter the 6-digit OTP from the customer:')
-                    if (!otp) return
-                    setActioning(o.id)
-                    api.confirmDeliveryOtp(o.id, otp.trim())
-                      .then(() => { showToast('Delivery confirmed!', 'success'); load() })
-                      .catch(e => showToast(e.response?.data?.detail || 'Wrong OTP', 'error'))
-                      .finally(() => setActioning(null))
-                  }} disabled={actioning === o.id}>
+                  onClick={() => openOtpModal('delivery', o)} disabled={actioning === o.id}>
                   {actioning === o.id ? 'Loading...' : 'Confirm Delivery'}
                 </button>
               ) : (o.status === 'PACKING' || NEXT[o.status]) ? (
@@ -1689,6 +1949,24 @@ function ActiveTab({ showToast }) {
         ))}
         </>
       )}
+      {navOrder && (
+        <RiderNavigationModal
+          order={navOrder}
+          riderLoc={riderLoc}
+          mode={navMode}
+          onModeChange={setNavMode}
+          onClose={() => setNavOrder(null)}
+        />
+      )}
+      <OtpActionModal
+        open={otpModal.open}
+        mode={otpModal.mode}
+        value={otpInput}
+        setValue={setOtpInput}
+        loading={Boolean(actioning && otpModal.order && actioning === otpModal.order.id)}
+        onClose={closeOtpModal}
+        onSubmit={submitOtpModal}
+      />
     </div>
   )
 }
@@ -2135,7 +2413,7 @@ export default function App() {
       <main className="content">
         {tab === 'home' && <HomeTab user={user} isOnline={isOnline} loc={loc} nearbyCount={nearbyCount} onOpenActive={() => setTab('active')} onOpenProfile={() => setTab('profile')} onOpenNearby={() => setTab('nearby')} onShowToast={showToast} deliveryRangeKm={deliveryRangeKm} onRangeChange={setDeliveryRangeKm} />}
         {tab === 'nearby' && <NearbyTab isOnline={isOnline} loc={loc} showToast={showToast} onAccepted={() => setTab('active')} deliveryRangeKm={deliveryRangeKm} orders={nearbyOrders} returns={nearbyReturns} loading={nearbyLoading} onRefresh={refreshNearby} />}
-        {tab === 'active' && <ActiveTab showToast={showToast} />}
+        {tab === 'active' && <ActiveTab showToast={showToast} riderLoc={loc} />}
         {tab === 'earnings' && <EarningsTab />}
         {tab === 'profile' && <ProfileTab user={user} isOnline={isOnline} onToggleOnline={toggleOnline} loc={loc} onLocUpdate={updateLoc} onSignOut={handleSignOut} onShowToast={showToast} />}
       </main>

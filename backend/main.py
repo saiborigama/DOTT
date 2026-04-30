@@ -1,14 +1,15 @@
 import os, time, math, json, random, urllib.parse, urllib.request, urllib.error, mimetypes, base64, io, hashlib, contextlib
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timedelta
-from collections import Counter
+from datetime import datetime, timedelta, UTC
+from collections import Counter, defaultdict
 from pathlib import Path
 
 try:
@@ -62,6 +63,9 @@ from config import settings
 from seed import seed_db
 
 Base.metadata.create_all(bind=engine)
+
+def utc_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 def ensure_column(table_name: str, column_name: str, column_sql: str):
     with engine.begin() as conn:
@@ -129,6 +133,12 @@ for table_name, column_name, column_sql in [
     ("return_requests", "pickup_rider_id", "INTEGER"),
     ("return_requests", "pickup_completed_at", "DATETIME"),
     ("return_requests", "processed_at", "DATETIME"),
+    ("settlement_invoices", "product_value", "FLOAT DEFAULT 0"),
+    ("settlement_invoices", "delivery_collected", "FLOAT DEFAULT 0"),
+    ("settlement_invoices", "rider_earning_amount", "FLOAT DEFAULT 0"),
+    ("settlement_invoices", "payout_locked_at", "DATETIME"),
+    ("settlement_payments", "payment_method", "VARCHAR DEFAULT 'UPI'"),
+    ("settlement_payments", "payment_reference", "VARCHAR DEFAULT ''"),
 ]:
     ensure_column(table_name, column_name, column_sql)
 
@@ -146,6 +156,18 @@ app.add_middleware(
     allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    if request.url.path.startswith("/api/auth"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 class ConnectionManager:
     def __init__(self):
@@ -185,7 +207,7 @@ PLATFORM_FEE = 10.0
 FREE_DELIVERY_THRESHOLD = 999.0
 NO_RETURN_BELOW = 300.0
 MAX_RETURNS_PER_MONTH = 3
-MAX_ORDER_DISTANCE_KM = 20.0
+MAX_ORDER_DISTANCE_KM = 10.0
 MAX_DISCOVERY_RADIUS_KM = 10.0
 RIDER_PUSH_RADIUS_KM = 10.0
 
@@ -216,7 +238,7 @@ def calc_rider_earning(km: float) -> float:
     return round(20 + km * 8, 1)   # ₹20 base + ₹8/km
 
 def calc_surge_fee(now: Optional[datetime] = None, weather: Optional[str] = None) -> tuple[float, list[str]]:
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     reasons = []
     surge = 0.0
     if now.hour in {8, 9, 13, 14, 19, 20, 21}:
@@ -287,7 +309,7 @@ def get_return_reason_profile(reason_code: Optional[str], request_type: Optional
     }
 
 def start_delivery_countdown(order: Order, start_time: Optional[datetime] = None):
-    started_at = start_time or datetime.utcnow()
+    started_at = start_time or utc_now()
     order.order_start_time = started_at
     order.delivery_deadline = started_at + timedelta(minutes=DELIVERY_PROMISE_MINUTES)
     order.countdown_alert_level = "NORMAL"
@@ -304,7 +326,7 @@ def get_countdown_alert_level(minutes_left: Optional[float]) -> str:
     return "NORMAL"
 
 def order_timer_snapshot(order: Order, now: Optional[datetime] = None):
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     start = getattr(order, "order_start_time", None) or getattr(order, "confirmed_at", None)
     deadline = getattr(order, "delivery_deadline", None)
     delivered_time = getattr(order, "delivered_time", None) or getattr(order, "delivered_at", None)
@@ -336,7 +358,7 @@ def order_timer_snapshot(order: Order, now: Optional[datetime] = None):
     }
 
 def finalize_delivery_timing(order: Order):
-    now = datetime.utcnow()
+    now = utc_now()
     order.delivered_at = now
     order.delivered_time = now
     deadline = getattr(order, "delivery_deadline", None)
@@ -353,9 +375,75 @@ def finalize_delivery_timing(order: Order):
 def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
-def send_otp_mock(phone: str, otp: str):
-    """In production replace with MSG91 / Twilio / Fast2SMS."""
-    print(f"\n{'='*40}\nOTP for {phone}: {otp}\n{'='*40}\n")
+def normalize_sms_phone(phone: str) -> str:
+    raw = (phone or "").strip().replace(" ", "").replace("-", "")
+    if raw.startswith("+"):
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    country = (settings.twilio_default_country_code or "+91").strip()
+    if len(digits) == 10:
+        return f"{country}{digits}"
+    return f"+{digits}" if digits else raw
+
+def send_otp_via_twilio(phone: str, otp: str) -> bool:
+    sid = settings.twilio_account_sid.strip()
+    token = settings.twilio_auth_token.strip()
+    from_number = settings.twilio_from_number.strip()
+    messaging_service_sid = settings.twilio_messaging_service_sid.strip()
+    if not sid or not token or (not from_number and not messaging_service_sid):
+        raise HTTPException(
+            503,
+            "Twilio is not configured. Add TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID in backend/.env.",
+        )
+    payload = {
+        "To": normalize_sms_phone(phone),
+        "Body": f"Your DOTT verification code is {otp}. Do not share it with anyone.",
+    }
+    if messaging_service_sid:
+        payload["MessagingServiceSid"] = messaging_service_sid
+    else:
+        payload["From"] = from_number
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            res = client.post(url, data=payload, auth=(sid, token))
+        if res.status_code >= 400:
+            detail = "Unable to send OTP through Twilio."
+            try:
+                detail = res.json().get("message") or detail
+            except Exception:
+                pass
+            raise HTTPException(502, detail)
+        return True
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Unable to reach Twilio. Check internet connection and Twilio credentials.")
+
+def send_otp_message(phone: str, otp: str) -> bool:
+    provider = (settings.otp_sms_provider or "mock").strip().lower()
+    if provider == "twilio":
+        return send_otp_via_twilio(phone, otp)
+    return False
+
+_otp_rate = defaultdict(list)
+def rate_check(key: str, limit: int = 5, window: int = 60) -> bool:
+    now = utc_now()
+    cutoff = now - timedelta(seconds=window)
+    _otp_rate[key] = [t for t in _otp_rate[key] if t > cutoff]
+    if len(_otp_rate[key]) >= limit:
+        return False
+    _otp_rate[key].append(now)
+    return True
+
+def verify_otp_hash(stored_value: str, supplied_otp: str) -> bool:
+    supplied = (supplied_otp or "").strip()
+    if not supplied:
+        return False
+    try:
+        return verify_password(supplied, stored_value)
+    except Exception:
+        return False
 
 OPENAI_API_KEY = settings.openai_api_key.strip()
 OPENAI_BASE_URL = settings.openai_base_url
@@ -552,7 +640,7 @@ def _top_selling_products(db: Session, lat: float, lng: float, radius_km: float,
     if not shops:
         return []
     shop_ids = [s.id for s in shops]
-    since = datetime.utcnow() - timedelta(days=7)
+    since = utc_now() - timedelta(days=7)
     orders = db.query(Order).filter(Order.status == OrderStatusEnum.DELIVERED, Order.shop_id.in_(shop_ids), Order.placed_at >= since).all()
     if not orders:
         return []
@@ -1870,6 +1958,7 @@ class PaymentDetailsUpdate(BaseModel):
 class RiderCodSettlementPay(BaseModel):
     amount: Optional[float] = None
     method: Optional[str] = "upi"
+    paymentReference: Optional[str] = ""
     note: Optional[str] = None
 
 class ShopCreate(BaseModel):
@@ -2095,7 +2184,7 @@ def build_auth(user: User, db: Session):
     db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
     access = create_access_token(user.id)
     refresh = create_refresh_token(user.id)
-    rt = RefreshToken(user_id=user.id, token=refresh, expires_at=datetime.utcnow()+timedelta(days=7))
+    rt = RefreshToken(user_id=user.id, token=refresh, expires_at=utc_now()+timedelta(days=7))
     db.add(rt); db.commit()
     return {"user":user_dict(user),"accessToken":access,"refreshToken":refresh}
 
@@ -2120,24 +2209,27 @@ def send_otp(req: SendOTPRequest, db: Session = Depends(get_db)):
     phone = req.phone.strip().replace(" ","").replace("-","")
     if len(phone) != 10 or not phone.isdigit():
         raise HTTPException(400, "Enter a valid 10-digit number")
+    if not rate_check(f"otp:{phone}", 5, 60):
+        raise HTTPException(429, "Too many OTP requests. Wait 60 seconds.")
     # Invalidate any old OTPs for this phone
     db.query(OTPStore).filter(OTPStore.phone == phone, OTPStore.used == False).update({"used": True})
     otp = generate_otp()
-    expires = datetime.utcnow() + timedelta(minutes=10)
-    db.add(OTPStore(phone=phone, otp=otp, expires_at=expires))
+    expires = utc_now() + timedelta(minutes=10)
+    db.add(OTPStore(phone=phone, otp=hash_password(otp), expires_at=expires))
     db.commit()
-    send_otp_mock(phone, otp)
-    return {"message": f"OTP sent to {phone}", "dev_otp": otp}  # remove dev_otp in production
+    sent = send_otp_message(phone, otp)
+    message = f"OTP sent to {phone}" if sent else "OTP generated. Configure a real SMS provider to deliver it."
+    return {"message": message, "sent": sent}
 
 @app.post("/api/otp/verify")
 def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     phone = req.phone.strip().replace(" ","").replace("-","")
-    record = db.query(OTPStore).filter(
+    records = db.query(OTPStore).filter(
         OTPStore.phone == phone,
-        OTPStore.otp == req.otp,
         OTPStore.used == False,
-        OTPStore.expires_at > datetime.utcnow()
-    ).first()
+        OTPStore.expires_at > utc_now()
+    ).order_by(OTPStore.created_at.desc()).all()
+    record = next((item for item in records if verify_otp_hash(item.otp, req.otp)), None)
     if not record:
         raise HTTPException(400, "Invalid or expired OTP")
     record.used = True
@@ -2146,18 +2238,21 @@ def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
 
 def _check_otp(phone: str, otp: Optional[str], db: Session):
     """Validate OTP during registration. Raises if invalid."""
+    if (settings.otp_sms_provider or "mock").strip().lower() in {"disabled", "none", "off", "mock"}:
+        return True
     if not otp:
         raise HTTPException(400, "OTP is required for registration")
     phone = phone.strip().replace(" ","").replace("-","")
-    record = db.query(OTPStore).filter(
+    records = db.query(OTPStore).filter(
         OTPStore.phone == phone,
-        OTPStore.otp == otp,
         OTPStore.used == False,
-        OTPStore.expires_at > datetime.utcnow()
-    ).first()
+        OTPStore.expires_at > utc_now()
+    ).order_by(OTPStore.created_at.desc()).all()
+    record = next((item for item in records if verify_otp_hash(item.otp, otp)), None)
     if not record:
         raise HTTPException(400, "Invalid or expired OTP. Please verify your number first.")
     record.used = True
+    return True
 
 # ═══════════════════════════════════════════════════════════════════
 # AUTH
@@ -2191,10 +2286,13 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/refresh")
 def refresh_token(req: RefreshRequest, db: Session = Depends(get_db)):
+    token_user_id = decode_token(req.refreshToken, expected_type="refresh")
     rt = db.query(RefreshToken).filter(RefreshToken.token == req.refreshToken).first()
-    if not rt or rt.expires_at < datetime.utcnow():
+    if not rt or rt.expires_at < utc_now():
         if rt: db.delete(rt); db.commit()
         raise HTTPException(401, "Invalid or expired refresh token")
+    if rt.user_id != token_user_id:
+        raise HTTPException(401, "Invalid refresh token")
     return build_auth(rt.user, db)
 
 @app.post("/api/auth/logout")
@@ -2748,7 +2846,7 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
                   cod_due_amount=pricing["total"] if (body.paymentMethod or "cod").lower() == "cod" else 0.0,
                   cod_collected=False, is_delayed=False, countdown_alert_level="NONE",
                   rider_bonus=0.0, rider_penalty=0.0,
-                  promo_code=body.promoCode, notes=body.notes, placed_at=datetime.utcnow())
+                  promo_code=body.promoCode, notes=body.notes, placed_at=utc_now())
     db.add(order); db.flush()
     for item in order_items: item.order_id = order.id; db.add(item)
     shop.total_orders = (shop.total_orders or 0) + 1
@@ -2786,7 +2884,7 @@ def vendor_accept(order_id: int, user: User = Depends(get_current_user), db: Ses
     if not shop: raise HTTPException(403)
     if o.status != OrderStatusEnum.PENDING: raise HTTPException(400, "Order not pending")
     o.status = OrderStatusEnum.CONFIRMED
-    o.confirmed_at = datetime.utcnow()
+    o.confirmed_at = utc_now()
     start_delivery_countdown(o, o.confirmed_at)
     db.commit(); db.refresh(o)
     try:
@@ -2895,7 +2993,7 @@ def update_status(order_id: int, body: StatusUpdate,
     o.status = body.status
     if body.riderId: o.rider_id = body.riderId
     if body.status == OrderStatusEnum.CONFIRMED:
-        o.confirmed_at = datetime.utcnow()
+        o.confirmed_at = utc_now()
         start_delivery_countdown(o, o.confirmed_at)
     if body.status in [OrderStatusEnum.PACKING, OrderStatusEnum.PICKED_UP, OrderStatusEnum.OUT_FOR_DELIVERY]:
         timer = order_timer_snapshot(o)
@@ -2952,7 +3050,7 @@ def generate_pickup_otp(order_id: int, user: User = Depends(get_current_user), d
     otp = generate_otp()
     o.pickup_otp = otp
     o.pickup_otp_used = False
-    o.pickup_otp_generated_at = datetime.utcnow()
+    o.pickup_otp_generated_at = utc_now()
     o.pickup_otp_verified_at = None
     db.commit()
     return {"otp": otp, "message": "Share this OTP with the rider at pickup time"}
@@ -2989,7 +3087,7 @@ def verify_pickup_otp(order_id: int, body: PickupOtpVerifyRequest, user: User = 
     if o.pickup_otp != body.otp.strip():
         raise HTTPException(400, "Wrong pickup OTP")
     o.pickup_otp_used = True
-    o.pickup_otp_verified_at = datetime.utcnow()
+    o.pickup_otp_verified_at = utc_now()
     o.status = OrderStatusEnum.PICKED_UP
     timer = order_timer_snapshot(o)
     o.countdown_alert_level = timer["alertLevel"]
@@ -3040,7 +3138,7 @@ def preview_return(body: ReturnCreate, user: User = Depends(get_current_user), d
     profile = get_return_reason_profile(body.reasonCode, body.requestType)
     recent_returns = db.query(ReturnRequest).filter(
         ReturnRequest.customer_id == user.id,
-        ReturnRequest.created_at >= datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        ReturnRequest.created_at >= utc_now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     ).count()
     return_fee = 0.0 if profile["decision"] in {"VENDOR_FAULT", "FREE_EXCHANGE"} else round(max(40.0, (order.delivery_fee or 0.0) * 1.5), 2)
     refund_amount = 0.0 if profile["requestType"] == "exchange" else round(max(0.0, order.subtotal - return_fee), 2)
@@ -3063,7 +3161,7 @@ def request_return(body: ReturnCreate, user: User = Depends(get_current_user), d
     if not shop.accepts_returns: raise HTTPException(400, "This shop does not accept returns")
     if order.subtotal < NO_RETURN_BELOW:
         raise HTTPException(400, f"Returns are unavailable for items below ₹{int(NO_RETURN_BELOW)}")
-    now = datetime.utcnow()
+    now = utc_now()
     return_window_hours = getattr(order, "return_window_hours", 48) or 48
     if order.delivered_at and now > order.delivered_at + timedelta(hours=return_window_hours):
         raise HTTPException(400, f"Return window of {return_window_hours} hours has passed")
@@ -3154,13 +3252,13 @@ def update_return(return_id: int, body: ReturnVendorUpdate,
         rr.pickup_status = "AWAITING_RIDER"
     elif body.status == ReturnStatusEnum.REJECTED:
         rr.pickup_status = "REJECTED"
-        rr.processed_at = datetime.utcnow()
+        rr.processed_at = utc_now()
         rr.order.refund_status = "REJECTED"
     elif body.status == ReturnStatusEnum.REFUNDED:
         rr.pickup_status = "COMPLETED"
-        rr.processed_at = datetime.utcnow()
+        rr.processed_at = utc_now()
         rr.order.refund_status = "REFUNDED"
-    rr.updated_at = datetime.utcnow()
+    rr.updated_at = utc_now()
     db.commit()
     try:
         if body.status == ReturnStatusEnum.APPROVED:
@@ -3223,7 +3321,7 @@ def accept_return_pickup(return_id: int, user: User = Depends(get_current_user),
         raise HTTPException(400, "Return pickup not available")
     rr.pickup_rider_id = user.id
     rr.pickup_status = "RIDER_ACCEPTED"
-    rr.updated_at = datetime.utcnow()
+    rr.updated_at = utc_now()
     db.commit()
     try:
         send_push_to_user(rr.customer, "Return pickup accepted", f"Rider accepted pickup for order {rr.order.order_code}.", _return_push_data(rr))
@@ -3245,10 +3343,10 @@ def update_return_pickup_status(return_id: int, body: dict, user: User = Depends
     if next_status not in allowed:
         raise HTTPException(400, "Invalid pickup status")
     rr.pickup_status = next_status
-    rr.updated_at = datetime.utcnow()
+    rr.updated_at = utc_now()
     if next_status == "COMPLETED":
         rr.status = ReturnStatusEnum.PICKED_UP
-        rr.pickup_completed_at = datetime.utcnow()
+        rr.pickup_completed_at = utc_now()
     db.commit()
     try:
         if next_status == "PICKED_UP":
@@ -3326,7 +3424,7 @@ def rider_cod_settlement_summary(db: Session, rider: User):
         for o in cod_orders
     ), 2)
 
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_collected = round(sum(
         (o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0))
         for o in cod_orders if o.delivered_at and o.delivered_at >= today_start
@@ -3365,7 +3463,8 @@ def rider_cod_settlement_summary(db: Session, rider: User):
             "id": p.id,
             "amount": round(p.amount or 0.0, 2),
             "paymentStatus": p.payment_status or "PAID",
-            "method": (p.notes or "UPI").split(" via ")[-1] if " via " in (p.notes or "") else "UPI",
+            "method": p.payment_method or "UPI",
+            "paymentReference": p.payment_reference or "",
             "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
             "notes": p.notes or "",
         } for p in payments[:20]],
@@ -3402,9 +3501,9 @@ def rider_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[st
 
     summary = settlement_summary_for_entity(db, "rider", user.id, start, end)
     summary.update({
-        "today": calc(datetime.utcnow().replace(hour=0, minute=0, second=0)),
-        "week": calc(datetime.utcnow() - timedelta(days=7)),
-        "month": calc(datetime.utcnow() - timedelta(days=30)),
+        "today": calc(utc_now().replace(hour=0, minute=0, second=0)),
+        "week": calc(utc_now() - timedelta(days=7)),
+        "month": calc(utc_now() - timedelta(days=30)),
         "allTime": calc(datetime(2000, 1, 1)),
         "filters": {
             "rangeKey": applied_range,
@@ -3447,6 +3546,7 @@ def rider_cod_settlement_pay(body: RiderCodSettlementPay, user: User = Depends(g
     company = summary.get("companyAccount", {})
     destination = company.get("upiId") or company.get("bankAccount") or "company account"
     note = (body.note or f"COD settlement via {method.upper()} to {destination}").strip()
+    payment_reference = (body.paymentReference or "").strip()
     payment = SettlementPayment(
         invoice_id=None,
         entity_type="rider_cod",
@@ -3454,7 +3554,9 @@ def rider_cod_settlement_pay(body: RiderCodSettlementPay, user: User = Depends(g
         shop_id=None,
         amount=amount,
         payment_status="PAID",
-        payment_date=datetime.utcnow(),
+        payment_method=method.upper(),
+        payment_reference=payment_reference,
+        payment_date=utc_now(),
         notes=note,
     )
     db.add(payment)
@@ -3473,12 +3575,12 @@ def rider_cod_settlement_pay(body: RiderCodSettlementPay, user: User = Depends(g
 def analytics(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
     if not shop: raise HTTPException(404)
-    now = datetime.utcnow()
+    now = utc_now()
     def stats(since):
         rows = db.query(Order).filter(Order.shop_id==shop.id,
                                       Order.status==OrderStatusEnum.DELIVERED,
                                       Order.delivered_at>=since).all()
-        return {"orders":len(rows),"revenue":round(sum(o.total for o in rows),2)}
+        return {"orders":len(rows),"revenue":round(sum(vendor_merchandise_total(o) for o in rows),2)}
     pending_returns = db.query(ReturnRequest).filter(
         ReturnRequest.shop_id==shop.id, ReturnRequest.status==ReturnStatusEnum.REQUESTED).count()
     return {"today": stats(now.replace(hour=0,minute=0,second=0)),
@@ -3493,7 +3595,7 @@ def analytics(user: User = Depends(get_current_user), db: Session = Depends(get_
 @app.get("/api/admin/stats")
 def admin_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != RoleEnum.ADMIN: raise HTTPException(403)
-    now = datetime.utcnow()
+    now = utc_now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start  = now - timedelta(days=7)
 
@@ -3599,7 +3701,7 @@ def admin_orders(timing: Optional[str] = None, paymentMethod: Optional[str] = No
 @app.get("/api/admin/revenue")
 def admin_revenue(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != RoleEnum.ADMIN: raise HTTPException(403)
-    now = datetime.utcnow()
+    now = utc_now()
     def rev(since):
         rows = db.query(Order).filter(Order.status==OrderStatusEnum.DELIVERED, Order.delivered_at>=since).all()
         return {"orders":len(rows),"revenue":round(sum(o.total for o in rows),2)}
@@ -3869,29 +3971,14 @@ def track_order(order_id: int, user: User = Depends(get_current_user), db: Sessi
 # v8 — PRODUCTION FEATURES
 # ══════════════════════════════════════════════════════════════════
 from database import PromoCode, SavedAddress, DeliveryOTP, RiderRating
-from collections import defaultdict
 
 # ── RATE-LIMITING (in-memory, resets on server restart) ───────────
-_rate = defaultdict(list)
-def rate_check(key: str, limit: int = 5, window: int = 60) -> bool:
-    """Returns True if allowed, False if blocked."""
-    now = datetime.utcnow()
-    cutoff = now - timedelta(seconds=window)
-    _rate[key] = [t for t in _rate[key] if t > cutoff]
-    if len(_rate[key]) >= limit:
-        return False
-    _rate[key].append(now)
-    return True
-
 # Patch OTP send with rate limit
 # (wraps existing endpoint behavior)
 @app.post("/api/otp/send/limited")
 def send_otp_limited(body: dict, request_ip: str = "0.0.0.0", db: Session = Depends(get_db)):
-    """Rate-limited OTP - 5 per phone per minute"""
-    phone = body.get("phone","")
-    if not rate_check(f"otp:{phone}", 5, 60):
-        raise HTTPException(429, "Too many OTP requests. Wait 60 seconds.")
-    return {"ok": True}
+    phone = str(body.get("phone", "")).strip()
+    return send_otp(SendOTPRequest(phone=phone), db)
 
 # ── PAGINATION HELPER ─────────────────────────────────────────────
 def paginate(q, page: int = 1, per_page: int = 20):
@@ -3909,7 +3996,7 @@ class PromoCreate(BaseModel):
 def validate_promo(code: str, orderTotal: float = 0, db: Session = Depends(get_db)):
     p = db.query(PromoCode).filter(PromoCode.code == code.upper(), PromoCode.is_active == True).first()
     if not p: raise HTTPException(404, "Invalid promo code")
-    if p.expires_at and datetime.utcnow() > p.expires_at: raise HTTPException(400, "Promo code expired")
+    if p.expires_at and utc_now() > p.expires_at: raise HTTPException(400, "Promo code expired")
     if p.used_count >= p.max_uses: raise HTTPException(400, "Promo code fully used")
     if orderTotal < p.min_order: raise HTTPException(400, f"Minimum order ₹{p.min_order} required")
     discount = round(p.discount_value if p.discount_type == "flat" else orderTotal * p.discount_value / 100, 2)
@@ -3987,7 +4074,7 @@ def verify_delivery_otp(order_id: int, body: dict, user: User = Depends(get_curr
     if not d: raise HTTPException(400, "No OTP found")
     if d.otp != body.get("otp","").strip(): raise HTTPException(400, "Wrong OTP")
     d.is_used = True
-    o.status = OrderStatusEnum.DELIVERED; o.delivered_at = datetime.utcnow()
+    o.status = OrderStatusEnum.DELIVERED; o.delivered_at = utc_now()
     db.commit()
     try:
         send_push_to_user(o.customer, "Delivered", f"Order {o.order_code} was delivered.", _order_push_data(o))
@@ -4083,7 +4170,7 @@ _commission_rate = {
 SETTLEMENT_CYCLE_DAYS = 2
 
 def parse_dashboard_range(range_key: Optional[str], start_date: Optional[str], end_date: Optional[str]):
-    now = datetime.utcnow()
+    now = utc_now()
     key = (range_key or "last2days").lower()
     if key == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -4110,7 +4197,25 @@ def vendor_merchandise_total(order: Order) -> float:
     items_total = round(sum((item.price or 0.0) * (item.qty or 0) for item in (order.items or [])), 2)
     if items_total > 0:
         return items_total
-    return round(order.subtotal or 0.0, 2)
+    subtotal = float(order.subtotal or 0.0)
+    total = float(order.total or 0.0)
+    non_vendor_charges = round(
+        float(order.delivery_fee or 0.0) +
+        float(getattr(order, "platform_fee", 0.0) or 0.0) +
+        float(getattr(order, "gst_amount", 0.0) or 0.0),
+        2,
+    )
+    adjusted_total = round(max(0.0, total - non_vendor_charges), 2) if total > 0 else 0.0
+    if total > 0 and non_vendor_charges > 0 and (subtotal <= 0 or abs(subtotal - total) < 0.01 or subtotal > total):
+        return adjusted_total
+    return round(subtotal or adjusted_total, 2)
+
+def vendor_settlement_product_value(order: Order) -> float:
+    """Product value owed to vendor after completed refunds are removed."""
+    product_value = vendor_merchandise_total(order)
+    if (getattr(order, "refund_status", "") or "").upper() == "REFUNDED":
+        product_value = max(0.0, product_value - float(getattr(order, "refund_amount", 0.0) or 0.0))
+    return round(product_value, 2)
 
 def invoice_status(invoice: SettlementInvoice):
     pending = round(max((invoice.net_payable or 0.0) - (invoice.paid_amount or 0.0), 0.0), 2)
@@ -4129,7 +4234,7 @@ def sync_settlement_invoices(db: Session):
     for order in delivered_orders:
         cycle_key, period_start, period_end = settlement_cycle_bounds(order.delivered_at)
         if order.shop and order.shop.owner_id:
-            vendor_key = ("vendor", order.shop.owner_id, order.shop_id, cycle_key)
+            vendor_key = ("vendor", order.shop_id or order.shop.owner_id, order.shop_id, cycle_key)
             grouped.setdefault(vendor_key, {
                 "entity_type": "vendor",
                 "user_id": order.shop.owner_id,
@@ -4149,26 +4254,55 @@ def sync_settlement_invoices(db: Session):
                 "orders": [],
             })["orders"].append(order)
 
-    for (entity_type, user_id, shop_id, cycle_key), meta in grouped.items():
+    for (entity_type, _group_owner, shop_id, cycle_key), meta in grouped.items():
+        user_id = meta["user_id"]
         rows = meta["orders"]
         order_ids = sorted({o.id for o in rows})
-        invoice = db.query(SettlementInvoice).filter(
+        invoice_query = db.query(SettlementInvoice).filter(
             SettlementInvoice.entity_type == entity_type,
-            SettlementInvoice.user_id == user_id,
             SettlementInvoice.cycle_key == cycle_key,
+        )
+        if entity_type == "vendor" and shop_id is not None:
+            invoice_query = invoice_query.filter(SettlementInvoice.shop_id == shop_id)
+        else:
+            invoice_query = invoice_query.filter(SettlementInvoice.user_id == user_id)
+
+        locked_invoices = invoice_query.filter(
+            (SettlementInvoice.status == "PAID") | (SettlementInvoice.payout_locked_at != None)
+        ).all()
+        locked_order_ids = set()
+        for locked_invoice in locked_invoices:
+            try:
+                locked_order_ids.update(json.loads(locked_invoice.order_ids_json or "[]"))
+            except Exception:
+                pass
+        rows = [o for o in rows if o.id not in locked_order_ids]
+        if not rows:
+            continue
+        order_ids = sorted({o.id for o in rows})
+
+        invoice = invoice_query.filter(
+            SettlementInvoice.status != "PAID",
+            SettlementInvoice.payout_locked_at == None,
         ).first()
 
         if entity_type == "vendor":
-            total_sales = round(sum(vendor_merchandise_total(o) for o in rows), 2)
+            product_value = round(sum(vendor_settlement_product_value(o) for o in rows), 2)
+            delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
+            rider_earning_amount = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            total_sales = product_value
             commission_pct = float(_commission_rate.get("vendor_commission_pct", 0))
-            commission_amount = round(total_sales * commission_pct / 100.0, 2)
-            gross_earnings = total_sales
-            net_payable = round(total_sales - commission_amount, 2)
+            commission_amount = round(product_value * commission_pct / 100.0, 2)
+            gross_earnings = product_value
+            net_payable = round(product_value - commission_amount, 2)
         else:
-            total_sales = round(sum((o.total or 0.0) for o in rows), 2)
+            product_value = round(sum(vendor_merchandise_total(o) for o in rows), 2)
+            delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
+            rider_earning_amount = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            total_sales = delivery_collected
             commission_pct = 0.0
             commission_amount = 0.0
-            gross_earnings = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            gross_earnings = rider_earning_amount
             net_payable = gross_earnings
 
         if not invoice:
@@ -4182,12 +4316,14 @@ def sync_settlement_invoices(db: Session):
             )
             db.add(invoice)
             db.flush()
-
         invoice.shop_id = shop_id
         invoice.period_start = meta["period_start"]
         invoice.period_end = meta["period_end"]
         invoice.total_orders = len(order_ids)
         invoice.total_sales = total_sales
+        invoice.product_value = product_value
+        invoice.delivery_collected = delivery_collected
+        invoice.rider_earning_amount = rider_earning_amount
         invoice.commission_pct = commission_pct
         invoice.commission_amount = commission_amount
         invoice.gross_earnings = gross_earnings
@@ -4195,7 +4331,7 @@ def sync_settlement_invoices(db: Session):
         invoice.order_ids_json = json.dumps(order_ids)
         invoice.pending_amount = round(max(net_payable - (invoice.paid_amount or 0.0), 0.0), 2)
         invoice.status = invoice_status(invoice)
-        invoice.updated_at = datetime.utcnow()
+        invoice.updated_at = utc_now()
     db.commit()
 
 def invoice_dict(invoice: SettlementInvoice):
@@ -4209,6 +4345,10 @@ def invoice_dict(invoice: SettlementInvoice):
         "cycleKey": invoice.cycle_key,
         "totalOrders": invoice.total_orders,
         "totalSales": round(invoice.total_sales or 0.0, 2),
+        "productValue": round(invoice.product_value or 0.0, 2),
+        "deliveryCollected": round(invoice.delivery_collected or 0.0, 2),
+        "riderEarning": round(invoice.rider_earning_amount or 0.0, 2),
+        "vendorPayout": round(invoice.net_payable or 0.0, 2) if invoice.entity_type == "vendor" else 0.0,
         "commissionPct": round(invoice.commission_pct or 0.0, 2),
         "commissionAmount": round(invoice.commission_amount or 0.0, 2),
         "grossEarnings": round(invoice.gross_earnings or 0.0, 2),
@@ -4216,6 +4356,8 @@ def invoice_dict(invoice: SettlementInvoice):
         "paidAmount": round(invoice.paid_amount or 0.0, 2),
         "pendingAmount": round(invoice.pending_amount or 0.0, 2),
         "status": invoice.status,
+        "isLocked": bool(invoice.payout_locked_at),
+        "lockedAt": invoice.payout_locked_at.isoformat() if invoice.payout_locked_at else None,
         "createdAt": invoice.created_at.isoformat() if invoice.created_at else None,
         "updatedAt": invoice.updated_at.isoformat() if invoice.updated_at else None,
     }
@@ -4243,6 +4385,9 @@ def settlement_summary_for_entity(db: Session, entity_type: str, user_id: int, s
 
     total_orders = sum(i.total_orders or 0 for i in invoices)
     total_sales = round(sum(i.total_sales or 0.0 for i in invoices), 2)
+    product_value = round(sum(i.product_value or 0.0 for i in invoices), 2)
+    delivery_collected = round(sum(i.delivery_collected or 0.0 for i in invoices), 2)
+    rider_earning_amount = round(sum(i.rider_earning_amount or 0.0 for i in invoices), 2)
     gross_earnings = round(sum(i.gross_earnings or 0.0 for i in invoices), 2)
     commission_amount = round(sum(i.commission_amount or 0.0 for i in invoices), 2)
     net_payable = round(sum(i.net_payable or 0.0 for i in invoices), 2)
@@ -4252,6 +4397,10 @@ def settlement_summary_for_entity(db: Session, entity_type: str, user_id: int, s
     return {
         "totalOrders": total_orders,
         "totalSales": total_sales,
+        "productValue": product_value,
+        "deliveryCollected": delivery_collected,
+        "riderEarning": rider_earning_amount,
+        "vendorPayout": net_payable if entity_type == "vendor" else 0.0,
         "grossEarnings": gross_earnings,
         "commissionPct": round(invoices[0].commission_pct, 2) if invoices else float(_commission_rate.get("vendor_commission_pct", 0) if entity_type == "vendor" else 0),
         "commissionAmount": commission_amount,
@@ -4268,6 +4417,8 @@ def settlement_summary_for_entity(db: Session, entity_type: str, user_id: int, s
             "userId": p.user_id,
             "shopId": p.shop_id,
             "amount": round(p.amount or 0.0, 2),
+            "paymentMethod": p.payment_method or "UPI",
+            "paymentReference": p.payment_reference or "",
             "paymentStatus": p.payment_status,
             "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
             "periodStart": p.period_start.isoformat() if p.period_start else None,
@@ -4294,64 +4445,100 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
 
     by_vendor = {}
     for invoice in vendor_invoices:
-        existing = by_vendor.get(invoice.user_id)
-        is_newer = (
-            existing is None
-            or (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
-            or (
-                (invoice.period_start or datetime.min) == (existing["periodStart"] or datetime.min)
-                and invoice.id > existing["latestInvoiceId"]
-            )
-        )
-        if is_newer:
-            by_vendor[invoice.user_id] = {
+        group_key = ("shop", invoice.shop_id) if invoice.shop_id is not None else ("vendor", invoice.user_id)
+        existing = by_vendor.get(group_key)
+        base_row = {
                 "vendorId": invoice.user_id,
                 "shopId": invoice.shop_id,
                 "vendorName": invoice.user.name if invoice.user else "Vendor",
                 "shopName": invoice.shop.name if invoice.shop else "Shop",
                 "totalOrders": invoice.total_orders or 0,
                 "totalSales": invoice.total_sales or 0.0,
+                "productValue": invoice.product_value or 0.0,
+                "deliveryCollected": invoice.delivery_collected or 0.0,
+                "riderEarning": invoice.rider_earning_amount or 0.0,
                 "commissionPct": invoice.commission_pct or float(_commission_rate.get("vendor_commission_pct", 0)),
                 "commissionAmount": invoice.commission_amount or 0.0,
                 "netPayable": invoice.net_payable or 0.0,
                 "paidAmount": invoice.paid_amount or 0.0,
                 "pendingAmount": invoice.pending_amount or 0.0,
                 "invoiceCount": 1,
+                "invoiceIds": [invoice.id],
                 "latestInvoiceId": invoice.id,
                 "periodStart": invoice.period_start,
                 "status": "PENDING",
-            }
-
-    by_rider = {}
-    for invoice in rider_invoices:
-        existing = by_rider.get(invoice.user_id)
-        is_newer = (
-            existing is None
-            or (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
+        }
+        if not existing:
+            by_vendor[group_key] = base_row
+            continue
+        existing["totalOrders"] += base_row["totalOrders"]
+        existing["totalSales"] += base_row["totalSales"]
+        existing["productValue"] += base_row["productValue"]
+        existing["deliveryCollected"] += base_row["deliveryCollected"]
+        existing["riderEarning"] += base_row["riderEarning"]
+        existing["commissionAmount"] += base_row["commissionAmount"]
+        existing["netPayable"] += base_row["netPayable"]
+        existing["paidAmount"] += base_row["paidAmount"]
+        existing["pendingAmount"] += base_row["pendingAmount"]
+        existing["invoiceCount"] += 1
+        existing["invoiceIds"].append(invoice.id)
+        if (
+            (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
             or (
                 (invoice.period_start or datetime.min) == (existing["periodStart"] or datetime.min)
                 and invoice.id > existing["latestInvoiceId"]
             )
-        )
-        if is_newer:
+        ):
+            existing["latestInvoiceId"] = invoice.id
+            existing["periodStart"] = invoice.period_start
+
+    by_rider = {}
+    for invoice in rider_invoices:
+        existing = by_rider.get(invoice.user_id)
+        base_row = {
+            "riderId": invoice.user_id,
+            "riderName": invoice.user.name if invoice.user else "Rider",
+            "totalDeliveries": invoice.total_orders or 0,
+            "earningsPerDelivery": 0.0,
+            "deliveryCollected": invoice.delivery_collected or 0.0,
+            "totalEarnings": invoice.gross_earnings or 0.0,
+            "paidAmount": invoice.paid_amount or 0.0,
+            "pendingAmount": invoice.pending_amount or 0.0,
+            "invoiceCount": 1,
+            "invoiceIds": [invoice.id],
+            "latestInvoiceId": invoice.id,
+            "periodStart": invoice.period_start,
+            "status": "PENDING",
+        }
+        if not existing:
             by_rider[invoice.user_id] = {
-                "riderId": invoice.user_id,
-                "riderName": invoice.user.name if invoice.user else "Rider",
-                "totalDeliveries": invoice.total_orders or 0,
-                "earningsPerDelivery": 0.0,
-                "totalEarnings": invoice.gross_earnings or 0.0,
-                "paidAmount": invoice.paid_amount or 0.0,
-                "pendingAmount": invoice.pending_amount or 0.0,
-                "invoiceCount": 1,
-                "latestInvoiceId": invoice.id,
-                "periodStart": invoice.period_start,
-                "status": "PENDING",
+                **base_row
             }
+            continue
+        existing["totalDeliveries"] += base_row["totalDeliveries"]
+        existing["deliveryCollected"] += base_row["deliveryCollected"]
+        existing["totalEarnings"] += base_row["totalEarnings"]
+        existing["paidAmount"] += base_row["paidAmount"]
+        existing["pendingAmount"] += base_row["pendingAmount"]
+        existing["invoiceCount"] += 1
+        existing["invoiceIds"].append(invoice.id)
+        if (
+            (invoice.period_start or datetime.min) > (existing["periodStart"] or datetime.min)
+            or (
+                (invoice.period_start or datetime.min) == (existing["periodStart"] or datetime.min)
+                and invoice.id > existing["latestInvoiceId"]
+            )
+        ):
+            existing["latestInvoiceId"] = invoice.id
+            existing["periodStart"] = invoice.period_start
 
     vendors = []
     for row in by_vendor.values():
         row["totalSales"] = round(row["totalSales"], 2)
         row["commissionAmount"] = round(row["commissionAmount"], 2)
+        row["productValue"] = round(row["productValue"], 2)
+        row["deliveryCollected"] = round(row["deliveryCollected"], 2)
+        row["riderEarning"] = round(row["riderEarning"], 2)
         row["netPayable"] = round(row["netPayable"], 2)
         row["paidAmount"] = round(row["paidAmount"], 2)
         row["pendingAmount"] = round(row["pendingAmount"], 2)
@@ -4362,6 +4549,7 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
     riders = []
     for row in by_rider.values():
         row["totalEarnings"] = round(row["totalEarnings"], 2)
+        row["deliveryCollected"] = round(row["deliveryCollected"], 2)
         row["paidAmount"] = round(row["paidAmount"], 2)
         row["pendingAmount"] = round(row["pendingAmount"], 2)
         row["earningsPerDelivery"] = round(row["totalEarnings"] / row["totalDeliveries"], 2) if row["totalDeliveries"] else 0.0
@@ -4382,6 +4570,8 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
             "userName": p.user.name if p.user else "",
             "shopName": p.shop.name if p.shop else None,
             "amount": round(p.amount or 0.0, 2),
+            "paymentMethod": p.payment_method or "UPI",
+            "paymentReference": p.payment_reference or "",
             "paymentStatus": p.payment_status,
             "paymentDate": p.payment_date.isoformat() if p.payment_date else None,
             "periodStart": p.period_start.isoformat() if p.period_start else None,
@@ -4390,7 +4580,7 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
         } for p in payment_history],
     }
 
-def mark_invoice_paid(db: Session, invoice_id: int, note: str = ""):
+def mark_invoice_paid(db: Session, invoice_id: int, note: str = "", method: str = "UPI", payment_reference: str = ""):
     invoice = db.query(SettlementInvoice).filter(SettlementInvoice.id == invoice_id).first()
     if not invoice:
         raise HTTPException(404, "Invoice not found")
@@ -4400,7 +4590,8 @@ def mark_invoice_paid(db: Session, invoice_id: int, note: str = ""):
     invoice.paid_amount = round((invoice.paid_amount or 0.0) + amount, 2)
     invoice.pending_amount = 0.0
     invoice.status = "PAID"
-    invoice.updated_at = datetime.utcnow()
+    invoice.payout_locked_at = utc_now()
+    invoice.updated_at = utc_now()
     db.add(SettlementPayment(
         invoice_id=invoice.id,
         entity_type=invoice.entity_type,
@@ -4408,7 +4599,9 @@ def mark_invoice_paid(db: Session, invoice_id: int, note: str = ""):
         shop_id=invoice.shop_id,
         amount=amount,
         payment_status="PAID",
-        payment_date=datetime.utcnow(),
+        payment_method=(method or "UPI").upper(),
+        payment_reference=(payment_reference or "").strip(),
+        payment_date=utc_now(),
         period_start=invoice.period_start,
         period_end=invoice.period_end,
         notes=note or f"Marked as paid from admin {invoice.entity_type} settlement dashboard",
@@ -4450,12 +4643,18 @@ def admin_mark_invoice_paid(invoice_id: int, body: Optional[dict] = None,
                             user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != RoleEnum.ADMIN:
         raise HTTPException(403)
-    invoice = mark_invoice_paid(db, invoice_id, (body or {}).get("note", ""))
+    payload = body or {}
+    invoice = mark_invoice_paid(
+        db,
+        invoice_id,
+        payload.get("note", ""),
+        payload.get("method", "UPI"),
+        payload.get("paymentReference", ""),
+    )
     return {"ok": True, "invoice": invoice_dict(invoice)}
 
 # ── ADMIN: CSV EXPORT ─────────────────────────────────────────────
 import csv, io
-from fastapi.responses import StreamingResponse
 
 @app.get("/api/admin/export/orders")
 def export_orders(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -4530,7 +4729,7 @@ def vendor_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[s
     total_revenue = round(sum(vendor_merchandise_total(o) for o in delivered), 2)
     total_platform = round(sum(vendor_merchandise_total(o) * (float(_commission_rate.get("vendor_commission_pct", 0)) / 100.0) for o in delivered), 2)
     net_earnings = total_revenue - total_platform
-    this_month = [o for o in delivered if o.delivered_at and o.delivered_at.month == datetime.utcnow().month]
+    this_month = [o for o in delivered if o.delivered_at and o.delivered_at.month == utc_now().month]
     summary = settlement_summary_for_entity(db, "vendor", user.id, start, end, shop_id=shop.id)
     summary.update({
         "totalOrders": len(delivered),
@@ -4575,28 +4774,24 @@ def share_product(product_id: int, db: Session = Depends(get_db)):
 if __name__ == "__main__":
     import uvicorn
 
-    print("""
-╔══════════════════════════════════════════════════════════════╗
-║              🛍  DOTT API SERVER  v8.0                       ║
-╠══════════════════════════════════════════════════════════════╣
-║  Backend   →  http://localhost:8080                          ║
-║  API Docs  →  http://localhost:8080/docs                     ║
-╠══════════════════════════════════════════════════════════════╣
-║  Customer  →  http://localhost:3001  (npm run dev)           ║
-║  Vendor    →  http://localhost:3002  (npm run dev)           ║
-║  Rider     →  http://localhost:3003  (npm run dev)           ║
-║  Admin     →  http://localhost:3004  (npm run dev)           ║
-╠══════════════════════════════════════════════════════════════╣
-║  Demo login  →  arjun@example.com / password123              ║
-║  Vendor      →  rahul@dott.in    / password123               ║
-║  Admin       →  admin@dott.in    / password123               ║
-╚══════════════════════════════════════════════════════════════╝
-""")
+    print(
+        "\n"
+        + "=" * 64 + "\n"
+        + "DOTT API SERVER v8.0\n"
+        + "=" * 64 + "\n"
+        + "Backend  : http://localhost:8080\n"
+        + "API Docs : http://localhost:8080/docs\n"
+        + "Customer : http://localhost:3001 (npm run dev)\n"
+        + "Vendor   : http://localhost:3002 (npm run dev)\n"
+        + "Rider    : http://localhost:3003 (npm run dev)\n"
+        + "Admin    : http://localhost:3004 (npm run dev)\n"
+        + "=" * 64 + "\n"
+    )
 
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8080,
-        reload=True,
+        reload=os.getenv("DOTT_BACKEND_RELOAD", "0") == "1",
         reload_dirs=["."],
     )
