@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 
-// â”€â”€ SVG Icons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- SVG Icons ----------------------------------------
 const Ic = {
   Map:     (p={}) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>,
   Home:    (p={}) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
@@ -202,39 +202,55 @@ function DeliveryStepStrip({ status }) {
 }
 
 function OtpActionModal({ open, mode, value, setValue, loading, onClose, onSubmit }) {
+  const inputRef = useRef(null)
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 80)
+  }, [open])
   if (!open) return null
-  const title = mode === 'pickup' ? 'Confirm pickup with vendor OTP' : 'Confirm delivery with customer OTP'
+  const isPickup = mode === 'pickup'
+  const title = isPickup ? 'Vendor Pickup OTP' : 'Customer Delivery OTP'
   const note = mode === 'pickup'
-    ? 'Enter the 6-digit pickup OTP shown in the vendor app.'
-    : 'Enter the 6-digit delivery OTP shown by the customer.'
+    ? 'Ask the shop owner for the 6-digit pickup code before collecting the parcel.'
+    : 'Ask the customer for the 6-digit delivery code before completing the order.'
+  const digits = value.padEnd(6, ' ').slice(0, 6).split('')
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420, width: 'calc(100vw - 28px)', borderRadius: 24, padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
-          <div>
-            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22, color: 'var(--text2)', lineHeight: 1.1 }}>{title}</div>
-            <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 6, lineHeight: 1.45 }}>{note}</div>
-          </div>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}><Ic.Close width="16" height="16" /></button>
+    <div className="otp-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="otp-modal" onClick={e => e.stopPropagation()}>
+        <button className="otp-close" onClick={onClose} disabled={loading} aria-label="Close OTP dialog"><Ic.Close width="16" height="16" /></button>
+        <div className="otp-icon-wrap">
+          <div className="otp-icon">{isPickup ? 'P' : 'D'}</div>
+        </div>
+        <div style={{ textAlign: 'center', marginBottom: 18 }}>
+          <div className="otp-title">{title}</div>
+          <div className="otp-note">{note}</div>
         </div>
 
-        <div style={{ padding: '14px 16px', borderRadius: 18, background: 'linear-gradient(180deg,#f8fcff,#eef7ff)', border: '1px solid rgba(106,161,227,.18)', marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>OTP Code</div>
+        <div className="otp-code-card" onClick={() => inputRef.current?.focus()}>
+          <div className="otp-code-label">Enter 6 digit code</div>
+          <div className="otp-box-row">
+            {digits.map((digit, idx) => (
+              <div key={idx} className={`otp-box ${digit.trim() ? 'filled' : ''} ${value.length === idx ? 'active' : ''}`}>
+                {digit.trim() || ''}
+              </div>
+            ))}
+          </div>
           <input
+            ref={inputRef}
             value={value}
             onChange={e => setValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onKeyDown={e => { if (e.key === 'Enter' && value.length === 6 && !loading) onSubmit() }}
             inputMode="numeric"
             pattern="[0-9]*"
             maxLength={6}
-            placeholder="------"
-            style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', fontSize: 28, letterSpacing: '8px', fontWeight: 900, color: 'var(--text2)', textAlign: 'center', fontFamily: 'var(--font)' }}
+            className="otp-hidden-input"
+            aria-label="OTP code"
           />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 10 }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-green" disabled={loading || value.length !== 6} onClick={onSubmit}>
-            {loading ? 'Checking...' : mode === 'pickup' ? 'Verify Pickup OTP' : 'Confirm Delivery'}
+        <div className="otp-actions">
+          <button className="btn btn-ghost otp-cancel" onClick={onClose} disabled={loading}>Cancel</button>
+          <button className="btn btn-green otp-submit" disabled={loading || value.length !== 6} onClick={onSubmit}>
+            {loading ? 'Checking...' : isPickup ? 'Verify Pickup' : 'Confirm Delivery'}
           </button>
         </div>
       </div>
@@ -619,6 +635,12 @@ const api = {
     }
     return ax.post(`/orders/${id}/delivery-otp/verify`, { otp })
   },
+  requestDeliveryOtp: (id) => {
+    if (isRiderDemoMode()) {
+      return demoResponse({ ok: true, message: 'Customer notified to share delivery OTP' })
+    }
+    return ax.post(`/orders/${id}/delivery-otp/request`)
+  },
   advanceReturnPickup: (id, pickupStatus) => {
     if (isRiderDemoMode()) {
       const db = getDemoRiderDb()
@@ -647,6 +669,7 @@ const api = {
           id: `cod-settle-${Date.now()}`,
           amount,
           method: String(payload?.method || 'upi').toLowerCase(),
+          paymentReference: payload?.paymentReference || '',
           paymentDate: now,
           note: payload?.note || 'COD settlement to DOTT',
         },
@@ -659,7 +682,7 @@ const api = {
   },
 }
 
-/* â”€â”€ CSS â”€â”€ */
+/* -- CSS -- */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -830,6 +853,69 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
   text-align:center;font-size:14px;color:var(--red);font-weight:700;
 }
 
+/* OTP modal */
+.otp-overlay{
+  position:fixed;inset:0;z-index:650;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:rgba(10,32,52,.48);backdrop-filter:blur(10px);
+  animation:fadeIn .18s ease;
+}
+.otp-modal{
+  position:relative;width:min(420px,100%);border-radius:28px;padding:28px 22px 22px;
+  background:linear-gradient(180deg,#ffffff 0%,#f7fbff 100%);
+  border:1px solid rgba(207,230,251,.95);
+  box-shadow:0 28px 80px rgba(18,50,77,.28),0 8px 22px rgba(74,168,255,.12);
+  animation:otpPop .28s cubic-bezier(.22,1,.36,1);
+}
+.otp-modal::before{
+  content:'';position:absolute;inset:0 0 auto;height:92px;border-radius:28px 28px 42px 42px;
+  background:linear-gradient(135deg,rgba(74,168,255,.18),rgba(105,187,255,.06));
+  pointer-events:none;
+}
+.otp-close{
+  position:absolute;top:14px;right:14px;z-index:2;width:34px;height:34px;border-radius:12px;
+  border:1px solid rgba(207,230,251,.9);background:rgba(255,255,255,.86);color:var(--muted);
+  display:grid;place-items:center;cursor:pointer;transition:.2s;
+}
+.otp-close:hover{color:var(--text2);border-color:rgba(74,168,255,.36)}
+.otp-icon-wrap{position:relative;display:flex;justify-content:center;margin-bottom:14px}
+.otp-icon{
+  width:58px;height:58px;border-radius:20px;display:grid;place-items:center;
+  background:linear-gradient(135deg,#69bbff,#4aa8ff);color:#fff;
+  font-family:var(--font);font-size:24px;font-weight:900;
+  box-shadow:0 14px 28px rgba(74,168,255,.34);
+}
+.otp-title{
+  position:relative;font-family:var(--font);font-size:24px;font-weight:900;
+  color:var(--text2);letter-spacing:0;line-height:1.12;
+}
+.otp-note{
+  position:relative;margin:8px auto 0;max-width:330px;color:var(--muted);
+  font-size:13px;line-height:1.5;font-weight:650;
+}
+.otp-code-card{
+  position:relative;padding:16px;border-radius:20px;background:#fff;
+  border:1.5px solid rgba(207,230,251,.95);box-shadow:0 10px 24px rgba(42,116,189,.08);
+  margin-bottom:16px;cursor:text;
+}
+.otp-code-label{
+  font-size:10px;font-weight:900;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.7px;text-align:center;margin-bottom:12px;
+}
+.otp-box-row{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.otp-box{
+  aspect-ratio:1;border-radius:14px;background:#f2f8ff;border:1.5px solid #d7ecff;
+  display:grid;place-items:center;font-family:var(--font);font-size:22px;font-weight:900;
+  color:var(--text2);transition:.18s;
+}
+.otp-box.filled{background:#eaf6ff;border-color:rgba(74,168,255,.48);box-shadow:0 8px 14px rgba(74,168,255,.12)}
+.otp-box.active{border-color:#4aa8ff;box-shadow:0 0 0 3px rgba(74,168,255,.14)}
+.otp-hidden-input{
+  position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;left:50%;bottom:8px;
+}
+.otp-actions{display:grid;grid-template-columns:1fr 1.45fr;gap:10px}
+.otp-cancel,.otp-submit{min-height:46px;border-radius:14px}
+@keyframes otpPop{from{opacity:0;transform:translateY(18px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+
 /* Map modal */
 .map-overlay{position:fixed;inset:0;z-index:400;background:rgba(18,50,77,.24);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .2s ease;backdrop-filter:blur(4px)}
 .map-modal{background:var(--card);border-radius:20px;padding:0;width:100%;max-width:480px;overflow:hidden;animation:slideUp .3s cubic-bezier(.22,1,.36,1);border:1px solid var(--border)}
@@ -844,6 +930,15 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
   .cod-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
   .bottom-nav{border-radius:22px 22px 0 0}
   .map-modal{max-width:none}
+  .otp-overlay{align-items:center;padding:14px}
+  .otp-modal{border-radius:24px;padding:26px 16px 18px}
+  .otp-modal::before{border-radius:24px 24px 36px 36px}
+  .otp-title{font-size:22px}
+  .otp-note{font-size:12px}
+  .otp-code-card{padding:14px 10px}
+  .otp-box-row{gap:6px}
+  .otp-box{border-radius:12px;font-size:20px}
+  .otp-actions{grid-template-columns:1fr}
   .btn{width:100%}
   .card{padding:12px}
   .history-item{align-items:flex-start}
@@ -872,14 +967,14 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
 }
 `
 
-/* â”€â”€ Icons â”€â”€ */
+/* -- Icons -- */
 
 function Toast({ msg, type }) {
   const c = type === 'error' ? '#f85149' : type === 'success' ? '#3fb950' : '#388bfd'
   return <div className="toast" style={{ borderColor: c, color: c }}>{msg}</div>
 }
 
-/* â”€â”€ LEAFLET MAP PICKER â”€â”€ */
+/* -- LEAFLET MAP PICKER -- */
 function MapPicker({ lat, lng, onPinMove, height = 260 }) {
   const mapRef = useRef(null)
   const leafletMapRef = useRef(null)
@@ -927,7 +1022,7 @@ function MapPicker({ lat, lng, onPinMove, height = 260 }) {
   )
 }
 
-/* â”€â”€ MAP LOCATION MODAL â”€â”€ */
+/* -- MAP LOCATION MODAL -- */
 function MapLocationModal({ currentLat, currentLng, onSave, onClose }) {
   const initialCoords = (currentLat != null && currentLng != null)
     ? { lat: Number(currentLat), lng: Number(currentLng) }
@@ -1024,7 +1119,7 @@ function RiderNavigationModal({ order, riderLoc, mode, onModeChange, onClose }) 
         <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--text2)' }}>{title}</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>#{order.orderCode} · {name}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>#{order.orderCode}  -  {name}</div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}><Ic.Close width="16" height="16" /></button>
         </div>
@@ -1074,9 +1169,9 @@ function RiderNavigationModal({ order, riderLoc, mode, onModeChange, onClose }) 
   )
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   AUTH PAGE â€” full page with animated background
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+/* ----------------------------------------
+   AUTH PAGE - full page with animated background
+---------------------------------------- */
 function LegalModal({ type, onClose }) {
   const isPrivacy = type === 'privacy'
   const title = isPrivacy ? 'Privacy Policy' : 'Terms & Conditions'
@@ -1190,20 +1285,43 @@ function AuthPage({ onSuccess }) {
       <div style={{ position:'absolute',inset:0,backgroundImage:'radial-gradient(circle,rgba(74,168,255,.14) 1px,transparent 1px)',backgroundSize:'28px 28px',animation:'bgShift 10s linear infinite',pointerEvents:'none' }}/>
       <div className="auth-side" style={{ width:'44%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:40,position:'relative' }}>
         <div style={{ textAlign:'center',color:'var(--text2)' }}>
-          <div style={{ fontSize:68,marginBottom:12,animation:'float 3s ease-in-out infinite' }}>RIDER</div>
-          <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:32,letterSpacing:'-.5px',marginBottom:8 }}>DOTT <span style={{color:'var(--green2)'}}>Rider</span></div>
-          <div style={{ color:'var(--muted)',fontSize:14,lineHeight:1.6,marginBottom:24 }}>Deliver fast. Earn per km.</div>
-          {['Distance-based pay - earn per km','First to accept gets the order','Earnings to UPI/Bank directly','Built-in navigation support'].map(f => (
-            <div key={f} style={{ padding:'10px 14px',background:'rgba(74,168,255,.08)',borderRadius:12,marginBottom:8,border:'1px solid rgba(74,168,255,.18)',textAlign:'left',fontSize:13,color:'#2563eb',fontWeight:600 }}>{f}</div>
+          <div style={{display:'inline-flex',alignItems:'center',gap:8,padding:'8px 13px',borderRadius:999,background:'rgba(63,185,80,.1)',border:'1px solid rgba(63,185,80,.18)',fontSize:11,fontWeight:900,letterSpacing:'.8px',textTransform:'uppercase',marginBottom:18,color:'var(--green2)'}}>Rider onboarding</div>
+          <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:38,letterSpacing:'-1.2px',marginBottom:10,lineHeight:1.06 }}>Earn locally with faster order handoffs.</div>
+          <div style={{ color:'var(--muted)',fontSize:14,lineHeight:1.65,marginBottom:26,maxWidth:360 }}>Go online, accept nearby orders, follow pickup steps, and settle earnings from the rider app.</div>
+          <div style={{display:'grid',gap:10,maxWidth:380}}>
+          {[
+            ['Fast matching','Nearby jobs show when your GPS is active'],
+            ['Clear route steps','Pickup and delivery actions stay simple'],
+            ['Earnings ready','UPI or bank payout details in profile'],
+            ['COD support','Track cash collected and settlements']
+          ].map(([title,copy]) => (
+            <div key={title} style={{ padding:'13px 15px',background:'rgba(255,255,255,.75)',borderRadius:16,border:'1px solid rgba(74,168,255,.18)',textAlign:'left',boxShadow:'0 10px 24px rgba(42,116,189,.06)' }}>
+              <div style={{fontSize:13,fontWeight:900,color:'var(--text2)'}}>{title}</div>
+              <div style={{fontSize:11,color:'var(--muted)',lineHeight:1.45,marginTop:3}}>{copy}</div>
+            </div>
           ))}
+          </div>
         </div>
       </div>
       <div className="auth-main" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px 20px',minHeight:'100vh' }}>
         <div className="auth-card" style={{ width:'100%',maxWidth:400,background:'var(--card)',borderRadius:24,padding:32,border:'1px solid var(--border)',boxShadow:'0 24px 64px rgba(42,116,189,.16)',animation:'slideUp .4s cubic-bezier(.22,1,.36,1)' }}>
-          <div style={{ marginBottom:22 }}>
-            <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:24,color:'var(--text2)' }}>{tab==='login'?'Welcome back':'Join as Rider'}</div>
-            <div style={{ color:'var(--muted)',fontSize:13,marginTop:4 }}>{tab==='login'?'Sign in to your rider account':'Start earning today'}</div>
+          <div style={{ marginBottom:20 }}>
+            <div style={{display:'inline-flex',padding:'6px 10px',borderRadius:999,background:'rgba(63,185,80,.08)',color:'var(--green2)',fontSize:10,fontWeight:900,textTransform:'uppercase',letterSpacing:'.5px',marginBottom:12}}>
+              {tab==='login'?'Rider sign in':'Rider application'}
+            </div>
+            <div style={{ fontFamily:'var(--font)',fontWeight:900,fontSize:26,color:'var(--text2)',letterSpacing:'-.6px',lineHeight:1.08 }}>{tab==='login'?'Welcome back':'Join the delivery team'}</div>
+            <div style={{ color:'var(--muted)',fontSize:13,marginTop:7,lineHeight:1.55 }}>{tab==='login'?'Sign in to view active jobs and earnings.':'Create your rider login and set your service location.'}</div>
           </div>
+          {tab==='register'&&(
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:16}}>
+              {['Profile','GPS','Payout'].map((step,i)=>(
+                <div key={step} style={{padding:'10px 8px',borderRadius:14,background:'rgba(63,185,80,.055)',border:'1px solid rgba(63,185,80,.12)',textAlign:'center'}}>
+                  <div style={{width:24,height:24,borderRadius:9,background:i===0?'var(--green2)':'rgba(63,185,80,.13)',color:i===0?'#fff':'var(--green2)',display:'grid',placeItems:'center',fontSize:11,fontWeight:900,margin:'0 auto 6px'}}>{i+1}</div>
+                  <div style={{fontSize:10,fontWeight:900,color:'var(--text2)'}}>{step}</div>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="auth-toggle" style={{ display:'flex',background:'var(--surface)',borderRadius:12,padding:4,gap:4,marginBottom:22 }}>
             {['login','register'].map(t => (
               <button key={t} onClick={()=>{setTab(t);setOtpStep('form');setOtpValue('');setError('')}} style={{ flex:1,padding:'10px',borderRadius:9,border:'none',cursor:'pointer',background:tab===t?'var(--green2)':'transparent',color:tab===t?'#fff':'var(--muted)',fontFamily:'var(--font)',fontWeight:800,fontSize:13,transition:'.2s' }}>
@@ -1241,13 +1359,13 @@ function AuthPage({ onSuccess }) {
               <div><label className="label">Email</label><input className="input" type="email" placeholder="rider@email.com" value={form.email} onChange={set('email')}/></div>
               <div><label className="label">Password</label><input className="input" type="password" placeholder="Password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
               <div className="auth-loc-row" style={{display:'flex',gap:8}}>
-                <div onClick={getLoc} style={{flex:1,display:'flex',alignItems:'center',gap:8,padding:'11px 13px',borderRadius:12,border:`1.5px solid ${loc?'var(--green2)':'var(--border)'}`,background:loc?'rgba(63,185,80,.07)':'var(--surface)',cursor:'pointer',transition:'.2s'}}>
-                  <span style={{fontSize:18}}>{loc?'OK':''}</span>
-                  <div><div style={{fontWeight:700,fontSize:12,color:'var(--text2)'}}>{loc?'GPS set':'Use GPS'}</div><div style={{color:'var(--muted)',fontSize:10}}>{loc?`${loc.lat.toFixed(3)}`:'Auto-detect'}</div></div>
+                <div onClick={getLoc} style={{flex:1,display:'flex',alignItems:'center',gap:9,padding:'12px 13px',borderRadius:14,border:`1.5px solid ${loc?'var(--green2)':'var(--border)'}`,background:loc?'rgba(63,185,80,.07)':'var(--surface)',cursor:'pointer',transition:'.2s'}}>
+                  <span style={{width:30,height:30,borderRadius:11,background:loc?'rgba(63,185,80,.13)':'#eef7ff',color:loc?'var(--green2)':'#2563eb',display:'grid',placeItems:'center',fontSize:10,fontWeight:900}}>{loc?'Set':'GPS'}</span>
+                  <div><div style={{fontWeight:800,fontSize:12,color:'var(--text2)'}}>{loc?'GPS set':'Use GPS'}</div><div style={{color:'var(--muted)',fontSize:10,marginTop:2}}>{loc?`${loc.lat.toFixed(3)}`:'Auto-detect'}</div></div>
                 </div>
-                <div onClick={()=>setShowMapPicker(true)} style={{flex:1,display:'flex',alignItems:'center',gap:8,padding:'11px 13px',borderRadius:12,border:'1.5px solid var(--border)',background:'var(--surface)',cursor:'pointer',transition:'.2s'}}>
-                  <span style={{fontSize:18}}></span>
-                  <div><div style={{fontWeight:700,fontSize:12,color:'var(--text2)'}}>Pick Map</div><div style={{color:'var(--muted)',fontSize:10}}>Pin location</div></div>
+                <div onClick={()=>setShowMapPicker(true)} style={{flex:1,display:'flex',alignItems:'center',gap:9,padding:'12px 13px',borderRadius:14,border:'1.5px solid var(--border)',background:'var(--surface)',cursor:'pointer',transition:'.2s'}}>
+                  <span style={{width:30,height:30,borderRadius:11,background:'#eef7ff',color:'#2563eb',display:'grid',placeItems:'center',fontSize:10,fontWeight:900}}>Map</span>
+                  <div><div style={{fontWeight:800,fontSize:12,color:'var(--text2)'}}>Pick Map</div><div style={{color:'var(--muted)',fontSize:10,marginTop:2}}>Pin location</div></div>
                 </div>
               </div>
               {error && <div style={{color:'#f85149',fontSize:13,padding:'10px 14px',background:'rgba(248,81,73,.07)',borderRadius:10,fontWeight:600}}>{error}</div>}
@@ -1273,7 +1391,7 @@ function AuthPage({ onSuccess }) {
 }
 
 
-// â”€â”€â”€ Delivery Countdown (shared with vendor) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Delivery Countdown (shared with vendor) ----------------------------------------
 function DeliveryCountdown({ placedAt, compact=false }) {
   const endTime = useRef(new Date(placedAt).getTime() + 60 * 60 * 1000)
   const [secsLeft, setSecsLeft] = useState(Math.max(0, Math.floor((endTime.current - Date.now()) / 1000)))
@@ -1311,7 +1429,7 @@ function DeliveryCountdown({ placedAt, compact=false }) {
   )
 }
 
-// â”€â”€â”€ Rider Points System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Rider Points System ----------------------------------------
 function DeliveryCountdownSync({ placedAt, deadline, serverNow, compact=false }) {
   const endTime = useRef(deadline ? new Date(deadline).getTime() : new Date(placedAt).getTime() + 60 * 60 * 1000)
   const serverOffset = useRef(serverNow ? (new Date(serverNow).getTime() - Date.now()) : 0)
@@ -1379,6 +1497,7 @@ function HomeTab({
   const [active, setActive] = useState([])
   const [codSummary, setCodSummary] = useState(null)
   const [settling, setSettling] = useState('')
+  const [codPay, setCodPay] = useState(null)
 
   useEffect(() => {
     api.earnings().then(r => setEarnings(r.data)).catch(() => {})
@@ -1394,21 +1513,50 @@ function HomeTab({
   const paymentHistory = Array.isArray(codSummary?.paymentHistory) ? codSummary.paymentHistory : []
   const lastSettlement = paymentHistory[0] || null
 
-  const settleCod = async (method) => {
+  const startCodSettlement = (method) => {
     if (!pendingCod) {
       onShowToast?.('No pending COD amount to settle', 'info')
       return
     }
+    setCodPay({ method, reference: '', launched: false, confirmed: false })
+  }
+
+  const launchCodPayment = () => {
+    const method = codPay?.method || 'upi'
     const upiId = company.upiId || toUpiFromPhone(company.contactPhone)
-    if (upiId) openUpiPaymentLink(method, upiId, pendingCod, `COD settlement by ${user?.name || 'Rider'}`)
+    if (!upiId) {
+      onShowToast?.('Company UPI is not configured', 'error')
+      return
+    }
+    const opened = openUpiPaymentLink(method, upiId, pendingCod, `COD settlement by ${user?.name || 'Rider'}`)
+    if (opened) setCodPay(p => p ? { ...p, launched: true } : p)
+  }
+
+  const settleCod = async () => {
+    const method = codPay?.method || 'upi'
+    const paymentReference = (codPay?.reference || '').trim()
+    if (!paymentReference) {
+      onShowToast?.('Enter UTR / payment reference after payment', 'error')
+      return
+    }
+    if (!codPay?.launched) {
+      onShowToast?.('Open the payment app first', 'error')
+      return
+    }
+    if (!codPay?.confirmed) {
+      onShowToast?.('Confirm that the payment is completed', 'error')
+      return
+    }
     setSettling(method)
     try {
       const r = await api.payCodSettlement({
         amount: pendingCod,
         method,
+        paymentReference,
         note: `COD settlement from rider app via ${String(method || 'upi').toUpperCase()}`,
       })
       setCodSummary(r.data?.summary || r.data)
+      setCodPay(null)
       onShowToast?.(`COD settled: Rs ${pendingCod.toFixed(2)}`, 'success')
     } catch (e) {
       onShowToast?.(e?.response?.data?.detail || 'COD settlement failed', 'error')
@@ -1484,15 +1632,53 @@ function HomeTab({
           <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text2)' }}>{company.companyName || 'DOTT Marketplace'}</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>UPI: {company.upiId || toUpiFromPhone(company.contactPhone) || 'Not configured'}</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>Phone: {company.contactPhone || 'Not configured'}</div>
+          <div style={{ fontSize: 12, fontWeight: 900, color: pendingCod > 0 ? '#f97316' : '#22c55e', marginTop: 8 }}>You need to pay: {formatRiderMoney(pendingCod)}</div>
         </div>
         <div className="cod-actions">
-          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'phonepe'} onClick={() => settleCod('phonepe')}>
+          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'phonepe'} onClick={() => startCodSettlement('phonepe')}>
             {settling === 'phonepe' ? 'Processing...' : 'Settle via PhonePe'}
           </button>
-          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'gpay'} onClick={() => settleCod('gpay')}>
+          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'gpay'} onClick={() => startCodSettlement('gpay')}>
             {settling === 'gpay' ? 'Processing...' : 'Settle via GPay'}
           </button>
         </div>
+        {codPay && (
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: '#fff', border: '1.5px solid var(--green2)', display: 'grid', gap: 10 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>
+              Complete {codPay.method === 'phonepe' ? 'PhonePe' : 'GPay'} payment
+            </div>
+            <div style={{ padding: 12, borderRadius: 12, background: '#f8fbff', border: '1px solid var(--border)', display: 'grid', gap: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase' }}>Amount to pay</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: '#f97316', fontFamily: 'var(--font)' }}>{formatRiderMoney(pendingCod)}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>Pay this amount to {company.companyName || 'DOTT Marketplace'} first. Only after payment is complete, enter the UTR below.</div>
+            </div>
+            <button className="btn btn-blue btn-compact" onClick={launchCodPayment} disabled={Boolean(settling)}>
+              {codPay.launched ? 'Open Payment App Again' : `Open ${codPay.method === 'phonepe' ? 'PhonePe' : 'GPay'} Now`}
+            </button>
+            <div style={{ fontSize: 12, color: codPay.launched ? '#22c55e' : 'var(--muted)', fontWeight: 700 }}>
+              {codPay.launched ? 'Payment app opened. Enter UTR only after successful transfer.' : 'Payment is not marked done yet.'}
+            </div>
+            <input
+              className="input"
+              value={codPay.reference}
+              onChange={e => setCodPay(p => ({ ...p, reference: e.target.value }))}
+              placeholder="Enter UTR / transaction ID"
+              style={{ fontWeight: 800 }}
+            />
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 10, borderRadius: 12, border: '1px solid var(--border)', background: '#f8fbff' }}>
+              <input type="checkbox" checked={Boolean(codPay.confirmed)} onChange={e => setCodPay(p => ({ ...p, confirmed: e.target.checked }))} style={{ marginTop: 2 }} />
+              <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                I completed this payment successfully and this UTR belongs to this COD transfer.
+              </span>
+            </label>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost btn-compact" onClick={() => setCodPay(null)} disabled={Boolean(settling)}>Cancel</button>
+              <button className="btn btn-blue btn-compact" onClick={settleCod} disabled={Boolean(settling) || !codPay.reference.trim() || !codPay.launched || !codPay.confirmed}>
+                {settling ? 'Recording...' : 'Mark Paid After Transfer'}
+              </button>
+            </div>
+          </div>
+        )}
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
             <div className="section-title" style={{ margin: 0, fontSize: 16 }}>Settlement History</div>
@@ -1590,7 +1776,7 @@ function HomeTab({
   )
 }
 
-/* â”€â”€ NEARBY ORDERS â”€â”€ */
+/* -- NEARBY ORDERS -- */
 function NearbyTab({ isOnline, loc, showToast, onAccepted, deliveryRangeKm, orders = [], returns = [], loading = false, onRefresh }) {
   const [accepting, setAccepting] = useState(null)
 
@@ -1739,7 +1925,7 @@ function NearbyTab({ isOnline, loc, showToast, onAccepted, deliveryRangeKm, orde
   )
 }
 
-/* â”€â”€ ACTIVE DELIVERIES â”€â”€ */
+/* -- ACTIVE DELIVERIES -- */
 function ActiveTab({ showToast, riderLoc }) {
   const [orders, setOrders] = useState([])
   const [returnPickups, setReturnPickups] = useState([])
@@ -1766,9 +1952,17 @@ function ActiveTab({ showToast, riderLoc }) {
     return () => clearInterval(t)
   }, [])
 
-  const openOtpModal = (mode, order) => {
+  const openOtpModal = async (mode, order) => {
     setOtpInput('')
     setOtpModal({ open: true, mode, order })
+    if (mode === 'delivery') {
+      try {
+        await api.requestDeliveryOtp(order.id)
+        showToast('Customer notified to share delivery OTP.', 'success')
+      } catch (e) {
+        showToast(e?.response?.data?.detail || 'Could not notify customer. Ask them to open the order OTP.', 'error')
+      }
+    }
   }
 
   const closeOtpModal = () => {
@@ -1971,7 +2165,7 @@ function ActiveTab({ showToast, riderLoc }) {
   )
 }
 
-/* â”€â”€ EARNINGS TAB â”€â”€ */
+/* -- EARNINGS TAB -- */
 function EarningsTab() {
   const [perf, setPerf] = useState(null)
   useEffect(() => { api.performance().then(r => setPerf(r.data)).catch(() => {}) }, [])
@@ -2084,9 +2278,9 @@ function EarningsTab() {
   )
 }
 
-/* â”€â”€ PROFILE TAB â”€â”€ */
+/* -- PROFILE TAB -- */
 
-/* â”€â”€ RIDER PAYMENT FORM â”€â”€ */
+/* -- RIDER PAYMENT FORM -- */
 function RiderPaymentForm({ user, onSave }) {
   const [mode, setMode] = useState(user?.paymentMethod || 'upi')
   const [upi, setUpi] = useState(user?.upiId || '')
@@ -2155,7 +2349,7 @@ function ProfileTab({ user, isOnline, onToggleOnline, loc, onLocUpdate, onSignOu
         <button className={`toggle ${isOnline ? 'on' : 'off'}`} onClick={onToggleOnline} />
       </div>
 
-      {/* â”€â”€ LOCATION SECTION â”€â”€ */}
+      {/* -- LOCATION SECTION -- */}
       <div className="card fade-up" style={{ animationDelay: '.1s' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <Ic.Loc width="18" height="18" />
@@ -2229,9 +2423,9 @@ function ProfileTab({ user, isOnline, onToggleOnline, loc, onLocUpdate, onSignOu
   )
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    APP ROOT
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 export default function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -2333,6 +2527,33 @@ export default function App() {
     refreshNearby()
     if (isOnline) { const t = setInterval(refreshNearby, 12000); return () => clearInterval(t) }
   }, [user, isOnline, refreshNearby])
+
+  useEffect(() => {
+    if (!user || !isOnline) return
+    let cancelled = false
+    let syncing = false
+
+    const syncLiveLocation = async () => {
+      if (cancelled || syncing) return
+      syncing = true
+      try {
+        const l = await getLocation()
+        if (!cancelled && l?.lat != null && l?.lng != null) {
+          const saved = { lat: l.lat, lng: l.lng }
+          setLoc(saved)
+          saveStoredRiderLocation(saved)
+          await api.updateLocation(saved)
+        }
+      } catch (e) {
+      } finally {
+        syncing = false
+      }
+    }
+
+    syncLiveLocation()
+    const t = setInterval(syncLiveLocation, 4000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [user, isOnline])
 
   const toggleOnline = async () => {
     const next = !isOnline

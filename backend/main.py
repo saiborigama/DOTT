@@ -1,11 +1,14 @@
 import os, time, math, json, random, urllib.parse, urllib.request, urllib.error, mimetypes, base64, io, hashlib, contextlib
+import smtplib
+from email.message import EmailMessage
+from email.utils import formataddr
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, inspect
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta, UTC
@@ -22,29 +25,13 @@ try:
 except Exception:
     Image = ImageFilter = ImageOps = ImageEnhance = ImageChops = None
 
-try:
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        from rembg import remove as rembg_remove
-except BaseException:
-    rembg_remove = None
-
-try:
-    import faiss
-except Exception:
-    faiss = None
-
-try:
-    import torch
-    from transformers import CLIPModel, CLIPProcessor
-except Exception:
-    torch = None
-    CLIPModel = None
-    CLIPProcessor = None
-
-try:
-    import pyotp
-except Exception:
-    pyotp = None
+rembg_remove = None
+faiss = None
+torch = None
+CLIPModel = None
+CLIPProcessor = None
+SimpleCategoryCNN = None
+preprocess_pil = None
 
 try:
     import firebase_admin
@@ -56,7 +43,8 @@ except Exception:
 
 from database import (Base, engine, get_db, User, Shop, Product, Order, OrderItem,
                       Review, ReturnRequest, RefreshToken, OTPStore, SettlementInvoice,
-                      SettlementPayment, RoleEnum, OrderStatusEnum, ReturnStatusEnum)
+                      SettlementPayment, Notification, ShopLocationChangeRequest,
+                      RoleEnum, OrderStatusEnum, ReturnStatusEnum)
 from auth import (hash_password, verify_password, create_access_token, create_refresh_token,
                   decode_token, get_current_user)
 from config import settings
@@ -69,9 +57,9 @@ def utc_now():
 
 def ensure_column(table_name: str, column_name: str, column_sql: str):
     with engine.begin() as conn:
-        cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table_name})"))}
+        cols = {col["name"] for col in inspect(conn).get_columns(table_name)}
         if column_name not in cols:
-            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"))
+            conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_sql}'))
 
 for table_name, column_name, column_sql in [
     ("users", "is_premium", "BOOLEAN DEFAULT 0"),
@@ -82,6 +70,8 @@ for table_name, column_name, column_sql in [
     ("users", "totp_secret", "VARCHAR"),
     ("users", "totp_enabled", "BOOLEAN DEFAULT 0"),
     ("users", "fcm_token", "VARCHAR"),
+    ("users", "phonepe_number", "VARCHAR"),
+    ("users", "gpay_number", "VARCHAR"),
     ("products", "processed_image_url", "VARCHAR"),
     ("products", "visual_embedding", "TEXT"),
     ("products", "visual_embedding_model", "VARCHAR DEFAULT 'fallback-histogram-v1'"),
@@ -133,6 +123,7 @@ for table_name, column_name, column_sql in [
     ("return_requests", "pickup_rider_id", "INTEGER"),
     ("return_requests", "pickup_completed_at", "DATETIME"),
     ("return_requests", "processed_at", "DATETIME"),
+    ("reviews", "images", "TEXT DEFAULT '[]'"),
     ("settlement_invoices", "product_value", "FLOAT DEFAULT 0"),
     ("settlement_invoices", "delivery_collected", "FLOAT DEFAULT 0"),
     ("settlement_invoices", "rider_earning_amount", "FLOAT DEFAULT 0"),
@@ -203,6 +194,7 @@ def haversine(lat1, lng1, lat2, lng2):
 
 BASE_DELIVERY_FEE = 20.0
 DISTANCE_FEE_PER_KM = 8.0
+FREE_BASE_DISTANCE_KM = 1.0
 PLATFORM_FEE = 10.0
 FREE_DELIVERY_THRESHOLD = 999.0
 NO_RETURN_BELOW = 300.0
@@ -230,7 +222,8 @@ RIDER_DELAY_PENALTY = 10.0
 
 def calc_delivery_fee(km: float) -> float:
     km = max(0.0, float(km or 0.0))
-    return round(BASE_DELIVERY_FEE + (km * DISTANCE_FEE_PER_KM), 2)
+    extra_km = max(0, math.ceil(km) - 1)
+    return round(BASE_DELIVERY_FEE + (extra_km * DISTANCE_FEE_PER_KM), 2)
 
 def calc_rider_earning(km: float) -> float:
     """Rider gets base + per-km rate."""
@@ -258,7 +251,9 @@ def calc_gst_rate(km: float, subtotal: float) -> float:
 
 def compute_pricing(subtotal: float, km: float, is_premium: bool = False, weather: Optional[str] = None):
     base_fee = BASE_DELIVERY_FEE
-    distance_fee = round(max(0.0, km) * DISTANCE_FEE_PER_KM, 2)
+    safe_km = max(0.0, float(km or 0.0))
+    billable_distance_km = max(0, math.ceil(safe_km) - 1)
+    distance_fee = round(billable_distance_km * DISTANCE_FEE_PER_KM, 2)
     raw_delivery = round(base_fee + distance_fee, 2)
     surge_fee, surge_reasons = calc_surge_fee(weather=weather)
     gst_rate = calc_gst_rate(km, subtotal)
@@ -271,6 +266,7 @@ def compute_pricing(subtotal: float, km: float, is_premium: bool = False, weathe
         "subtotal": round(subtotal, 2),
         "km": round(km, 2),
         "baseDeliveryFee": round(base_fee, 2),
+        "billableDistanceKm": billable_distance_km,
         "distanceFee": distance_fee,
         "rawDeliveryFee": raw_delivery,
         "surgeFee": round(surge_fee, 2),
@@ -375,57 +371,6 @@ def finalize_delivery_timing(order: Order):
 def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
-def normalize_sms_phone(phone: str) -> str:
-    raw = (phone or "").strip().replace(" ", "").replace("-", "")
-    if raw.startswith("+"):
-        return raw
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    country = (settings.twilio_default_country_code or "+91").strip()
-    if len(digits) == 10:
-        return f"{country}{digits}"
-    return f"+{digits}" if digits else raw
-
-def send_otp_via_twilio(phone: str, otp: str) -> bool:
-    sid = settings.twilio_account_sid.strip()
-    token = settings.twilio_auth_token.strip()
-    from_number = settings.twilio_from_number.strip()
-    messaging_service_sid = settings.twilio_messaging_service_sid.strip()
-    if not sid or not token or (not from_number and not messaging_service_sid):
-        raise HTTPException(
-            503,
-            "Twilio is not configured. Add TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID in backend/.env.",
-        )
-    payload = {
-        "To": normalize_sms_phone(phone),
-        "Body": f"Your DOTT verification code is {otp}. Do not share it with anyone.",
-    }
-    if messaging_service_sid:
-        payload["MessagingServiceSid"] = messaging_service_sid
-    else:
-        payload["From"] = from_number
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
-    try:
-        with httpx.Client(timeout=12.0) as client:
-            res = client.post(url, data=payload, auth=(sid, token))
-        if res.status_code >= 400:
-            detail = "Unable to send OTP through Twilio."
-            try:
-                detail = res.json().get("message") or detail
-            except Exception:
-                pass
-            raise HTTPException(502, detail)
-        return True
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(502, "Unable to reach Twilio. Check internet connection and Twilio credentials.")
-
-def send_otp_message(phone: str, otp: str) -> bool:
-    provider = (settings.otp_sms_provider or "mock").strip().lower()
-    if provider == "twilio":
-        return send_otp_via_twilio(phone, otp)
-    return False
-
 _otp_rate = defaultdict(list)
 def rate_check(key: str, limit: int = 5, window: int = 60) -> bool:
     now = utc_now()
@@ -445,15 +390,85 @@ def verify_otp_hash(stored_value: str, supplied_otp: str) -> bool:
     except Exception:
         return False
 
-OPENAI_API_KEY = settings.openai_api_key.strip()
-OPENAI_BASE_URL = settings.openai_base_url
-OPENAI_IMAGE_MODEL = settings.openai_image_model
+def normalize_otp_email(value: str) -> str:
+    email = (value or "").strip().lower()
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise HTTPException(400, "Enter a valid email address")
+    return email
+
+def normalize_optional_phone(value: Optional[str]) -> str:
+    phone = "".join(ch for ch in (value or "") if ch.isdigit())
+    if not phone:
+        return ""
+    if len(phone) != 10:
+        raise HTTPException(400, "Enter a valid 10-digit phone number")
+    return phone
+
+def normalize_account_password(value: Optional[str], required: bool = False) -> str:
+    password = value or ""
+    if not password:
+        if required:
+            raise HTTPException(400, "Enter your password")
+        return ""
+    if len(password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    return password
+
+def send_otp_email(to_email: str, otp: str) -> bool:
+    host = (settings.otp_email_host or "").strip()
+    user = (settings.otp_email_user or "").strip()
+    password = (settings.otp_email_password or "").strip().replace(" ", "")
+    sender = (settings.otp_email_from or user).strip()
+    sender_name = (settings.otp_email_from_name or "DDOTT Updates").strip()
+    if not host or not user or not password or not sender:
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = "Your DOTT login OTP"
+    msg["From"] = formataddr((sender_name, sender))
+    msg["To"] = to_email
+    msg.set_content(
+        f"Your DOTT verification code is {otp}.\n\n"
+        "This code expires in 5 minutes. Do not share it with anyone."
+    )
+    try:
+        with smtplib.SMTP(host, int(settings.otp_email_port or 587), timeout=15) as smtp:
+            if settings.otp_email_use_tls:
+                smtp.starttls()
+            smtp.login(user, password)
+            smtp.send_message(msg)
+        return True
+    except Exception:
+        raise HTTPException(502, "Unable to send OTP email. Check backend email settings.")
+
+def normalize_configured_api_key(value: str) -> str:
+    key = (value or "").strip().strip('"').strip("'")
+    if key.lower() in {"your_key_here", "your_gemini_api_key_here", "paste_your_key_here"}:
+        return ""
+    return key
+
+def configured_gemini_api_key() -> str:
+    candidates = [
+        getattr(settings, "gemini_api_key", ""),
+        getattr(settings, "google_api_key", ""),
+        getattr(settings, "google_generative_ai_api_key", ""),
+        os.getenv("GEMINI_API_KEY", ""),
+        os.getenv("GOOGLE_API_KEY", ""),
+        os.getenv("GOOGLE_GENERATIVE_AI_API_KEY", ""),
+    ]
+    for value in candidates:
+        key = normalize_configured_api_key(value)
+        if key:
+            return key
+    return ""
+
+GEMINI_API_KEY = configured_gemini_api_key()
+GEMINI_MODEL = settings.gemini_model.strip() or "gemini-2.5-flash"
+GEMINI_IMAGE_MODEL = (getattr(settings, "gemini_image_model", "") or "gemini-2.5-flash-image").strip()
 PUBLIC_BASE_URL = settings.public_base_url
-IMAGE_CLEANUP_PROVIDER = (settings.image_cleanup_provider or "auto").strip().lower()
-REMOVE_BG_API_KEY = settings.remove_bg_api_key.strip()
 FIREBASE_SERVICE_ACCOUNT_JSON = (getattr(settings, "firebase_service_account_json", "") or "").strip()
 VISUAL_EMBED_MODEL = "clip-vit-base-patch32" if CLIPModel and CLIPProcessor and torch else "fallback-histogram-v1"
 _clip_bundle = None
+_vendor_category_bundle = None
 
 _firebase_app = None
 def get_firebase_app():
@@ -473,19 +488,6 @@ def get_firebase_app():
         return _firebase_app
     except Exception:
         return None
-
-def ensure_totp_available():
-    if not pyotp:
-        raise HTTPException(503, "TOTP provider not available. Install pyotp on the backend.")
-
-def verify_totp(secret: str, code: str) -> bool:
-    ensure_totp_available()
-    if not secret or not code:
-        return False
-    try:
-        return pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1)
-    except Exception:
-        return False
 
 def _safe_push_data(payload: Optional[dict]) -> dict:
     return {str(k): str(v) for k, v in (payload or {}).items()}
@@ -524,6 +526,58 @@ def send_push_bulk(users: list[User], title: str, body: str, data: Optional[dict
         return resp.success_count
     except Exception:
         return 0
+
+def notification_dict(n: Notification) -> dict:
+    payload = json_loads_safe(getattr(n, "data_json", "{}"), {})
+    return {
+        "id": n.id,
+        "userId": n.user_id,
+        "role": n.role,
+        "title": n.title,
+        "body": n.body,
+        "category": n.category,
+        "data": payload,
+        "isRead": bool(n.is_read),
+        "createdAt": n.created_at.isoformat() if n.created_at else None,
+    }
+
+def store_notification(db: Session, *, user: Optional[User] = None, role: Optional[str] = None,
+                       title: str, body: str, category: str = "general",
+                       data: Optional[dict] = None, push: bool = True):
+    note = Notification(
+        user_id=user.id if user else None,
+        role=role,
+        title=title,
+        body=body,
+        category=category,
+        data_json=json.dumps(data or {}),
+        is_read=False,
+    )
+    db.add(note)
+    db.flush()
+    if push and user:
+        send_push_to_user(user, title, body, data)
+    return note
+
+def notify_user(db: Session, user: Optional[User], title: str, body: str,
+                category: str = "general", data: Optional[dict] = None, push: bool = True):
+    if not user:
+        return None
+    return store_notification(db, user=user, title=title, body=body, category=category, data=data, push=push)
+
+def notify_users(db: Session, users: list[User], title: str, body: str,
+                 category: str = "general", data: Optional[dict] = None, push: bool = True):
+    seen = set()
+    unique_users = []
+    for user in users or []:
+        if not user or user.id in seen:
+            continue
+        seen.add(user.id)
+        unique_users.append(user)
+        store_notification(db, user=user, title=title, body=body, category=category, data=data, push=False)
+    if push and unique_users:
+        send_push_bulk(unique_users, title, body, data)
+    return unique_users
 
 def _order_push_data(o: Order, extra: Optional[dict] = None) -> dict:
     data = {
@@ -581,7 +635,8 @@ def notify_riders_new_order(db: Session, o: Order):
         return 0
     title = "New order nearby"
     body = f"Order {o.order_code} is ready to accept."
-    return send_push_bulk(riders, title, body, _order_push_data(o, {"action": "accept_or_reject"}))
+    notify_users(db, riders, title, body, "new_order", _order_push_data(o, {"action": "accept_or_reject"}), push=True)
+    return len(riders)
 
 def notify_riders_return_pickup(db: Session, rr: ReturnRequest):
     lat = rr.order.delivery_lat if rr.order else None
@@ -591,7 +646,8 @@ def notify_riders_return_pickup(db: Session, rr: ReturnRequest):
         return 0
     title = "Return pickup nearby"
     body = f"Return pickup requested for order {rr.order.order_code}."
-    return send_push_bulk(riders, title, body, _return_push_data(rr, {"action": "accept_or_reject"}))
+    notify_users(db, riders, title, body, "return_pickup", _return_push_data(rr, {"action": "accept_or_reject"}), push=True)
+    return len(riders)
 
 def _nearby_customers(db: Session, lat: Optional[float], lng: Optional[float], radius_km: float) -> list:
     if lat is None or lng is None:
@@ -618,7 +674,8 @@ def notify_customers_new_shop(db: Session, shop: Shop):
         return 0
     title = "New shop near you"
     body = f"{shop.name} just opened nearby. Check out new arrivals!"
-    return send_push_bulk(customers, title, body, {"type": "new_shop", "shopId": shop.id, "shopName": shop.name})
+    notify_users(db, customers, title, body, "new_shop", {"type": "new_shop", "shopId": shop.id, "shopName": shop.name}, push=True)
+    return len(customers)
 
 def _top_rated_shops(db: Session, lat: float, lng: float, radius_km: float, limit: int = 3) -> list:
     shops = db.query(Shop).filter(Shop.is_active == True, Shop.is_suspended == False).all()
@@ -755,20 +812,21 @@ PRESENTATION_META = {
     },
 }
 
-def openai_request(path: str, payload: dict) -> dict:
-    if not OPENAI_API_KEY:
-        raise HTTPException(503, "OPENAI_API_KEY is not configured on the backend.")
+def gemini_request(model: str, payload: dict) -> dict:
+    api_key = configured_gemini_api_key()
+    if not api_key:
+        raise HTTPException(503, "GEMINI_API_KEY is not configured on the backend.")
     req = urllib.request.Request(
-        f"{OPENAI_BASE_URL}{path}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent",
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "x-goog-api-key": api_key,
             "Content-Type": "application/json",
         },
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="ignore")
@@ -776,9 +834,11 @@ def openai_request(path: str, payload: dict) -> dict:
             detail = json.loads(body)
         except Exception:
             detail = body or str(e)
-        raise HTTPException(502, {"message": "OpenAI request failed", "detail": detail})
+        if e.code in {400, 401, 403}:
+            raise HTTPException(503, {"message": "Gemini API key or model is not accepted", "detail": detail})
+        raise HTTPException(502, {"message": "Gemini request failed", "detail": detail})
     except Exception as e:
-        raise HTTPException(502, f"OpenAI request failed: {e}")
+        raise HTTPException(502, f"Gemini request failed: {e}")
 
 def guess_media_type(filename: str, fallback: str = "image/jpeg") -> str:
     media, _ = mimetypes.guess_type(filename or "")
@@ -790,6 +850,37 @@ def save_image_bytes(user_id: int, image_bytes: bytes, suffix: str = "jpg") -> d
     with open(filepath, "wb") as f:
         f.write(image_bytes)
     return {"filename": filename, "url": f"/uploads/{filename}"}
+
+def optimize_upload_image(image_bytes: bytes, max_side: int = 1600, quality: int = 82) -> bytes:
+    if Image is None:
+        return image_bytes
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image.thumbnail((max_side, max_side), Image.LANCZOS)
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+def prepare_catalog_image_locally(image_bytes: bytes, canvas_size: int = 1200) -> bytes:
+    if Image is None:
+        return image_bytes
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image = ImageOps.contain(image, (int(canvas_size * 0.9), int(canvas_size * 0.9)), Image.LANCZOS)
+        image = ImageEnhance.Color(image).enhance(1.04)
+        image = ImageEnhance.Contrast(image).enhance(1.08)
+        image = ImageEnhance.Sharpness(image).enhance(1.25)
+        canvas = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
+        x = (canvas_size - image.width) // 2
+        y = (canvas_size - image.height) // 2
+        canvas.paste(image, (x, y))
+        out = io.BytesIO()
+        canvas.save(out, format="JPEG", quality=88, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
 
 def json_loads_safe(value, fallback):
     if not value:
@@ -939,7 +1030,7 @@ def infer_basic_product_analysis(filename: str, presentation: str = "fallback", 
         "mrp": "",
         "suggestedPrice": "",
         "description": f"{product_name} prepared for a cleaner e-commerce listing image.",
-        "tags": [labels["productType"], labels["category"].lower(), *( [pretty_color.lower()] if pretty_color else [] ), "fashion", "catalog"],
+        "tags": [],
         "sizes": "",
         "confidence": "low",
         "presentation": key,
@@ -948,25 +1039,136 @@ def infer_basic_product_analysis(filename: str, presentation: str = "fallback", 
         "detail": meta["detail"],
     }
 
+
+def vendor_product_type_from_category(category: str) -> str:
+    mapping = {
+        "Accessories": "accessory",
+        "Dress": "dress",
+        "Dresses": "dress",
+        "Fashion": "apparel",
+        "Jackets": "jacket",
+        "Jeans": "jeans",
+        "Kids": "kids apparel",
+        "Kids Ethnic Wear": "kids ethnic wear",
+        "Kurta": "kurta",
+        "Kurtas": "kurta",
+        "Kurti": "kurti",
+        "Kurtis": "kurti",
+        "Lehenga": "lehenga",
+        "Saree": "saree",
+        "Sarees": "saree",
+        "Shirt": "shirt",
+        "Shirts": "shirt",
+        "Skirts": "skirt",
+        "Sweatshirts": "sweatshirt",
+        "T-Shirts": "t-shirt",
+        "Trousers": "trousers",
+    }
+    return mapping.get(normalize_category_name(category), "apparel")
+
 def normalize_category_name(value: str) -> str:
     text = (value or "").strip().lower()
+    compact = text.replace("_", " ").replace("-", " ")
+    compact = " ".join(compact.split())
     mapping = {
-        "lehenga": "Lehenga",
-        "kurtis": "Kurti",
-        "kurti": "Kurti",
-        "kurta": "Kurti",
-        "sarees": "Saree",
-        "saree": "Saree",
-        "shirts": "Shirt",
-        "shirt": "Shirt",
-        "jeans": "Jeans",
-        "pants": "Jeans",
-        "trousers": "Jeans",
-        "dresses": "Dress",
-        "dress": "Dress",
+        "accessories": "Accessories",
+        "accessory": "Accessories",
+        "bottomwear": "Trousers",
+        "bottom wear": "Trousers",
+        "dress": "Dresses",
+        "dresses": "Dresses",
         "fashion": "Fashion",
+        "girls lehenga": "Kids Ethnic Wear",
+        "jacket": "Jackets",
+        "jackets": "Jackets",
+        "jean": "Jeans",
+        "jeans": "Jeans",
+        "kids": "Kids",
+        "kids ethnic": "Kids Ethnic Wear",
+        "kids ethnic wear": "Kids Ethnic Wear",
+        "kurta": "Kurtas",
+        "kurtas": "Kurtas",
+        "kurti": "Kurtis",
+        "kurtis": "Kurtis",
+        "lehenga": "Lehenga",
+        "lehenga choli": "Kids Ethnic Wear",
+        "pant": "Trousers",
+        "pants": "Trousers",
+        "saree": "Sarees",
+        "sarees": "Sarees",
+        "shirt": "Shirt",
+        "shirts": "Shirts",
+        "skirt": "Skirts",
+        "skirts": "Skirts",
+        "sweatshirt": "Sweatshirts",
+        "sweatshirts": "Sweatshirts",
+        "tee": "T-Shirts",
+        "t shirt": "T-Shirts",
+        "t shirts": "T-Shirts",
+        "tee shirt": "T-Shirts",
+        "top": "Shirts",
+        "tops": "Shirts",
+        "trouser": "Trousers",
+        "trousers": "Trousers",
     }
-    return mapping.get(text, (value or "Fashion").strip() or "Fashion")
+    return mapping.get(compact, (value or "Fashion").strip() or "Fashion")
+
+
+def vendor_model_available() -> bool:
+    return False
+
+
+def get_vendor_category_bundle():
+    global _vendor_category_bundle
+    if _vendor_category_bundle is False:
+        return None
+    if _vendor_category_bundle is not None:
+        return _vendor_category_bundle
+    if not vendor_model_available():
+        _vendor_category_bundle = False
+        return None
+    _vendor_category_bundle = False
+    return None
+
+
+def predict_vendor_category_from_model(image_bytes: bytes):
+    bundle = get_vendor_category_bundle()
+    if not bundle:
+        return None
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        tensor = preprocess_pil(image, train_mode=False).unsqueeze(0)
+        with torch.no_grad():
+            logits = bundle["model"](tensor)
+            probs = torch.softmax(logits, dim=1)[0]
+            score, index = torch.max(probs, dim=0)
+        category = normalize_category_name(bundle["classes"][index.item()])
+        return {
+            "category": category,
+            "productType": vendor_product_type_from_category(category),
+            "name": category,
+            "modelScore": float(score.item()),
+        }
+    except Exception:
+        return None
+
+
+def merge_model_prediction(local_analysis: dict, image_bytes: bytes):
+    analysis = dict(local_analysis or {})
+    predicted = predict_vendor_category_from_model(image_bytes)
+    if not predicted:
+        return analysis
+    score = float(predicted.get("modelScore") or 0.0)
+    if score < 0.55:
+        return analysis
+    category = predicted["category"]
+    analysis["category"] = category
+    analysis["productType"] = predicted["productType"]
+    color = title_case_words(analysis.get("color") or "")
+    analysis["name"] = f"{color} {category}".strip() if color else category
+    analysis["modelScore"] = score
+    analysis["analysisSource"] = "trained-model"
+    return analysis
 
 def title_case_words(value: str) -> str:
     return " ".join(part.capitalize() for part in (value or "").replace("-", " ").split())
@@ -1016,7 +1218,7 @@ def generate_product_copy(analysis: dict, image_path: str = "") -> dict:
     gender = title_case_words(analysis.get("gender") or defaults["gender"])
     sleeve_type = title_case_words(analysis.get("sleeveType") or defaults["sleeveType"])
     length = title_case_words(analysis.get("length") or defaults["length"])
-    brand = (analysis.get("brand") or defaults["brand"]).strip()
+    brand = ""
     price = parse_price_hint(analysis.get("suggestedPrice") or analysis.get("mrp") or defaults["price"])
 
     descriptor_parts = [color]
@@ -1040,14 +1242,8 @@ def generate_product_copy(analysis: dict, image_path: str = "") -> dict:
         f"{fabric.lower()} feel, and a {fit.lower()} fit. Ideal for {occasion.lower()} use."
     )
     tags = []
-    for item in [
-        category, product_type, color, brand, fabric, pattern, fit, gender, occasion,
-        analysis.get("style"), "fashion", "catalogue", "vendor-upload"
-    ]:
-        token = (item or "").strip().lower().replace(" ", "-")
-        if token and token not in tags:
-            tags.append(token)
-    sizes = analysis.get("sizes") or ""
+    free_size_categories = {"Saree", "Sarees", "Accessories"}
+    sizes = "" if category in free_size_categories else (analysis.get("sizes") or "")
     return {
         "category": category,
         "color": color,
@@ -1055,7 +1251,7 @@ def generate_product_copy(analysis: dict, image_path: str = "") -> dict:
         "name": base_name,
         "description": description,
         "tags": tags,
-        "brand": brand,
+        "brand": "",
         "price": price,
         "gender": gender,
         "fabric": fabric,
@@ -1234,37 +1430,9 @@ def remove_background_with_model(image_bytes: bytes):
         return fallback_remove_background(image_bytes)
 
 def remove_background_with_remove_bg(image_bytes: bytes, filename: str):
-    if not REMOVE_BG_API_KEY:
-        raise HTTPException(503, "REMOVE_BG_API_KEY is not configured on the backend.")
-    media_type = guess_media_type(filename)
-    try:
-        response = httpx.post(
-            "https://api.remove.bg/v1.0/removebg",
-            headers={"X-Api-Key": REMOVE_BG_API_KEY},
-            data={"size": "auto", "format": "png"},
-            files={"image_file": (filename or "product.jpg", image_bytes, media_type)},
-            timeout=180,
-        )
-        response.raise_for_status()
-        return load_pil_image(response.content), True
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text[:500] if exc.response is not None else str(exc)
-        raise HTTPException(502, f"remove.bg request failed: {detail}")
-    except Exception as exc:
-        raise HTTPException(502, f"remove.bg request failed: {exc}")
+    return remove_background_with_model(image_bytes)
 
 def remove_background_with_provider(image_bytes: bytes, filename: str):
-    provider = IMAGE_CLEANUP_PROVIDER or "auto"
-    if provider in {"remove_bg", "remove.bg", "auto"} and REMOVE_BG_API_KEY:
-        try:
-            image, ok = remove_background_with_remove_bg(image_bytes, filename)
-            return image, ok, "remove.bg"
-        except HTTPException:
-            if provider not in {"auto"}:
-                raise
-        except Exception:
-            if provider not in {"auto"}:
-                raise
     image, ok = remove_background_with_model(image_bytes)
     return image, ok, "local-fallback"
 
@@ -1747,52 +1915,11 @@ def infer_presentation_key(text: str) -> str:
         return "lower"
     return "fallback"
 
-def analyze_product_image_with_openai(image_bytes: bytes, filename: str) -> dict:
-    media_type = guess_media_type(filename)
-    image_url = f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
-    prompt = (
-        "Analyze this product photo for accurate e-commerce auto-fill. "
-        "Return the best possible structured identification for the actual visible product, not a generic fallback. "
-        "Extract: name, category, productType, brand, color, material, mrp, suggestedPrice, description, tags, sizes, confidence, presentation, title, detail. "
-        "Choose category from this set when relevant: Kids, Dresses, Kurtis, Kurtas, Sarees, Shirts, T-Shirts, Jeans, Trousers, Jackets, Sweatshirts, Skirts, Accessories, Fashion. "
-        "Choose productType with specific apparel names such as lehenga, dress, kurti, kurta, saree, shirt, t-shirt, jeans, trousers, jacket. "
-        "For kids ethnicwear, prefer specific labels like kids lehenga set rather than generic fashion product. "
-        "For light garments, distinguish cream, beige, off-white, white, and gold carefully; do not default to grey unless the garment is clearly grey. "
-        "Use the visible garment itself as the source of truth, not the filename. "
-        "Identify the product presentation and choose exactly one from: upper, drape, lower, fallback. "
-        "Use upper for shirts/t-shirts/tops/upper wear. "
-        "Use drape for lehenga, saree, dress, kurti, gown, or other draped garments. "
-        "Use lower for pants/jeans/trousers/lower-body garments. "
-        "Use fallback only if the product type is genuinely unclear. "
-        "Return strict JSON only."
-    )
-    payload = {
-        "model": OPENAI_IMAGE_MODEL,
-        "input": [{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": image_url},
-            ],
-        }],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "product_image_analysis",
-                "schema": PRODUCT_ANALYSIS_SCHEMA,
-                "strict": True,
-            }
-        },
-    }
-    data = openai_request("/responses", payload)
-    text = data.get("output_text", "").strip()
-    if not text:
-        raise HTTPException(502, "OpenAI analysis returned no structured output.")
-    result = json.loads(text)
+def normalize_ai_product_analysis(result: dict, source: str) -> dict:
     combined = " ".join([
-        result.get("productType", ""),
-        result.get("category", ""),
-        result.get("presentation", ""),
+        str(result.get("productType", "")),
+        str(result.get("category", "")),
+        str(result.get("presentation", "")),
     ])
     key = infer_presentation_key(combined) if result.get("presentation") not in PRESENTATION_META else result["presentation"]
     meta = PRESENTATION_META[key]
@@ -1800,49 +1927,229 @@ def analyze_product_image_with_openai(image_bytes: bytes, filename: str) -> dict
         "name": result.get("name", ""),
         "productType": result.get("productType", ""),
         "category": result.get("category", ""),
-        "brand": result.get("brand", ""),
+        "brand": "",
         "color": result.get("color", ""),
         "material": result.get("material", ""),
+        "fabric": result.get("fabric", result.get("material", "")),
         "pattern": result.get("pattern", ""),
         "style": result.get("style", ""),
         "gender": result.get("gender", ""),
-        "usage": result.get("usage", ""),
+        "usage": result.get("usage", result.get("occasion", "")),
+        "fit": result.get("fit", ""),
+        "occasion": result.get("occasion", result.get("usage", "")),
+        "sleeveType": result.get("sleeveType", ""),
+        "length": result.get("length", ""),
         "mrp": result.get("mrp", ""),
         "suggestedPrice": result.get("suggestedPrice", ""),
         "description": result.get("description", ""),
-        "tags": result.get("tags", []),
+        "tags": [],
         "sizes": result.get("sizes", ""),
         "confidence": result.get("confidence", "medium"),
         "presentation": key,
         "badge": meta["badge"],
         "title": result.get("title") or meta["title"],
         "detail": result.get("detail") or meta["detail"],
+        "analysisModel": source,
     }
 
-def get_best_product_analysis(image_bytes: bytes, filename: str, local_analysis: dict):
-    if not OPENAI_API_KEY:
-        local = dict(local_analysis or {})
-        local["analysisSource"] = local.get("analysisSource", "local-model")
-        local["analysisIssue"] = ""
-        return local
+def parse_json_text(text: str) -> dict:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end >= start:
+        cleaned = cleaned[start:end + 1]
+    return json.loads(cleaned)
+
+def product_analysis_prompt() -> str:
+    return (
+        "Analyze this product photo for DOTT vendor product listing auto-fill. "
+        "Detect only the exact visible product name/type, category, and dominant garment color first; also return useful listing details when clearly visible. "
+        "Do not guess from filename. Use only the garment/product in the image. "
+        "Do not detect or return brand names, logos, seller names, or tags. Set brand to an empty string and tags to an empty array. "
+        "Choose category from: Kids, Dresses, Kurtis, Kurtas, Sarees, Shirts, T-Shirts, Jeans, Trousers, Jackets, Sweatshirts, Skirts, Accessories, Fashion. "
+        "Use accurate Indian fashion labels where relevant, for example lehenga, kurti, kurta, saree, dress, shirt, t-shirt, jeans, trousers, jacket. "
+        "Color must be accurate for the main garment fabric, not the background, phone screen, border, shadow, or model. Distinguish black, charcoal, navy, dark teal, teal, white, off-white, cream, beige, gold, grey, maroon, etc. "
+        "Return sizes only for products that truly need size variants, such as shirts, kurtas, kurtis, jeans, trousers, dresses, lehengas, jackets, sweatshirts, skirts, and kids wear. For sarees and accessories, return sizes as an empty string. "
+        "Presentation must be exactly one of upper, drape, lower, fallback. "
+        "Return strict JSON with keys: name,title,productType,category,brand,color,material,fabric,pattern,style,gender,usage,fit,occasion,sleeveType,length,mrp,suggestedPrice,description,tags,sizes,confidence,presentation,detail."
+    )
+
+def analyze_product_image_with_gemini(image_bytes: bytes, filename: str) -> dict:
+    media_type = guess_media_type(filename)
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {
+                    "inline_data": {
+                        "mime_type": media_type,
+                        "data": base64.b64encode(image_bytes).decode("utf-8"),
+                    }
+                },
+                {"text": product_analysis_prompt()},
+            ],
+        }],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+    data = gemini_request(GEMINI_MODEL, payload)
+    parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+    text = "\n".join(part.get("text", "") for part in parts if part.get("text"))
+    if not text:
+        raise HTTPException(502, "Gemini analysis returned no structured output.")
     try:
-        enriched = analyze_product_image_with_openai(image_bytes, filename)
-        analysis = merge_product_analysis(local_analysis, enriched)
-        analysis["analysisSource"] = "openai"
+        parsed = parse_json_text(text)
+    except Exception as exc:
+        raise HTTPException(502, f"Gemini analysis returned invalid JSON: {exc}")
+    return normalize_ai_product_analysis(parsed, "gemini")
+
+def get_best_product_analysis(image_bytes: bytes, filename: str, local_analysis: dict):
+    def local_fallback(issue: str = ""):
+        try:
+            _bytes, detected = process_product_image(image_bytes, filename)
+            base = merge_product_analysis(local_analysis or {}, detected or {})
+        except Exception:
+            base = dict(local_analysis or {})
+        base = merge_model_prediction(base, image_bytes)
+        if not base.get("category") and not base.get("productType"):
+            base.update(infer_basic_product_analysis(filename))
+        base["analysisSource"] = "local-fallback"
+        base["analysisIssue"] = issue
+        return base
+
+    if not configured_gemini_api_key():
+        return local_fallback("Gemini API key is not configured; local draft used.")
+    try:
+        enriched = analyze_product_image_with_gemini(image_bytes, filename)
+        analysis = merge_product_analysis(local_analysis or {}, enriched)
+        analysis["analysisSource"] = "gemini"
         analysis["analysisIssue"] = ""
         return analysis
+    except HTTPException as exc:
+        return local_fallback(str(exc.detail))
     except Exception as exc:
-        local = dict(local_analysis or {})
-        local["analysisSource"] = local.get("analysisSource", "local-model")
-        local["analysisIssue"] = str(exc)
-        return local
+        return local_fallback(str(exc))
+
+def build_analysis_upload_response(user_id: int, optimized: bytes, filename: str, enhance_image: bool = False) -> dict:
+    original_saved = save_image_bytes(user_id, optimized, "jpg")
+    local_analysis = {
+        "backgroundRemoved": False,
+        "canvasSize": None,
+        "placement": None,
+        "processingMode": "analysis-only",
+    }
+    analysis = get_best_product_analysis(optimized, filename, local_analysis)
+    autofill = generate_product_copy(analysis, original_saved["url"])
+    if enhance_image:
+        catalog_bytes, processing_mode, image_edited, image_issue = build_catalog_image(
+            optimized,
+            filename,
+            analysis,
+            True,
+        )
+        transformed_saved = save_image_bytes(user_id, catalog_bytes, "jpg")
+    else:
+        transformed_saved = original_saved
+        processing_mode = "analysis-only"
+        image_edited = False
+        image_issue = ""
+    analysis = {
+        **analysis,
+        **autofill,
+        "title": autofill["title"],
+        "name": autofill["name"],
+        "category": autofill["category"],
+        "color": autofill["color"],
+        "brand": autofill["brand"],
+        "description": autofill["description"],
+        "tags": autofill["tags"],
+        "suggestedPrice": autofill["price"],
+        "gender": autofill["gender"],
+        "fabric": autofill["fabric"],
+        "pattern": autofill["pattern"],
+        "fit": autofill["fit"],
+        "occasion": autofill["occasion"],
+        "sleeveType": autofill["sleeveType"],
+        "length": autofill["length"],
+        "productType": autofill["productType"],
+        "image_path": autofill["image_path"],
+        "processingMode": processing_mode,
+    }
+    return {
+        "originalUrl": original_saved["url"],
+        "transformedUrl": transformed_saved["url"],
+        "analysis": analysis,
+        "autofill": autofill,
+        "analysisSource": analysis.get("analysisSource", "gemini"),
+        "analysisIssue": image_issue or analysis.get("analysisIssue", ""),
+        "imageEdited": image_edited,
+        "enhancementRejected": bool(image_issue),
+        "processingMode": processing_mode,
+    }
+
+def extract_gemini_inline_image(data: dict) -> tuple[bytes, str]:
+    parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+    for part in parts:
+        inline_data = part.get("inlineData") or part.get("inline_data")
+        if not inline_data:
+            continue
+        raw = inline_data.get("data")
+        if not raw:
+            continue
+        mime_type = inline_data.get("mimeType") or inline_data.get("mime_type") or "image/png"
+        return base64.b64decode(raw), mime_type
+    raise HTTPException(502, "Gemini image edit returned no image output.")
+
+def gemini_edit_product_image(image_bytes: bytes, filename: str, analysis: dict) -> tuple[bytes, str]:
+    media_type = guess_media_type(filename)
+    prompt = build_image_edit_prompt(analysis)
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": media_type,
+                        "data": base64.b64encode(image_bytes).decode("utf-8"),
+                    }
+                },
+            ],
+        }],
+        "generationConfig": {
+            "temperature": 0.25,
+            "responseModalities": ["TEXT", "IMAGE"],
+        },
+    }
+    data = gemini_request(GEMINI_IMAGE_MODEL, payload)
+    edited_bytes, output_mime = extract_gemini_inline_image(data)
+    return optimize_upload_image(edited_bytes, max_side=1600, quality=88), output_mime
+
+def build_catalog_image(image_bytes: bytes, filename: str, analysis: dict, enhance_image: bool = True) -> tuple[bytes, str, bool, str]:
+    if not enhance_image:
+        return image_bytes, "original", False, ""
+    try:
+        edited, _mime_type = gemini_edit_product_image(image_bytes, filename, analysis)
+        return edited, "gemini-image-edit", True, ""
+    except HTTPException as exc:
+        local = prepare_catalog_image_locally(image_bytes)
+        return local, "local-catalog-fallback", False, str(exc.detail)
+    except Exception as exc:
+        local = prepare_catalog_image_locally(image_bytes)
+        return local, "local-catalog-fallback", False, str(exc)
 
 def build_image_edit_prompt(analysis: dict) -> str:
     base = (
-        "Edit this product photo into a premium Amazon-style e-commerce listing image. "
-        "Preserve the exact product color, texture, logo placement, print, embroidery, and all visible design details. "
-        "Do not change the product itself. Keep the product recognizable and faithful to the original photograph. "
-        "Use clean professional studio lighting, realistic shadows, neat framing, and a polished white-to-light-gray e-commerce background. "
+        "Edit this product photo into a premium Amazon-style e-commerce catalogue image. "
+        "Preserve the exact product color, fabric texture, logo placement, print, embroidery, silhouette, and all visible design details. "
+        "Do not invent a different product, do not add text, do not add watermarks, and do not change the garment color. "
+        "Improve low-quality lighting, sharpness, framing, and noise. Use a clean pure white or very light grey studio background, natural soft shadow, and centered square composition. "
     )
     presentation = analysis.get("presentation", "fallback")
     if presentation == "upper":
@@ -1861,61 +2168,36 @@ def build_image_edit_prompt(analysis: dict) -> str:
         "Do not place it on a model. Instead, enhance the original product shot with improved background cleanup, lighting, and shadow balance."
     )
 
-def transform_product_image_with_openai(image_bytes: bytes, filename: str, analysis: dict) -> bytes:
-    media_type = guess_media_type(filename)
-    image_url = f"data:{media_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
-    payload = {
-        "model": OPENAI_IMAGE_MODEL,
-        "input": [{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": build_image_edit_prompt(analysis)},
-                {"type": "input_image", "image_url": image_url},
-            ],
-        }],
-        "tools": [{
-            "type": "image_generation",
-            "size": "1024x1024",
-            "quality": "high",
-            "background": "opaque",
-            "format": "png",
-            "action": "edit",
-        }],
-        "tool_choice": {"type": "image_generation"},
-    }
-    data = openai_request("/responses", payload)
-    for item in data.get("output", []):
-        if item.get("type") == "image_generation_call" and item.get("result"):
-            return base64.b64decode(item["result"])
-    raise HTTPException(502, "OpenAI image transform returned no image.")
-
 # ── Schemas ────────────────────────────────────────────────────────
-class SendOTPRequest(BaseModel):
-    phone: str
-
-class VerifyOTPRequest(BaseModel):
-    phone: str; otp: str
-
 class RegisterRequest(BaseModel):
     name: str; email: str; phone: str; password: str; role: RoleEnum
-    otp: Optional[str] = None
     lat: Optional[float]=None; lng: Optional[float]=None
 
 class LoginRequest(BaseModel):
     email: str; password: str
     lat: Optional[float]=None; lng: Optional[float]=None
-    totpCode: Optional[str] = None
 
 class PhoneRegisterRequest(BaseModel):
     name: str; phone: str; pin: str
-    otp: Optional[str] = None
     role: Optional[RoleEnum]=RoleEnum.CUSTOMER
     lat: Optional[float]=None; lng: Optional[float]=None
 
 class PhoneLoginRequest(BaseModel):
     phone: str; pin: str
     lat: Optional[float]=None; lng: Optional[float]=None
-    totpCode: Optional[str] = None
+
+class SendOTPRequest(BaseModel):
+    email: str
+
+class VerifyOTPRequest(BaseModel):
+    email: str
+    otp: str
+    name: Optional[str]=None
+    phone: Optional[str]=None
+    password: Optional[str]=None
+    role: Optional[RoleEnum]=RoleEnum.CUSTOMER
+    lat: Optional[float]=None
+    lng: Optional[float]=None
 
 class RiderLocationPing(BaseModel):
     lat: float; lng: float
@@ -1925,9 +2207,6 @@ class RefreshRequest(BaseModel):
 
 class LocationUpdate(BaseModel):
     lat: float; lng: float
-
-class TotpVerifyRequest(BaseModel):
-    code: str
 
 class PushTokenRequest(BaseModel):
     token: str
@@ -1948,12 +2227,21 @@ class AdminNearbyPushRequest(BaseModel):
     includeOpenShops: Optional[bool] = True
     limit: Optional[int] = 3
 
+class AdminBroadcastNotificationRequest(BaseModel):
+    title: str
+    body: str
+    category: Optional[str] = "announcement"
+    role: Optional[str] = None
+    data: Optional[dict] = None
+
 class PaymentDetailsUpdate(BaseModel):
     bankAccount:   Optional[str] = None
     bankIfsc:      Optional[str] = None
     bankName:      Optional[str] = None
     upiId:         Optional[str] = None
-    paymentMethod: Optional[str] = "upi"  # "bank" or "upi"
+    phonepeNumber: Optional[str] = None
+    gpayNumber:    Optional[str] = None
+    paymentMethod: Optional[str] = "upi"  # "bank" or "upi" or "phonepe" or "gpay"
 
 class RiderCodSettlementPay(BaseModel):
     amount: Optional[float] = None
@@ -2022,6 +2310,7 @@ class OrderCreate(BaseModel):
     paymentMethod: Optional[str]="cod"; promoCode: Optional[str]=None; notes: Optional[str]=None
     weather: Optional[str]=None
     deliveryRadiusKm: Optional[float]=None
+    maxRadiusKm: Optional[float]=None
 
 class StatusUpdate(BaseModel):
     status: OrderStatusEnum; riderId: Optional[int]=None
@@ -2030,7 +2319,7 @@ class PickupOtpVerifyRequest(BaseModel):
     otp: str
 
 class ReviewCreate(BaseModel):
-    productId: int; orderId: int; rating: int; comment: Optional[str]=None
+    productId: int; orderId: int; rating: int; comment: Optional[str]=None; images: Optional[List[str]]=[]
 
 class ReturnCreate(BaseModel):
     orderId: int
@@ -2046,19 +2335,23 @@ class ReturnVendorUpdate(BaseModel):
 class BlockUpdate(BaseModel):
     isBlocked: bool
 
+class ShopLocationReview(BaseModel):
+    approved: bool
+    note: Optional[str] = ""
+
 # ── Serializers ────────────────────────────────────────────────────
 def user_dict(u: User, dist=None):
     d = {"id":u.id,"name":u.name,"email":u.email,"phone":u.phone,
          "role":u.role,"isOnline":u.is_online,"isBlocked":u.is_blocked,
          "isVerified":u.is_verified,"lat":u.lat,"lng":u.lng,
          "upiId":u.upi_id,"bankAccount":u.bank_account,"bankIfsc":u.bank_ifsc,
-         "bankName":u.bank_name,"paymentMethod":u.payment_method,
+         "bankName":u.bank_name,"phonepeNumber":getattr(u, "phonepe_number", None),
+         "gpayNumber":getattr(u, "gpay_number", None),"paymentMethod":u.payment_method,
          "isPremium":getattr(u, "is_premium", False),
          "subscriptionPlan":getattr(u, "subscription_plan", "standard"),
          "returnsThisMonth":getattr(u, "returns_this_month", 0),
          "highReturnUser":getattr(u, "high_return_user", False),
          "codEnabled":getattr(u, "cod_enabled", True),
-         "totpEnabled": bool(getattr(u, "totp_enabled", False)),
          "hasPushToken": bool(getattr(u, "fcm_token", None))}
     if dist is not None: d["distanceKm"] = round(dist, 1)
     return d
@@ -2068,7 +2361,7 @@ def shop_dict(s: Shop, dist=None):
          "address":s.address,"city":s.city,"pincode":s.pincode,"phone":s.phone,
          "lat":s.lat,"lng":s.lng,"imageUrl":s.image_url,"openTime":s.open_time,
          "closeTime":s.close_time,"deliveryTime":s.delivery_time,"minOrder":s.min_order,
-         "isOpen":s.is_open,"isSuspended":s.is_suspended,"totalOrders":s.total_orders,
+         "isOpen":s.is_open,"isSuspended":s.is_suspended,"isActive":s.is_active,"totalOrders":s.total_orders,
          "rating":round(s.rating, 1) if s.rating else 0.0,"ratingCount":s.rating_count,
          "ownerId":s.owner_id,"ownerName":s.owner.name if s.owner else None,
          "acceptsReturns":s.accepts_returns,"returnDays":s.return_days,
@@ -2076,6 +2369,39 @@ def shop_dict(s: Shop, dist=None):
          "whatsappMode":s.whatsapp_mode,"whatsappPhone":s.whatsapp_phone or s.phone}
     if dist is not None: d["distanceKm"] = round(dist, 1)
     return d
+
+def location_changed(current_lat, current_lng, next_lat, next_lng) -> bool:
+    if next_lat is None and next_lng is None:
+        return False
+    if current_lat is None or current_lng is None:
+        return next_lat is not None and next_lng is not None
+    if next_lat is None or next_lng is None:
+        return False
+    return abs(float(current_lat) - float(next_lat)) > 0.000001 or abs(float(current_lng) - float(next_lng)) > 0.000001
+
+def shop_location_request_dict(req: "ShopLocationChangeRequest"):
+    shop = req.shop
+    owner = req.owner
+    return {
+        "id": req.id,
+        "shopId": req.shop_id,
+        "shopName": shop.name if shop else None,
+        "ownerId": req.owner_id,
+        "ownerName": owner.name if owner else None,
+        "ownerPhone": owner.phone if owner else None,
+        "oldLat": req.old_lat,
+        "oldLng": req.old_lng,
+        "newLat": req.new_lat,
+        "newLng": req.new_lng,
+        "oldAddress": req.old_address,
+        "newAddress": req.new_address,
+        "oldCity": req.old_city,
+        "newCity": req.new_city,
+        "status": req.status,
+        "adminNote": req.admin_note or "",
+        "createdAt": req.created_at.isoformat() if req.created_at else None,
+        "reviewedAt": req.reviewed_at.isoformat() if req.reviewed_at else None,
+    }
 
 def product_dict(p: Product, include_reviews=False):
     sizes_list = []; colors_list = []; images_list = []; tags_list = []
@@ -2088,6 +2414,7 @@ def product_dict(p: Product, include_reviews=False):
     try: tags_list = json.loads(getattr(p,'tags',None) or "[]")
     except: pass
     total_stock = sum(s.get("stock",0) for s in sizes_list) if (p.has_sizes and sizes_list) else p.stock
+    shop = getattr(p, "shop", None)
     d = {"id":p.id,"shopId":p.shop_id,"name":p.name,"description":p.description,
          "price":p.price,"category":p.category,"imageUrl":p.image_url,
          "title":getattr(p, "title", None),
@@ -2103,12 +2430,19 @@ def product_dict(p: Product, include_reviews=False):
          "imageAiMeta":json_loads_safe(getattr(p, "image_ai_meta", "{}"), {}),
          "visualIndexed":bool(getattr(p, "visual_embedding", None)),
          "visualEmbeddingModel":getattr(p, "visual_embedding_model", None),
+         "shopName":shop.name if shop else None,
+         "shopLat":shop.lat if shop else None,
+         "shopLng":shop.lng if shop else None,
+         "shopIsOpen":bool(shop.is_open) if shop else True,
+         "shopIsSuspended":bool(shop.is_suspended) if shop else False,
+         "shopIsActive":bool(shop.is_active) if shop else True,
          "stock":total_stock,"isActive":p.is_active,"isVeg":p.is_veg,
          "hasSizes":p.has_sizes,"sizes":sizes_list,
          "avgRating": round(sum(r.rating for r in p.reviews)/len(p.reviews),1) if p.reviews else 0,
          "reviewCount": len(p.reviews)}
     if include_reviews:
         d["reviews"] = [{"id":r.id,"rating":r.rating,"comment":r.comment,
+                         "images":json_loads_safe(getattr(r, "images", "[]"), []),
                          "customerName":r.customer.name,"createdAt":r.created_at.isoformat()} for r in p.reviews]
     return d
 
@@ -2206,53 +2540,61 @@ def build_whatsapp_url(order, shop, customer, items_text):
 # ═══════════════════════════════════════════════════════════════════
 @app.post("/api/otp/send")
 def send_otp(req: SendOTPRequest, db: Session = Depends(get_db)):
-    phone = req.phone.strip().replace(" ","").replace("-","")
-    if len(phone) != 10 or not phone.isdigit():
-        raise HTTPException(400, "Enter a valid 10-digit number")
-    if not rate_check(f"otp:{phone}", 5, 60):
-        raise HTTPException(429, "Too many OTP requests. Wait 60 seconds.")
-    # Invalidate any old OTPs for this phone
-    db.query(OTPStore).filter(OTPStore.phone == phone, OTPStore.used == False).update({"used": True})
+    email = normalize_otp_email(req.email)
+    if not rate_check(f"otp:{email}", limit=3, window=60):
+        raise HTTPException(429, "Too many OTP requests. Try again in a minute.")
     otp = generate_otp()
-    expires = utc_now() + timedelta(minutes=10)
-    db.add(OTPStore(phone=phone, otp=hash_password(otp), expires_at=expires))
+    db.query(OTPStore).filter(OTPStore.phone == email, OTPStore.used == False).update({"used": True})
+    db.add(OTPStore(phone=email, otp=hash_password(otp), expires_at=utc_now()+timedelta(minutes=5), used=False))
     db.commit()
-    sent = send_otp_message(phone, otp)
-    message = f"OTP sent to {phone}" if sent else "OTP generated. Configure a real SMS provider to deliver it."
-    return {"message": message, "sent": sent}
+    emailed = send_otp_email(email, otp)
+    return {
+        "sent": True,
+        "email": email,
+        "delivery": "email" if emailed else "demo",
+        "devOtp": None if emailed else otp,
+        "message": "OTP sent to email" if emailed else "OTP generated",
+    }
 
 @app.post("/api/otp/verify")
 def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
-    phone = req.phone.strip().replace(" ","").replace("-","")
-    records = db.query(OTPStore).filter(
-        OTPStore.phone == phone,
-        OTPStore.used == False,
-        OTPStore.expires_at > utc_now()
-    ).order_by(OTPStore.created_at.desc()).all()
-    record = next((item for item in records if verify_otp_hash(item.otp, req.otp)), None)
-    if not record:
-        raise HTTPException(400, "Invalid or expired OTP")
-    record.used = True
-    db.commit()
-    return {"verified": True}
-
-def _check_otp(phone: str, otp: Optional[str], db: Session):
-    """Validate OTP during registration. Raises if invalid."""
-    if (settings.otp_sms_provider or "mock").strip().lower() in {"disabled", "none", "off", "mock"}:
-        return True
-    if not otp:
-        raise HTTPException(400, "OTP is required for registration")
-    phone = phone.strip().replace(" ","").replace("-","")
-    records = db.query(OTPStore).filter(
-        OTPStore.phone == phone,
-        OTPStore.used == False,
-        OTPStore.expires_at > utc_now()
-    ).order_by(OTPStore.created_at.desc()).all()
-    record = next((item for item in records if verify_otp_hash(item.otp, otp)), None)
-    if not record:
-        raise HTTPException(400, "Invalid or expired OTP. Please verify your number first.")
-    record.used = True
-    return True
+    email = normalize_otp_email(req.email)
+    supplied = req.otp.strip()
+    if len(supplied) != 6 or not supplied.isdigit():
+        raise HTTPException(400, "Enter the 6-digit OTP")
+    row = (db.query(OTPStore)
+           .filter(OTPStore.phone == email, OTPStore.used == False, OTPStore.expires_at >= utc_now())
+           .order_by(OTPStore.created_at.desc())
+           .first())
+    if not row or not verify_otp_hash(row.otp, supplied):
+        raise HTTPException(401, "Invalid or expired OTP")
+    row.used = True
+    user = db.query(User).filter(User.email == email).first()
+    phone = normalize_optional_phone(req.phone)
+    account_password = normalize_account_password(req.password)
+    if phone:
+        phone_owner = db.query(User).filter(User.phone == phone, User.email != email).first()
+        if phone_owner:
+            raise HTTPException(400, "Phone number already registered")
+    if not user:
+        role = req.role if req.role != RoleEnum.ADMIN else RoleEnum.CUSTOMER
+        name = (req.name or email.split("@", 1)[0] or "Customer").strip()
+        user = User(name=name, email=email, phone=phone,
+                    password=hash_password(account_password or generate_otp()),
+                    role=role or RoleEnum.CUSTOMER,
+                    lat=req.lat, lng=req.lng, is_verified=True)
+        db.add(user); db.commit(); db.refresh(user)
+    else:
+        if user.is_blocked:
+            raise HTTPException(403, "Account is blocked")
+        if phone:
+            user.phone = phone
+        if account_password:
+            user.password = hash_password(account_password)
+        if req.lat and req.lng:
+            user.lat = req.lat; user.lng = req.lng
+        db.commit()
+    return build_auth(user, db)
 
 # ═══════════════════════════════════════════════════════════════════
 # AUTH
@@ -2263,7 +2605,6 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(400, "Email already registered")
     if req.role == RoleEnum.ADMIN:
         raise HTTPException(400, "Cannot self-register as admin")
-    _check_otp(req.phone, req.otp, db)
     user = User(name=req.name, email=req.email.lower(), phone=req.phone,
                 password=hash_password(req.password), role=req.role,
                 lat=req.lat, lng=req.lng, is_verified=True)
@@ -2272,15 +2613,15 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email.lower()).first()
+    login_id = (req.email or "").strip().lower()
+    if "@" in login_id:
+        user = db.query(User).filter(User.email == login_id).first()
+    else:
+        phone = normalize_optional_phone(login_id)
+        user = db.query(User).filter(User.phone == phone).first() if phone else None
     if not user or not verify_password(req.password, user.password):
         raise HTTPException(401, "Invalid credentials")
     if user.is_blocked: raise HTTPException(403, "Account is blocked")
-    if getattr(user, "totp_enabled", False):
-        if not req.totpCode:
-            raise HTTPException(401, "TOTP code required")
-        if not verify_totp(getattr(user, "totp_secret", ""), req.totpCode):
-            raise HTTPException(401, "Invalid TOTP code")
     if req.lat and req.lng: user.lat = req.lat; user.lng = req.lng; db.commit()
     return build_auth(user, db)
 
@@ -2302,35 +2643,6 @@ def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)
 
 @app.get("/api/auth/me")
 def me(user: User = Depends(get_current_user)): return user_dict(user)
-
-@app.post("/api/auth/totp/setup")
-def totp_setup(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_totp_available()
-    secret = getattr(user, "totp_secret", None) or pyotp.random_base32()
-    user.totp_secret = secret
-    user.totp_enabled = False
-    db.commit()
-    account_label = user.email or user.phone or f"user-{user.id}"
-    otpauth = pyotp.totp.TOTP(secret).provisioning_uri(name=account_label, issuer_name="DOTT")
-    return {"secret": secret, "otpAuthUrl": otpauth}
-
-@app.post("/api/auth/totp/enable")
-def totp_enable(body: TotpVerifyRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not getattr(user, "totp_secret", None):
-        raise HTTPException(400, "TOTP is not set up yet")
-    if not verify_totp(user.totp_secret, body.code):
-        raise HTTPException(400, "Invalid TOTP code")
-    user.totp_enabled = True
-    db.commit()
-    return {"enabled": True}
-
-@app.post("/api/auth/totp/disable")
-def totp_disable(body: TotpVerifyRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if getattr(user, "totp_enabled", False) and not verify_totp(getattr(user, "totp_secret", ""), body.code):
-        raise HTTPException(400, "Invalid TOTP code")
-    user.totp_enabled = False
-    db.commit()
-    return {"enabled": False}
 
 @app.post("/api/notifications/register")
 def register_push_token(body: PushTokenRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -2376,8 +2688,46 @@ def admin_nearby_highlights(body: AdminNearbyPushRequest, user: User = Depends(g
         "shopIds": ",".join([str(s.id) for s in shops]),
         "productIds": ",".join([str(p.id) for p in products]),
     }
-    sent = send_push_bulk(customers, title, body_text, data)
-    return {"sent": sent, "shops": len(shops), "products": len(products)}
+    notify_users(db, customers, title, body_text, "nearby_highlights", data, push=True)
+    db.commit()
+    return {"sent": len(customers), "shops": len(shops), "products": len(products)}
+
+@app.get("/api/notifications")
+def list_notifications(limit: int = 50, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.query(Notification).filter(Notification.user_id == user.id).order_by(Notification.created_at.desc()).limit(max(1, min(limit, 100))).all()
+    return [notification_dict(row) for row in rows]
+
+@app.get("/api/notifications/unread-count")
+def unread_notification_count(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    count = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).count()
+    return {"count": count}
+
+@app.post("/api/notifications/read-all")
+def read_all_notifications(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read == False).update({"is_read": True})
+    db.commit()
+    return {"ok": True}
+
+@app.post("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.query(Notification).filter(Notification.id == notification_id, Notification.user_id == user.id).first()
+    if not row:
+        raise HTTPException(404, "Notification not found")
+    row.is_read = True
+    db.commit()
+    return {"ok": True}
+
+@app.post("/api/admin/notifications/festival")
+def admin_broadcast_notification(body: AdminBroadcastNotificationRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    query = db.query(User)
+    if body.role:
+        query = query.filter(User.role == body.role)
+    users = query.all()
+    notify_users(db, users, body.title, body.body, body.category or "announcement", body.data or {}, push=True)
+    db.commit()
+    return {"sent": len(users)}
 
 @app.post("/api/auth/phone/check")
 def phone_check(data: dict, db: Session = Depends(get_db)):
@@ -2394,7 +2744,6 @@ def phone_register(req: PhoneRegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(400, "PIN must be 4 digits")
     if db.query(User).filter(User.phone == phone).first():
         raise HTTPException(400, "Number already registered")
-    _check_otp(phone, req.otp, db)
     email = f"ph_{phone}@dott.in"
     user = User(name=req.name.strip(), email=email, phone=phone,
                 password=hash_password(req.pin),
@@ -2410,11 +2759,6 @@ def phone_login(req: PhoneLoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.pin, user.password):
         raise HTTPException(401, "Wrong number or PIN")
     if user.is_blocked: raise HTTPException(403, "Account blocked")
-    if getattr(user, "totp_enabled", False):
-        if not req.totpCode:
-            raise HTTPException(401, "TOTP code required")
-        if not verify_totp(getattr(user, "totp_secret", ""), req.totpCode):
-            raise HTTPException(401, "Invalid TOTP code")
     if req.lat and req.lng: user.lat = req.lat; user.lng = req.lng; db.commit()
     return build_auth(user, db)
 
@@ -2425,11 +2769,13 @@ def update_location(body: LocationUpdate, user: User = Depends(get_current_user)
 
 @app.put("/api/auth/payment-details")
 def update_payment_details(body: PaymentDetailsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if body.bankAccount:   user.bank_account   = body.bankAccount
-    if body.bankIfsc:      user.bank_ifsc       = body.bankIfsc
-    if body.bankName:      user.bank_name       = body.bankName
-    if body.upiId:         user.upi_id          = body.upiId
-    if body.paymentMethod: user.payment_method  = body.paymentMethod
+    if body.bankAccount is not None:   user.bank_account = (body.bankAccount or "").strip()
+    if body.bankIfsc is not None:      user.bank_ifsc = (body.bankIfsc or "").strip()
+    if body.bankName is not None:      user.bank_name = (body.bankName or "").strip()
+    if body.upiId is not None:         user.upi_id = (body.upiId or "").strip()
+    if body.phonepeNumber is not None: user.phonepe_number = (body.phonepeNumber or "").strip()
+    if body.gpayNumber is not None:    user.gpay_number = (body.gpayNumber or "").strip()
+    if body.paymentMethod is not None: user.payment_method = (body.paymentMethod or "upi").strip().lower()
     db.commit()
     return user_dict(user)
 
@@ -2454,7 +2800,7 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(get_cu
 @app.post("/api/upload/product-image-transform")
 async def upload_product_image_transform(
     file: UploadFile = File(...),
-    enhanceImage: bool = Form(True),
+    enhanceImage: bool = Form(False),
     user: User = Depends(get_current_user),
 ):
     if not file.content_type.startswith("image/"):
@@ -2463,67 +2809,31 @@ async def upload_product_image_transform(
     if len(contents) > 8 * 1024 * 1024:
         raise HTTPException(400, "Image too large. Max 8 MB.")
 
-    original_saved = save_image_bytes(user.id, contents, "jpg")
-    enhancement_rejected = False
-    if enhanceImage:
-        try:
-            transformed_bytes, local_analysis = process_product_image(contents, file.filename or "product.jpg")
-            transformed_saved = save_image_bytes(user.id, transformed_bytes, "jpg")
-        except HTTPException as exc:
-            if exc.status_code != 422:
-                raise
-            enhancement_rejected = True
-            local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
-            local_analysis["backgroundRemoved"] = False
-            local_analysis["canvasSize"] = None
-            local_analysis["placement"] = None
-            local_analysis["processingMode"] = "rejected-fallback"
-            transformed_saved = original_saved
-    else:
-        local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
-        local_analysis["backgroundRemoved"] = False
-        local_analysis["canvasSize"] = None
-        local_analysis["placement"] = None
-        local_analysis["processingMode"] = "analyze-only"
-        transformed_saved = original_saved
-    analysis = get_best_product_analysis(contents, file.filename or "product.jpg", local_analysis)
-    autofill = generate_product_copy(analysis, transformed_saved["url"])
-    analysis = {
-        **analysis,
-        **autofill,
-        "title": autofill["title"],
-        "name": autofill["name"],
-        "category": autofill["category"],
-        "color": autofill["color"],
-        "brand": autofill["brand"],
-        "description": autofill["description"],
-        "tags": autofill["tags"],
-        "suggestedPrice": autofill["price"],
-        "gender": autofill["gender"],
-        "fabric": autofill["fabric"],
-        "pattern": autofill["pattern"],
-        "fit": autofill["fit"],
-        "occasion": autofill["occasion"],
-        "sleeveType": autofill["sleeveType"],
-        "length": autofill["length"],
-        "productType": autofill["productType"],
-        "image_path": autofill["image_path"],
-    }
-    return {
-        "originalUrl": original_saved["url"],
-        "transformedUrl": transformed_saved["url"],
-        "analysis": analysis,
-        "autofill": autofill,
-        "analysisSource": analysis.get("analysisSource", "local-fallback"),
-        "analysisIssue": analysis.get("analysisIssue", ""),
-        "imageEdited": bool(enhanceImage and not enhancement_rejected),
-        "enhancementRejected": enhancement_rejected,
-    }
+    optimized = optimize_upload_image(contents)
+    try:
+        return build_analysis_upload_response(user.id, optimized, file.filename or "product.jpg", bool(enhanceImage))
+    except Exception as exc:
+        analysis = infer_basic_product_analysis(file.filename or "product.jpg")
+        analysis["analysisSource"] = "local-fallback"
+        analysis["analysisIssue"] = str(exc)
+        original_saved = save_image_bytes(user.id, optimized, "jpg")
+        autofill = generate_product_copy(analysis, original_saved["url"])
+        return {
+            "originalUrl": original_saved["url"],
+            "transformedUrl": original_saved["url"],
+            "analysis": {**analysis, **autofill, "suggestedPrice": autofill["price"], "processingMode": "analysis-only"},
+            "autofill": autofill,
+            "analysisSource": "local-fallback",
+            "analysisIssue": str(exc),
+            "imageEdited": False,
+            "enhancementRejected": False,
+            "processingMode": "analysis-only",
+        }
 
 @app.post("/api/upload/product-image-transform/bulk")
 async def upload_product_images_transform_bulk(
     files: List[UploadFile] = File(...),
-    enhanceImage: bool = Form(True),
+    enhanceImage: bool = Form(False),
     user: User = Depends(get_current_user),
 ):
     if not files:
@@ -2545,63 +2855,10 @@ async def upload_product_images_transform_bulk(
             if len(contents) > 8 * 1024 * 1024:
                 raise HTTPException(400, "Image too large. Max 8 MB.")
 
-            original_saved = save_image_bytes(user.id, contents, "jpg")
-            enhancement_rejected = False
-            if enhanceImage:
-                try:
-                    transformed_bytes, local_analysis = process_product_image(contents, file.filename or "product.jpg")
-                    transformed_saved = save_image_bytes(user.id, transformed_bytes, "jpg")
-                except HTTPException as exc:
-                    if exc.status_code != 422:
-                        raise
-                    enhancement_rejected = True
-                    local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
-                    local_analysis["backgroundRemoved"] = False
-                    local_analysis["canvasSize"] = None
-                    local_analysis["placement"] = None
-                    local_analysis["processingMode"] = "rejected-fallback"
-                    transformed_saved = original_saved
-            else:
-                local_analysis = local_image_analysis(contents, file.filename or "product.jpg")
-                local_analysis["backgroundRemoved"] = False
-                local_analysis["canvasSize"] = None
-                local_analysis["placement"] = None
-                local_analysis["processingMode"] = "analyze-only"
-                transformed_saved = original_saved
-            analysis = get_best_product_analysis(contents, file.filename or "product.jpg", local_analysis)
-            autofill = generate_product_copy(analysis, transformed_saved["url"])
-            analysis = {
-                **analysis,
-                **autofill,
-                "title": autofill["title"],
-                "name": autofill["name"],
-                "category": autofill["category"],
-                "color": autofill["color"],
-                "brand": autofill["brand"],
-                "description": autofill["description"],
-                "tags": autofill["tags"],
-                "suggestedPrice": autofill["price"],
-                "gender": autofill["gender"],
-                "fabric": autofill["fabric"],
-                "pattern": autofill["pattern"],
-                "fit": autofill["fit"],
-                "occasion": autofill["occasion"],
-                "sleeveType": autofill["sleeveType"],
-                "length": autofill["length"],
-                "productType": autofill["productType"],
-                "image_path": autofill["image_path"],
-            }
-
+            optimized = optimize_upload_image(contents)
             item.update({
                 "status": "ok",
-                "originalUrl": original_saved["url"],
-                "transformedUrl": transformed_saved["url"],
-                "analysis": analysis,
-                "autofill": autofill,
-                "analysisSource": analysis.get("analysisSource", "local-fallback"),
-                "analysisIssue": analysis.get("analysisIssue", ""),
-                "imageEdited": bool(enhanceImage and not enhancement_rejected),
-                "enhancementRejected": enhancement_rejected,
+                **build_analysis_upload_response(user.id, optimized, file.filename or "product.jpg", bool(enhanceImage)),
             })
         except HTTPException as exc:
             item.update({
@@ -2698,6 +2955,34 @@ def update_shop(shop_id: int, body: ShopUpdate,
     shop = db.query(Shop).filter(Shop.id == shop_id).first()
     if not shop: raise HTTPException(404)
     if user.role != RoleEnum.ADMIN and shop.owner_id != user.id: raise HTTPException(403)
+    pending_location_request = None
+    address_changed = body.address is not None and (body.address or "") != (shop.address or "")
+    city_changed = body.city is not None and (body.city or "") != (shop.city or "")
+    coords_changed = location_changed(shop.lat, shop.lng, body.lat, body.lng)
+    vendor_requested_location_change = (
+        user.role != RoleEnum.ADMIN
+        and shop.lat is not None and shop.lng is not None
+        and (coords_changed or address_changed or city_changed)
+    )
+    if vendor_requested_location_change:
+        pending_location_request = db.query(ShopLocationChangeRequest).filter(
+            ShopLocationChangeRequest.shop_id == shop.id,
+            ShopLocationChangeRequest.status == "PENDING",
+        ).first()
+        if not pending_location_request:
+            pending_location_request = ShopLocationChangeRequest(
+                shop_id=shop.id,
+                owner_id=user.id,
+                old_lat=shop.lat,
+                old_lng=shop.lng,
+                old_address=shop.address,
+                old_city=shop.city,
+            )
+            db.add(pending_location_request)
+        pending_location_request.new_lat = body.lat if body.lat is not None else shop.lat
+        pending_location_request.new_lng = body.lng if body.lng is not None else shop.lng
+        pending_location_request.new_address = body.address if body.address is not None else shop.address
+        pending_location_request.new_city = body.city if body.city is not None else shop.city
     for field, col in [("name","name"),("description","description"),("address","address"),
                        ("city","city"),("phone","phone"),("lat","lat"),("lng","lng"),
                        ("deliveryTime","delivery_time"),("minOrder","min_order"),("imageUrl","image_url"),
@@ -2705,10 +2990,18 @@ def update_shop(shop_id: int, body: ShopUpdate,
                        ("acceptsReturns","accepts_returns"),("returnDays","return_days"),
                        ("returnPolicyNote","return_policy_note"),("whatsappPhone","whatsapp_phone")]:
         val = getattr(body, field, None)
-        if val is not None: setattr(shop, col, val)
+        if val is None:
+            continue
+        if vendor_requested_location_change and field in {"address", "city", "lat", "lng"}:
+            continue
+        setattr(shop, col, val)
     if body.whatsappMode is not None: shop.whatsapp_mode = body.whatsappMode
     db.commit(); db.refresh(shop)
-    return shop_dict(shop)
+    result = shop_dict(shop)
+    if pending_location_request:
+        result["locationChangePending"] = True
+        result["locationChangeRequestId"] = pending_location_request.id
+    return result
 
 # ═══════════════════════════════════════════════════════════════════
 # PRODUCTS
@@ -2720,9 +3013,13 @@ def get_products(shopId: Optional[int]=None, lat: Optional[float]=None,
     q = db.query(Product).filter(Product.is_active == True)
     if shopId: q = q.filter(Product.shop_id == shopId)
     products = q.all()
+    visible_shops = {
+        s.id: s for s in db.query(Shop).filter(Shop.is_active==True, Shop.is_suspended==False).all()
+    }
+    products = [p for p in products if p.shop_id in visible_shops]
     if lat and lng and not shopId:
         bounded_radius = get_discovery_radius_limit(radius)
-        nearby_ids = {s.id for s in db.query(Shop).filter(Shop.is_active==True,Shop.is_suspended==False).all()
+        nearby_ids = {s.id for s in visible_shops.values()
                       if s.lat is not None and s.lng is not None and haversine(lat, lng, s.lat, s.lng) <= bounded_radius}
         products = [p for p in products if p.shop_id in nearby_ids]
     return [product_dict(p) for p in products]
@@ -2756,6 +3053,12 @@ def add_product(body: ProductCreate, user: User = Depends(get_current_user), db:
     db.add(p); db.commit(); db.refresh(p)
     if index_product_visual_embedding(p):
         db.commit(); db.refresh(p)
+    title = "New arrival near you"
+    body_text = f"{p.name} is now available from {shop.name}."
+    customers = _nearby_customers(db, shop.lat, shop.lng, MAX_DISCOVERY_RADIUS_KM) if shop.lat is not None and shop.lng is not None else []
+    if customers:
+        notify_users(db, customers, title, body_text, "new_arrival", {"type": "new_arrival", "shopId": shop.id, "productId": p.id}, push=True)
+        db.commit()
     return product_dict(p)
 
 @app.put("/api/products/{product_id}")
@@ -2800,6 +3103,7 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
     for ri in body.items:
         p = db.query(Product).filter(Product.id == ri.productId).first()
         if not p or not p.is_active: raise HTTPException(400, f"{ri.productId} unavailable")
+        if p.shop_id != shop.id: raise HTTPException(400, f"{p.name} belongs to a different shop")
         if p.has_sizes and ri.size:
             try:
                 sizes = json.loads(p.sizes or "[]")
@@ -2823,7 +3127,7 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
     km = haversine(shop.lat, shop.lng, body.deliveryLat, body.deliveryLng)
     if km == 9999: km = 3.0   # default 3km if coords missing
     km = round(km, 2)
-    allowed_km = get_order_distance_limit(body.deliveryRadiusKm)
+    allowed_km = get_order_distance_limit(body.deliveryRadiusKm if body.deliveryRadiusKm is not None else body.maxRadiusKm)
     if body.deliveryLat is not None and body.deliveryLng is not None and km > allowed_km:
         raise HTTPException(400, f"This shop is outside your local delivery range. NearNow only allows ordering within {allowed_km:g} km.")
     pricing = compute_pricing(subtotal, km, getattr(user, "is_premium", False), body.weather)
@@ -2856,9 +3160,10 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
     result["vendorWhatsappUrl"] = wa_url
     result["shopWhatsappMode"] = shop.whatsapp_mode
     try:
-        send_push_to_user(user, "Order placed", f"Your order {order.order_code} was placed successfully.", _order_push_data(order))
+        notify_user(db, user, "Order placed", f"Your order {order.order_code} was placed successfully.", "order", _order_push_data(order), push=True)
         if shop and shop.owner:
-            send_push_to_user(shop.owner, "New order received", f"New order {order.order_code} from {user.name}.", _order_push_data(order))
+            notify_user(db, shop.owner, "New order received", f"New order {order.order_code} from {user.name}.", "order", _order_push_data(order), push=True)
+        db.commit()
     except Exception:
         pass
     return result
@@ -3034,15 +3339,13 @@ def cancel_order(order_id: int, user: User = Depends(get_current_user), db: Sess
 # ═══════════════════════════════════════════════════════════════════
 @app.post("/api/orders/{order_id}/pickup-otp/generate")
 def generate_pickup_otp(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if user.role not in [RoleEnum.OWNER, RoleEnum.ADMIN]:
-        raise HTTPException(403)
     o = db.query(Order).filter(Order.id == order_id).first()
     if not o:
         raise HTTPException(404)
-    if user.role == RoleEnum.OWNER:
-        shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
-        if not shop or o.shop_id != shop.id:
-            raise HTTPException(403)
+    if user.role != RoleEnum.ADMIN:
+        shop = db.query(Shop).filter(Shop.owner_id == user.id, Shop.id == o.shop_id).first()
+        if not shop:
+            raise HTTPException(403, "Only this shop owner can generate the pickup OTP")
     if o.status != OrderStatusEnum.PACKING:
         raise HTTPException(400, "Pickup OTP can only be generated after preparation starts")
     if not o.rider_id:
@@ -3060,12 +3363,10 @@ def get_pickup_otp(order_id: int, user: User = Depends(get_current_user), db: Se
     o = db.query(Order).filter(Order.id == order_id).first()
     if not o:
         raise HTTPException(404)
-    if user.role == RoleEnum.OWNER:
-        shop = db.query(Shop).filter(Shop.owner_id == user.id).first()
-        if not shop or o.shop_id != shop.id:
-            raise HTTPException(403)
-    elif user.role != RoleEnum.ADMIN:
-        raise HTTPException(403)
+    if user.role != RoleEnum.ADMIN:
+        shop = db.query(Shop).filter(Shop.owner_id == user.id, Shop.id == o.shop_id).first()
+        if not shop:
+            raise HTTPException(403, "Only this shop owner can view the pickup OTP")
     if not o.pickup_otp or o.pickup_otp_used:
         raise HTTPException(404, "No active pickup OTP found")
     return {
@@ -3106,12 +3407,21 @@ def add_review(body: ReviewCreate, user: User = Depends(get_current_user), db: S
     order = db.query(Order).filter(Order.id == body.orderId, Order.customer_id == user.id).first()
     if not order: raise HTTPException(404)
     if order.status != OrderStatusEnum.DELIVERED: raise HTTPException(400, "Order not delivered yet")
-    if order.is_reviewed: raise HTTPException(400, "Already reviewed")
     if not (1 <= body.rating <= 5): raise HTTPException(400, "Rating must be 1-5")
     product = db.query(Product).filter(Product.id == body.productId).first()
     if not product: raise HTTPException(404)
+    if not any(item.product_id == body.productId for item in order.items):
+        raise HTTPException(400, "You can review only products from this order")
+    existing = db.query(Review).filter(
+        Review.product_id == body.productId,
+        Review.order_id == body.orderId,
+        Review.customer_id == user.id,
+    ).first()
+    if existing: raise HTTPException(400, "Already reviewed")
+    review_images = [url for url in (body.images or []) if isinstance(url, str) and url.strip()][:5]
     review = Review(product_id=body.productId, shop_id=order.shop_id, order_id=body.orderId,
-                    customer_id=user.id, rating=body.rating, comment=body.comment)
+                    customer_id=user.id, rating=body.rating, comment=body.comment,
+                    images=json.dumps(review_images))
     db.add(review); db.flush()
     shop = db.query(Shop).filter(Shop.id == order.shop_id).first()
     all_reviews = db.query(Review).filter(Review.shop_id == shop.id).all()
@@ -3125,6 +3435,7 @@ def add_review(body: ReviewCreate, user: User = Depends(get_current_user), db: S
 def get_product_reviews(product_id: int, db: Session = Depends(get_db)):
     reviews = db.query(Review).filter(Review.product_id == product_id).order_by(Review.created_at.desc()).all()
     return [{"id":r.id,"rating":r.rating,"comment":r.comment,
+             "images":json_loads_safe(getattr(r, "images", "[]"), []),
              "customerName":r.customer.name,"createdAt":r.created_at.isoformat()} for r in reviews]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3408,6 +3719,8 @@ def _company_payout_details(db: Session):
         "companyName": admin_user.name or "DOTT Marketplace",
         "contactPhone": phone,
         "upiId": upi_id,
+        "phonepeNumber": getattr(admin_user, "phonepe_number", "") or "",
+        "gpayNumber": getattr(admin_user, "gpay_number", "") or "",
         "bankAccount": admin_user.bank_account or "",
         "bankIfsc": admin_user.bank_ifsc or "",
         "bankName": admin_user.bank_name or "",
@@ -3418,16 +3731,33 @@ def rider_cod_settlement_summary(db: Session, rider: User):
         Order.rider_id == rider.id,
         Order.status == OrderStatusEnum.DELIVERED,
         func.lower(Order.payment_method) == "cod",
+        Order.cod_collected == True,
     ).order_by(Order.delivered_at.desc()).all()
+
+    def cod_amount(order: Order) -> float:
+        return round(order.cod_due_amount if (order.cod_due_amount or 0) > 0 else (order.total or 0.0), 2)
+
+    cod_breakdown = {
+        "productValue": round(sum(vendor_merchandise_total(o) for o in cod_orders), 2),
+        "deliveryFee": round(sum((o.delivery_fee or 0.0) for o in cod_orders), 2),
+        "platformFee": round(sum((getattr(o, "platform_fee", 0.0) or 0.0) for o in cod_orders), 2),
+        "gstAmount": round(sum((getattr(o, "gst_amount", 0.0) or 0.0) for o in cod_orders), 2),
+    }
     total_collected = round(sum(
-        (o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0))
-        for o in cod_orders
+        cod_amount(o) for o in cod_orders
     ), 2)
+    cod_breakdown["otherAdjustments"] = round(
+        total_collected
+        - cod_breakdown["productValue"]
+        - cod_breakdown["deliveryFee"]
+        - cod_breakdown["platformFee"]
+        - cod_breakdown["gstAmount"],
+        2,
+    )
 
     today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_collected = round(sum(
-        (o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0))
-        for o in cod_orders if o.delivered_at and o.delivered_at >= today_start
+        cod_amount(o) for o in cod_orders if o.delivered_at and o.delivered_at >= today_start
     ), 2)
 
     payments = db.query(SettlementPayment).filter(
@@ -3448,6 +3778,7 @@ def rider_cod_settlement_summary(db: Session, rider: User):
         "totalCollected": total_collected,
         "settledAmount": settled_amount,
         "pendingAmount": pending_amount,
+        "breakdown": cod_breakdown,
         "todayCollected": today_collected,
         "todaySettled": today_settled,
         "totalCodOrders": len(cod_orders),
@@ -3455,7 +3786,19 @@ def rider_cod_settlement_summary(db: Session, rider: User):
         "recentCodOrders": [{
             "orderId": o.id,
             "orderCode": o.order_code,
-            "amount": round((o.cod_due_amount if (o.cod_due_amount or 0) > 0 else (o.total or 0.0)), 2),
+            "amount": cod_amount(o),
+            "productValue": round(vendor_merchandise_total(o), 2),
+            "deliveryFee": round(o.delivery_fee or 0.0, 2),
+            "platformFee": round(getattr(o, "platform_fee", 0.0) or 0.0, 2),
+            "gstAmount": round(getattr(o, "gst_amount", 0.0) or 0.0, 2),
+            "otherAdjustments": round(
+                cod_amount(o)
+                - round(vendor_merchandise_total(o), 2)
+                - round(o.delivery_fee or 0.0, 2)
+                - round(getattr(o, "platform_fee", 0.0) or 0.0, 2)
+                - round(getattr(o, "gst_amount", 0.0) or 0.0, 2),
+                2,
+            ),
             "customerName": o.customer.name if o.customer else "",
             "deliveredAt": o.delivered_at.isoformat() if o.delivered_at else None,
         } for o in cod_orders[:12]],
@@ -3472,11 +3815,13 @@ def rider_cod_settlement_summary(db: Session, rider: User):
 
 @app.post("/api/riders/status")
 def set_rider_status(body: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER: raise HTTPException(403)
     user.is_online = body.get("isOnline", False); db.commit()
     return {"isOnline": user.is_online}
 
 @app.put("/api/riders/location")
 def update_rider_location(body: LocationUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER: raise HTTPException(403)
     user.lat = body.lat; user.lng = body.lng; db.commit()
     return {"ok": True}
 
@@ -3547,6 +3892,8 @@ def rider_cod_settlement_pay(body: RiderCodSettlementPay, user: User = Depends(g
     destination = company.get("upiId") or company.get("bankAccount") or "company account"
     note = (body.note or f"COD settlement via {method.upper()} to {destination}").strip()
     payment_reference = (body.paymentReference or "").strip()
+    if not payment_reference:
+        raise HTTPException(400, "UTR / payment reference is required")
     payment = SettlementPayment(
         invoice_id=None,
         entity_type="rider_cod",
@@ -3624,7 +3971,16 @@ def admin_stats(user: User = Depends(get_current_user), db: Session = Depends(ge
     week_rev  = round(sum(o.total for o in delivered_all if o.delivered_at and o.delivered_at >= week_start), 2)
 
     # Shops
-    active_shops = db.query(Shop).filter(Shop.is_active==True, Shop.is_suspended==False).count()
+    all_shops = db.query(Shop).all()
+    visible_shops = [s for s in all_shops if s.is_active and not s.is_suspended]
+    active_shops = len(visible_shops)
+    open_shops = [s for s in visible_shops if s.is_open]
+    closed_shops = [s for s in visible_shops if not s.is_open]
+    suspended_shops = [s for s in all_shops if s.is_suspended]
+    active_vendor_ids_today = {o.shop.owner_id for o in today_orders if getattr(o, "shop", None) and getattr(o.shop, "owner_id", None)}
+    active_customer_ids_today = {o.customer_id for o in today_orders if getattr(o, "customer_id", None)}
+    accepted_orders = [o for o in all_orders if o.status == OrderStatusEnum.ACCEPTED]
+    out_for_delivery_orders = [o for o in all_orders if o.status == OrderStatusEnum.OUT_FOR_DELIVERY]
     rider_perf = {}
     for o in delivered_all:
         if not o.rider_id:
@@ -3642,9 +3998,14 @@ def admin_stats(user: User = Depends(get_current_user), db: Session = Depends(ge
         "riders":        len(riders),
         "onlineRiders":  len(online_riders),
         "shops":         active_shops,
+        "openShops":     len(open_shops),
+        "closedShops":   len(closed_shops),
+        "suspendedShops": len(suspended_shops),
         "orders":        len(all_orders),
         "activeOrders":  len(active_orders),
         "todayOrders":   len(today_orders),
+        "acceptedOrders": len(accepted_orders),
+        "outForDeliveryOrders": len(out_for_delivery_orders),
         "revenue":       total_rev,
         "todayRevenue":  today_rev,
         "weekRevenue":   week_rev,
@@ -3654,6 +4015,8 @@ def admin_stats(user: User = Depends(get_current_user), db: Session = Depends(ge
         "deliveredWithin60": len(on_time_orders),
         "newToday":      new_today,
         "newThisWeek":   new_week,
+        "activeVendorsToday": len(active_vendor_ids_today),
+        "activeCustomersToday": len(active_customer_ids_today),
         "blockedUsers":  sum(1 for u in all_users if u.is_blocked),
         "pendingOrders": sum(1 for o in all_orders if o.status == OrderStatusEnum.PENDING),
         "riderPerformance": rider_perf,
@@ -3675,7 +4038,18 @@ def block_user(user_id: int, body: BlockUpdate, user: User = Depends(get_current
 @app.get("/api/admin/shops")
 def admin_shops(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != RoleEnum.ADMIN: raise HTTPException(403)
-    return [shop_dict(s) for s in db.query(Shop).all()]
+    pending = {
+        r.shop_id: r.id for r in db.query(ShopLocationChangeRequest).filter(
+            ShopLocationChangeRequest.status == "PENDING"
+        ).all()
+    }
+    rows = []
+    for s in db.query(Shop).all():
+        item = shop_dict(s)
+        item["locationChangePending"] = s.id in pending
+        item["locationChangeRequestId"] = pending.get(s.id)
+        rows.append(item)
+    return rows
 
 @app.patch("/api/admin/shops/{shop_id}/suspend")
 def suspend_shop(shop_id: int, body: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -3684,6 +4058,36 @@ def suspend_shop(shop_id: int, body: dict, user: User = Depends(get_current_user
     if not shop: raise HTTPException(404)
     shop.is_suspended = body.get("isSuspended", True); db.commit()
     return shop_dict(shop)
+
+@app.get("/api/admin/shop-location-requests")
+def admin_shop_location_requests(status: Optional[str] = "PENDING",
+                                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN: raise HTTPException(403)
+    q = db.query(ShopLocationChangeRequest)
+    if status:
+        q = q.filter(ShopLocationChangeRequest.status == status.upper())
+    return [shop_location_request_dict(r) for r in q.order_by(ShopLocationChangeRequest.created_at.desc()).all()]
+
+@app.post("/api/admin/shop-location-requests/{request_id}/review")
+def admin_review_shop_location_request(request_id: int, body: ShopLocationReview,
+                                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN: raise HTTPException(403)
+    req = db.query(ShopLocationChangeRequest).filter(ShopLocationChangeRequest.id == request_id).first()
+    if not req: raise HTTPException(404)
+    if req.status != "PENDING": raise HTTPException(400, "Location request already reviewed")
+    req.status = "APPROVED" if body.approved else "REJECTED"
+    req.admin_note = body.note or ""
+    req.reviewed_at = utc_now()
+    req.reviewed_by = user.id
+    if body.approved:
+        shop = req.shop
+        if not shop: raise HTTPException(404, "Shop not found")
+        shop.lat = req.new_lat
+        shop.lng = req.new_lng
+        if req.new_address is not None: shop.address = req.new_address
+        if req.new_city is not None: shop.city = req.new_city
+    db.commit()
+    return shop_location_request_dict(req)
 
 @app.get("/api/admin/orders")
 def admin_orders(timing: Optional[str] = None, paymentMethod: Optional[str] = None,
@@ -3977,8 +4381,8 @@ from database import PromoCode, SavedAddress, DeliveryOTP, RiderRating
 # (wraps existing endpoint behavior)
 @app.post("/api/otp/send/limited")
 def send_otp_limited(body: dict, request_ip: str = "0.0.0.0", db: Session = Depends(get_db)):
-    phone = str(body.get("phone", "")).strip()
-    return send_otp(SendOTPRequest(phone=phone), db)
+    email = str(body.get("email", "")).strip()
+    return send_otp(SendOTPRequest(email=email), db)
 
 # ── PAGINATION HELPER ─────────────────────────────────────────────
 def paginate(q, page: int = 1, per_page: int = 20):
@@ -4012,6 +4416,17 @@ def create_promo(body: PromoCreate, user: User = Depends(get_current_user), db: 
     p = PromoCode(code=body.code.upper(), discount_type=body.discountType, discount_value=body.discountValue,
                   min_order=body.minOrder, max_uses=body.maxUses, expires_at=expires, created_by=user.id)
     db.add(p); db.commit(); db.refresh(p)
+    customers = db.query(User).filter(User.role == RoleEnum.CUSTOMER).all()
+    notify_users(
+        db,
+        customers,
+        "New coupon available",
+        f"Use code {p.code} on DOTT and save on your next order.",
+        "coupon",
+        {"type": "coupon", "code": p.code, "promoId": p.id},
+        push=True,
+    )
+    db.commit()
     return {"id": p.id, "code": p.code, "discountType": p.discount_type, "discountValue": p.discount_value,
             "minOrder": p.min_order, "maxUses": p.max_uses, "usedCount": p.used_count, "isActive": p.is_active}
 
@@ -4060,11 +4475,41 @@ def del_address(addr_id: int, user: User = Depends(get_current_user), db: Sessio
 def gen_delivery_otp(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     o = db.query(Order).filter(Order.id == order_id).first()
     if not o or o.customer_id != user.id: raise HTTPException(403)
-    existing = db.query(DeliveryOTP).filter(DeliveryOTP.order_id == order_id).first()
-    if existing: db.delete(existing)
+    existing = db.query(DeliveryOTP).filter(DeliveryOTP.order_id == order_id, DeliveryOTP.is_used == False).first()
+    if existing:
+        return {"otp": existing.otp, "message": "Share this OTP with the rider when they arrive"}
     otp = generate_otp()
     db.add(DeliveryOTP(order_id=order_id, otp=otp)); db.commit()
     return {"otp": otp, "message": "Share this OTP with the rider when they arrive"}
+
+@app.post("/api/orders/{order_id}/delivery-otp/request")
+def request_delivery_otp(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.RIDER:
+        raise HTTPException(403)
+    o = db.query(Order).filter(Order.id == order_id).first()
+    if not o or o.rider_id != user.id:
+        raise HTTPException(403)
+    if o.status not in [OrderStatusEnum.PICKED_UP, OrderStatusEnum.OUT_FOR_DELIVERY]:
+        raise HTTPException(400, "Delivery OTP can be requested only after pickup")
+    if not o.customer:
+        raise HTTPException(400, "Customer not found for this order")
+    rider_name = (user.name or "Your rider").strip()
+    notify_user(
+        db,
+        o.customer,
+        "Delivery OTP needed",
+        f"{rider_name} is asking for the delivery OTP for order {o.order_code}. Open the order and share the OTP.",
+        "delivery_otp",
+        _order_push_data(o, {
+            "type": "delivery_otp",
+            "action": "generate_delivery_otp",
+            "orderId": o.id,
+            "orderCode": o.order_code,
+        }),
+        push=True,
+    )
+    db.commit()
+    return {"ok": True, "message": "Customer notified to share delivery OTP"}
 
 @app.post("/api/orders/{order_id}/delivery-otp/verify")
 def verify_delivery_otp(order_id: int, body: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -4074,7 +4519,8 @@ def verify_delivery_otp(order_id: int, body: dict, user: User = Depends(get_curr
     if not d: raise HTTPException(400, "No OTP found")
     if d.otp != body.get("otp","").strip(): raise HTTPException(400, "Wrong OTP")
     d.is_used = True
-    o.status = OrderStatusEnum.DELIVERED; o.delivered_at = utc_now()
+    o.status = OrderStatusEnum.DELIVERED
+    finalize_delivery_timing(o)
     db.commit()
     try:
         send_push_to_user(o.customer, "Delivered", f"Order {o.order_code} was delivered.", _order_push_data(o))
@@ -4175,6 +4621,15 @@ def parse_dashboard_range(range_key: Optional[str], start_date: Optional[str], e
     if key == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
+    elif key == "weekly":
+        end = now
+        start = now - timedelta(days=7)
+    elif key == "monthly":
+        end = now
+        start = now - timedelta(days=30)
+    elif key == "all":
+        start = datetime(2024, 1, 1)
+        end = now
     elif key == "custom" and start_date and end_date:
         start = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
         end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -4495,6 +4950,8 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
     by_rider = {}
     for invoice in rider_invoices:
         existing = by_rider.get(invoice.user_id)
+        cod_summary = rider_cod_settlement_summary(db, invoice.user) if invoice.user else {}
+        cod_breakdown = cod_summary.get("breakdown", {}) or {}
         base_row = {
             "riderId": invoice.user_id,
             "riderName": invoice.user.name if invoice.user else "Rider",
@@ -4504,6 +4961,16 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
             "totalEarnings": invoice.gross_earnings or 0.0,
             "paidAmount": invoice.paid_amount or 0.0,
             "pendingAmount": invoice.pending_amount or 0.0,
+            "codCollected": cod_summary.get("totalCollected", 0.0),
+            "codSettled": cod_summary.get("settledAmount", 0.0),
+            "codPending": cod_summary.get("pendingAmount", 0.0),
+            "codOrders": cod_summary.get("totalCodOrders", 0),
+            "codProductValue": cod_breakdown.get("productValue", 0.0),
+            "codDeliveryFee": cod_breakdown.get("deliveryFee", 0.0),
+            "codPlatformFee": cod_breakdown.get("platformFee", 0.0),
+            "codGstAmount": cod_breakdown.get("gstAmount", 0.0),
+            "codOtherAdjustments": cod_breakdown.get("otherAdjustments", 0.0),
+            "codSummary": cod_summary,
             "invoiceCount": 1,
             "invoiceIds": [invoice.id],
             "latestInvoiceId": invoice.id,
@@ -4520,6 +4987,16 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
         existing["totalEarnings"] += base_row["totalEarnings"]
         existing["paidAmount"] += base_row["paidAmount"]
         existing["pendingAmount"] += base_row["pendingAmount"]
+        existing["codCollected"] = base_row["codCollected"]
+        existing["codSettled"] = base_row["codSettled"]
+        existing["codPending"] = base_row["codPending"]
+        existing["codOrders"] = base_row["codOrders"]
+        existing["codProductValue"] = base_row["codProductValue"]
+        existing["codDeliveryFee"] = base_row["codDeliveryFee"]
+        existing["codPlatformFee"] = base_row["codPlatformFee"]
+        existing["codGstAmount"] = base_row["codGstAmount"]
+        existing["codOtherAdjustments"] = base_row["codOtherAdjustments"]
+        existing["codSummary"] = base_row["codSummary"]
         existing["invoiceCount"] += 1
         existing["invoiceIds"].append(invoice.id)
         if (
@@ -4552,6 +5029,16 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
         row["deliveryCollected"] = round(row["deliveryCollected"], 2)
         row["paidAmount"] = round(row["paidAmount"], 2)
         row["pendingAmount"] = round(row["pendingAmount"], 2)
+        row["codCollected"] = round(row.get("codCollected", 0.0), 2)
+        row["codSettled"] = round(row.get("codSettled", 0.0), 2)
+        row["codPending"] = round(row.get("codPending", 0.0), 2)
+        row["codProductValue"] = round(row.get("codProductValue", 0.0), 2)
+        row["codDeliveryFee"] = round(row.get("codDeliveryFee", 0.0), 2)
+        row["codPlatformFee"] = round(row.get("codPlatformFee", 0.0), 2)
+        row["codGstAmount"] = round(row.get("codGstAmount", 0.0), 2)
+        row["codOtherAdjustments"] = round(row.get("codOtherAdjustments", 0.0), 2)
+        row["netAdminPayable"] = round(max(row["pendingAmount"] - row["codPending"], 0.0), 2)
+        row["netRiderOwes"] = round(max(row["codPending"] - row["pendingAmount"], 0.0), 2)
         row["earningsPerDelivery"] = round(row["totalEarnings"] / row["totalDeliveries"], 2) if row["totalDeliveries"] else 0.0
         row["status"] = "PAID" if row["pendingAmount"] <= 0 else ("PARTIAL" if row["paidAmount"] > 0 else "PENDING")
         row.pop("periodStart", None)
@@ -4578,6 +5065,18 @@ def admin_settlement_dashboard(db: Session, start: datetime, end: datetime):
             "periodEnd": p.period_end.isoformat() if p.period_end else None,
             "notes": p.notes or "",
         } for p in payment_history],
+        "riderCod": {
+            "totalCollected": round(sum(row.get("codCollected", 0.0) for row in riders), 2),
+            "settledAmount": round(sum(row.get("codSettled", 0.0) for row in riders), 2),
+            "pendingAmount": round(sum(row.get("codPending", 0.0) for row in riders), 2),
+            "breakdown": {
+                "productValue": round(sum(row.get("codProductValue", 0.0) for row in riders), 2),
+                "deliveryFee": round(sum(row.get("codDeliveryFee", 0.0) for row in riders), 2),
+                "platformFee": round(sum(row.get("codPlatformFee", 0.0) for row in riders), 2),
+                "gstAmount": round(sum(row.get("codGstAmount", 0.0) for row in riders), 2),
+                "otherAdjustments": round(sum(row.get("codOtherAdjustments", 0.0) for row in riders), 2),
+            },
+        },
     }
 
 def mark_invoice_paid(db: Session, invoice_id: int, note: str = "", method: str = "UPI", payment_reference: str = ""):
@@ -4644,14 +5143,51 @@ def admin_mark_invoice_paid(invoice_id: int, body: Optional[dict] = None,
     if user.role != RoleEnum.ADMIN:
         raise HTTPException(403)
     payload = body or {}
+    payment_reference = (payload.get("paymentReference", "") or "").strip()
+    if not payment_reference:
+        raise HTTPException(400, "UTR / payment reference is required")
     invoice = mark_invoice_paid(
         db,
         invoice_id,
         payload.get("note", ""),
         payload.get("method", "UPI"),
-        payload.get("paymentReference", ""),
+        payment_reference,
     )
     return {"ok": True, "invoice": invoice_dict(invoice)}
+
+@app.post("/api/admin/riders/{rider_id}/cod-settlement/pay")
+def admin_record_rider_cod_payment(rider_id: int, body: RiderCodSettlementPay,
+                                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != RoleEnum.ADMIN:
+        raise HTTPException(403)
+    rider = db.query(User).filter(User.id == rider_id, User.role == RoleEnum.RIDER).first()
+    if not rider:
+        raise HTTPException(404, "Rider not found")
+    summary = rider_cod_settlement_summary(db, rider)
+    pending = round(float(summary.get("pendingAmount", 0.0) or 0.0), 2)
+    amount = round(float(body.amount if body.amount is not None else pending), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be greater than zero")
+    if amount > pending:
+        raise HTTPException(400, "Amount cannot exceed pending COD settlement")
+    method = (body.method or "upi").strip().upper()
+    payment_reference = (body.paymentReference or "").strip()
+    if not payment_reference:
+        raise HTTPException(400, "UTR / payment reference is required")
+    db.add(SettlementPayment(
+        invoice_id=None,
+        entity_type="rider_cod",
+        user_id=rider.id,
+        shop_id=None,
+        amount=amount,
+        payment_status="PAID",
+        payment_method=method,
+        payment_reference=payment_reference,
+        payment_date=utc_now(),
+        notes=(body.note or f"Admin recorded COD deposit from {rider.name}").strip(),
+    ))
+    db.commit()
+    return {"ok": True, "summary": rider_cod_settlement_summary(db, rider)}
 
 # ── ADMIN: CSV EXPORT ─────────────────────────────────────────────
 import csv, io

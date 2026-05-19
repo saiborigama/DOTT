@@ -13,7 +13,6 @@ class SettlementRulesTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         db_path = os.path.join(cls.tmp.name, "settlement_test.db")
         os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-        os.environ["OTP_SMS_PROVIDER"] = "disabled"
 
         import main  # noqa: WPS433 - import after env setup keeps this test isolated
         import database
@@ -112,6 +111,7 @@ class SettlementRulesTest(unittest.TestCase):
         delivered_at=None,
         refund_status="NOT_APPLICABLE",
         refund_amount=0,
+        cod_collected=None,
     ):
         m = self.main
         total = product_value + delivery_fee + platform_fee + gst
@@ -129,7 +129,7 @@ class SettlementRulesTest(unittest.TestCase):
             gst_amount=gst,
             total=total,
             cod_due_amount=total if payment == "cod" else 0,
-            cod_collected=status == m.OrderStatusEnum.DELIVERED and payment == "cod",
+            cod_collected=(status == m.OrderStatusEnum.DELIVERED and payment == "cod") if cod_collected is None else cod_collected,
             rider_earning=rider_earning,
             delivered_at=delivered_at,
             refund_status=refund_status,
@@ -204,6 +204,10 @@ class SettlementRulesTest(unittest.TestCase):
         self.assertEqual(cod_summary["pendingAmount"], 1182)
         self.assertEqual(cod_summary["companyAccount"]["upiId"], "dott@upi")
 
+        with self.assertRaises(m.HTTPException) as missing_ref:
+            m.admin_mark_invoice_paid(vendor_invoice.id, body={"method": "GPAY", "paymentReference": ""}, user=self.admin, db=self.db)
+        self.assertEqual(missing_ref.exception.status_code, 400)
+
         paid_vendor = m.mark_invoice_paid(
             self.db,
             vendor_invoice.id,
@@ -247,6 +251,51 @@ class SettlementRulesTest(unittest.TestCase):
         cod_payment = self.db.query(m.SettlementPayment).filter_by(entity_type="rider_cod").one()
         self.assertEqual(cod_payment.payment_method, "PHONEPE")
         self.assertEqual(cod_payment.payment_reference, "COD-UTR-500")
+
+    def test_cod_summary_excludes_uncollected_cod(self):
+        m = self.main
+        delivered_at = utc_now() - timedelta(hours=1)
+
+        self.add_order(
+            "COD-NOT-COLLECTED",
+            status=m.OrderStatusEnum.DELIVERED,
+            payment="cod",
+            product_value=500,
+            delivery_fee=20,
+            rider_earning=40,
+            delivered_at=delivered_at,
+            cod_collected=False,
+        )
+
+        cod_summary = m.rider_cod_settlement_summary(self.db, self.rider)
+        self.assertEqual(cod_summary["totalCollected"], 0)
+        self.assertEqual(cod_summary["pendingAmount"], 0)
+        self.assertEqual(cod_summary["totalCodOrders"], 0)
+
+    def test_delivery_otp_finalizes_cod_and_timing(self):
+        m = self.main
+        delivered_at = utc_now() - timedelta(hours=1)
+        order = self.add_order(
+            "COD-OTP-FINALIZE",
+            status=m.OrderStatusEnum.OUT_FOR_DELIVERY,
+            payment="cod",
+            product_value=500,
+            delivery_fee=20,
+            rider_earning=40,
+            delivered_at=delivered_at,
+            cod_collected=False,
+        )
+        order.delivery_deadline = utc_now() + timedelta(minutes=30)
+        self.db.add(m.DeliveryOTP(order_id=order.id, otp="123456"))
+        self.db.commit()
+
+        result = m.verify_delivery_otp(order.id, {"otp": "123456"}, user=self.rider, db=self.db)
+        self.assertTrue(result["ok"])
+        self.db.refresh(order)
+        self.assertEqual(order.status, m.OrderStatusEnum.DELIVERED)
+        self.assertTrue(order.cod_collected)
+        self.assertEqual(order.countdown_alert_level, "COMPLETED")
+        self.assertGreater(order.rider_earning, 40)
 
 
 if __name__ == "__main__":

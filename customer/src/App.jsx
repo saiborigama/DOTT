@@ -2,7 +2,7 @@
 import { api, setTokens, clearTokens, hasToken } from './api.js'
 import React from 'react'
 
-// â”€â”€â”€ SVG Icon System â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- SVG Icon System ----------------------------------------
 const Ic = {
   Home:    (p={}) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
   Search:  (p={}) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
@@ -61,9 +61,23 @@ function RippleBtn({children, onClick, className='', style={}, disabled=false, t
   )
 }
 
-// â”€â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- helpers ----------------------------------------
 function haversine(a,b,c,d){if(!a||!c)return null;const R=6371,x=(c-a)*Math.PI/180,y=(d-b)*Math.PI/180;const q=Math.sin(x/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(y/2)**2;return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q))}
 function money(v){return `Rs ${Number(v||0).toLocaleString('en-IN')}`}
+function toFiniteNumber(value){
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+function formatCoord(value, digits=4){
+  const parsed = toFiniteNumber(value)
+  return parsed == null ? null : parsed.toFixed(digits)
+}
+function formatSavedLocationLabel(lat,lng,digits=3){
+  const safeLat = formatCoord(lat, digits)
+  const safeLng = formatCoord(lng, digits)
+  if(!safeLat || !safeLng) return 'Near your saved location'
+  return `Near your saved location (${safeLat} deg N, ${safeLng} deg E)`
+}
 const PLATFORM_FEE = 10
 const MAX_CART_QTY_PER_PRODUCT = 2
 const MAX_ORDER_DISTANCE_KM = 10
@@ -86,7 +100,22 @@ function getShopDistanceKm(shop, userLoc){
   if(shop?.lat == null || shop?.lng == null) return null
   return haversine(userLoc.lat, userLoc.lng, shop.lat, shop.lng)
 }
+function isShopOrderable(shop){
+  if(!shop) return true
+  if(shop.isSuspended) return false
+  if(shop.isActive === false) return false
+  if(shop.isOpen === false) return false
+  return true
+}
+function isProductOrderable(product){
+  if(!product || product.isActive === false) return false
+  if(product.shopIsSuspended) return false
+  if(product.shopIsActive === false) return false
+  if(product.shopIsOpen === false) return false
+  return true
+}
 function canOrderProduct(product, userLoc, radius){
+  if(!isProductOrderable(product)) return false
   const km = getOrderDistanceKm(product, userLoc)
   if(km == null) return true
   return km <= getOrderRangeLimit(radius)
@@ -402,7 +431,8 @@ function buildLocalPricingEstimate(subtotal, km){
   const safeSubtotal = Number(subtotal || 0)
   const safeKm = Math.max(0, Number(km || 0))
   const baseDeliveryFee = 20
-  const distanceFee = Number((safeKm * 8).toFixed(2))
+  const billableDistanceKm = Math.max(0, Math.ceil(safeKm) - 1)
+  const distanceFee = Number((billableDistanceKm * 8).toFixed(2))
   const surgeFee = 0
   const gstRate = estimateGstRate(safeKm, safeSubtotal)
   const gstAmount = Number(((baseDeliveryFee + distanceFee + surgeFee) * gstRate).toFixed(2))
@@ -411,6 +441,7 @@ function buildLocalPricingEstimate(subtotal, km){
   return {
     km: Number(safeKm.toFixed(2)),
     baseDeliveryFee,
+    billableDistanceKm,
     distanceFee,
     surgeFee,
     deliveryFee,
@@ -460,10 +491,15 @@ function useIsNarrowLayout(breakpoint=960){
 class CheckoutErrorBoundary extends React.Component{
   constructor(props){
     super(props)
-    this.state = { hasError:false, error:null }
+    this.state = { hasError:false, error:null, resetKey:props.resetKey }
   }
   static getDerivedStateFromError(error){
     return { hasError:true, error }
+  }
+  componentDidUpdate(prevProps){
+    if(prevProps.resetKey !== this.props.resetKey && this.state.hasError){
+      this.setState({ hasError:false, error:null, resetKey:this.props.resetKey })
+    }
   }
   componentDidCatch(error){
     console.error('Checkout render failed', error)
@@ -487,6 +523,46 @@ class CheckoutErrorBoundary extends React.Component{
       )
     }
     return this.props.children
+  }
+}
+
+class ScreenErrorBoundary extends React.Component{
+  constructor(props){
+    super(props)
+    this.state = { hasError:false, error:null, resetKey:props.resetKey }
+  }
+
+  static getDerivedStateFromError(error){
+    return { hasError:true, error }
+  }
+
+  componentDidUpdate(prevProps){
+    if(prevProps.resetKey !== this.props.resetKey && this.state.hasError){
+      this.setState({ hasError:false, error:null, resetKey:this.props.resetKey })
+    }
+  }
+
+  componentDidCatch(error){
+    console.error('Customer screen crashed:', error)
+  }
+
+  render(){
+    if(!this.state.hasError) return this.props.children
+    if(this.props.checkoutOpen) return null
+    return (
+      <div className="wrap" style={{padding:'24px 14px 110px'}}>
+        <div className="search-panel" style={{textAlign:'center',padding:'22px 18px'}}>
+          <div style={{fontSize:22,fontWeight:900,color:'var(--nv)',marginBottom:8}}>This screen hit a problem</div>
+          <div style={{fontSize:13,color:'var(--mu)',lineHeight:1.65,marginBottom:16}}>
+            We could not load this section properly. Please go back home and try again.
+          </div>
+          <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
+            <button className="btn btn-out" onClick={this.props.onHome}>Go Home</button>
+            <button className="btn btn-nv" onClick={()=>window.location.reload()}>Reload</button>
+          </div>
+        </div>
+      </div>
+    )
   }
 }
 const FREE_DELIVERY_THRESHOLD = 999
@@ -648,23 +724,74 @@ function categoriesRoughMatch(productCategory='', selectedCategory=''){
   if(!a) return false
   return a === b || a.includes(b) || b.includes(a)
 }
+const CATEGORY_MATCH_TERMS = {
+  Fashion:['fashion','shirt','kurta','kurti','saree','jean','dress','jacket','top','wear','clothing'],
+  Kurtas:['kurta'],
+  Kurtis:['kurti'],
+  Sarees:['saree'],
+  Jeans:['jean','denim'],
+  Dresses:['dress','gown','frock'],
+  'T-Shirts':['t shirt','tshirt','tee','shirt'],
+  Footwear:['footwear','shoe','sandal','slipper','chappal'],
+  Jackets:['jacket','coat','hoodie'],
+  Kids:['kid','kids','child','children','baby'],
+  Accessories:['accessory','accessories','bag','belt','watch','cap','wallet']
+}
+function productMatchesCategory(product, selectedCategory='All'){
+  if(!selectedCategory || selectedCategory === 'All') return true
+  if(categoriesRoughMatch(product?.category, selectedCategory)) return true
+  const terms = CATEGORY_MATCH_TERMS[selectedCategory] || [selectedCategory]
+  const haystack = normalizeSearchText([
+    product?.name,
+    product?.category,
+    product?.brand,
+    Array.isArray(product?.tags) ? product.tags.join(' ') : product?.tags,
+    product?.description
+  ].filter(Boolean).join(' '))
+  return terms.some(term=>haystack.includes(normalizeSearchText(term)))
+}
 
 function displayProductImage(product){
   return product?.processedImageUrl || product?.imageUrl || ''
 }
 
+const SHOP_FASHION_IMAGES = [
+  'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=900&q=85&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=900&q=85&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1610030469983-98e550d6193c?w=900&q=85&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=900&q=85&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=900&q=85&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=900&q=85&auto=format&fit=crop',
+]
+
+function hashText(value=''){
+  return String(value || '').split('').reduce((sum,ch)=>sum + ch.charCodeAt(0),0)
+}
+
+function getShopFashionImages(shop, featuredProducts=[]){
+  const productImages = (Array.isArray(featuredProducts) ? featuredProducts : [])
+    .map(displayProductImage)
+    .filter(Boolean)
+  const start = hashText(`${shop?.name || ''}${shop?.category || ''}`) % SHOP_FASHION_IMAGES.length
+  const fallbackImages = [
+    ...SHOP_FASHION_IMAGES.slice(start),
+    ...SHOP_FASHION_IMAGES.slice(0,start)
+  ]
+  return [...new Set([...productImages, ...fallbackImages])].slice(0,4)
+}
+
 const CATS = [
-  {id:'All',icon:'All'},         {id:'Fashion',icon:'Fashion'},    {id:'Kurtas',icon:'Kurtas'},
-  {id:'Kurtis',icon:'Kurtis'},   {id:'Sarees',icon:'Sarees'},      {id:'Jeans',icon:'Jeans'},
-  {id:'Dresses',icon:'Dresses'}, {id:'T-Shirts',icon:'T-Shirts'},  {id:'Footwear',icon:'Footwear'},
-  {id:'Jackets',icon:'Jackets'}, {id:'Kids',icon:'Kids'},          {id:'Accessories',icon:'Acc.'},
+  {id:'All'},         {id:'Fashion'},    {id:'Kurtas'},
+  {id:'Kurtis'},      {id:'Sarees'},     {id:'Jeans'},
+  {id:'Dresses'},     {id:'T-Shirts'},   {id:'Footwear'},
+  {id:'Jackets'},     {id:'Kids'},       {id:'Accessories'},
 ]
 
 const BANNERS = [
-  {bg:'linear-gradient(135deg,#f7fbff 0%,#edf4fb 45%,#dfeefa 100%)',title:'Elegant Dresses For Everyday Looks',sub:'Fresh silhouettes, soft fabrics, and polished styling from nearby boutiques.',badge:'DRESS EDIT',img:'https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=2200&q=95&auto=format&fit=crop',accent:'#384959'},
+  {bg:'linear-gradient(135deg,#f7fbff 0%,#edf4fb 45%,#dfeefa 100%)',title:'Elegant Dresses For Everyday Looks',sub:'Fresh silhouettes, soft fabrics, and polished styles from stores near you.',badge:'DRESS EDIT',img:'https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=2200&q=95&auto=format&fit=crop',accent:'#384959'},
   {bg:'linear-gradient(135deg,#f7fbff 0%,#eef5fd 48%,#d8e9fb 100%)',title:'Festive Sarees And Flowing Drapes',sub:'Wedding-ready picks, premium weaves, and standout occasion styles.',badge:'FESTIVE DROP',img:'https://images.unsplash.com/photo-1610030469983-98e550d6193c?w=2200&q=95&auto=format&fit=crop',accent:'#6a89a7'},
   {bg:'linear-gradient(135deg,#f7fbff 0%,#edf4fb 48%,#dbeefd 100%)',title:'New Season Dress Collection',sub:'Statement hems, sky-blue accents, and graceful looks for day-to-night wear.',badge:'NEW ARRIVALS',img:'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=2200&q=95&auto=format&fit=crop',accent:'#384959'},
-  {bg:'linear-gradient(135deg,#f5faff 0%,#eaf3fc 45%,#d8e8f7 100%)',title:'Premium Boutique Styles Nearby',sub:'Verified shops, beautiful product imagery, and faster local fashion delivery.',badge:'NEARBY STORES',img:'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=2200&q=95&auto=format&fit=crop',accent:'#6a89a7'},
+  {bg:'linear-gradient(135deg,#f5faff 0%,#eaf3fc 45%,#d8e8f7 100%)',title:'Premium Styles Near You',sub:'Verified stores, clear product photos, and faster local fashion delivery.',badge:'NEARBY STORES',img:'https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=2200&q=95&auto=format&fit=crop',accent:'#6a89a7'},
 ]
 
 // Demo data removed for production build
@@ -682,7 +809,7 @@ const STATUS_META = {
   CANCELLED:        {label:'Cancelled',       color:'#dc2626', bg:'#fef2f2'},
 }
 
-// â”€â”€â”€ global toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- global toast ----------------------------------------
 let _setToasts, _tid = 0
 function showToast(msg, type='info'){
   if(_setToasts){const id=++_tid;_setToasts(t=>[...t,{id,msg,type}]);setTimeout(()=>_setToasts(t=>t.filter(x=>x.id!==id)),3000)}
@@ -706,12 +833,12 @@ function Toasts(){
   )
 }
 
-// â”€â”€â”€ CSS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- CSS ----------------------------------------
 const CSS = `
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   DOTT CUSTOMER â€” PREMIUM UI v4
+/* ----------------------------------------
+   DOTT CUSTOMER - PREMIUM UI v4
    Design: Dark navy + Vibrant orange + Clean whites
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap');
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -781,8 +908,10 @@ img{display:block}
   border:1px solid rgba(207,230,251,.96);border-radius:22px;box-shadow:0 14px 36px rgba(56,73,89,.08), inset 0 1px 0 rgba(255,255,255,.7)
 }
 .topnav-loc{
-  max-width:var(--shell);margin:8px auto 0;padding:0 14px 8px;
+  max-width:var(--shell);margin:8px auto 0;padding:0 14px 8px;max-height:86px;overflow:hidden;
+  transition:max-height .24s ease,opacity .22s ease,transform .22s ease,margin .22s ease,padding .22s ease;
 }
+.topnav.topnav-compact .topnav-loc{max-height:0;opacity:0;margin-top:0;padding-bottom:0;transform:translateY(-6px);pointer-events:none}
 .topnav-loc-card{
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   background:rgba(255,255,255,.82);border:1px solid rgba(207,230,251,.9);border-radius:18px;
@@ -836,9 +965,9 @@ img{display:block}
 
 /* SEARCH EXPERIENCE */
 .search-shell{padding-bottom:56px;background:linear-gradient(180deg,#f8f4ef 0%,#fbfaf7 18%,#fbfaf7 100%)}
-.search-hero{background:linear-gradient(135deg,#f6efe4 0%,#fbf7f0 48%,#edf5ff 100%);padding:22px 0 18px;position:relative;overflow:hidden}
+.search-hero{background:linear-gradient(135deg,#f6efe4 0%,#fbf7f0 48%,#edf5ff 100%);padding:14px 0 12px;position:relative;overflow:hidden}
 .search-hero::after{content:'';position:absolute;right:-140px;top:-100px;width:360px;height:360px;border-radius:50%;background:radial-gradient(circle,rgba(217,147,50,.14),transparent 68%)}
-.search-hero-card{position:relative;z-index:1;background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.72);border-radius:30px;padding:24px;box-shadow:0 24px 60px rgba(23,33,43,.1);backdrop-filter:blur(16px)}
+.search-hero-card{position:relative;z-index:1;background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.72);border-radius:24px;padding:14px 16px;box-shadow:0 18px 44px rgba(23,33,43,.08);backdrop-filter:blur(16px)}
 .search-kicker{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:#eaf6ff;color:var(--ord);font-size:11px;font-weight:800;letter-spacing:.42px;text-transform:uppercase;margin-bottom:14px}
 .search-title{font-size:clamp(28px,4vw,42px);line-height:1.02;font-weight:900;color:var(--nv);letter-spacing:-1px;max-width:13ch}
 .search-copy{margin-top:10px;color:var(--mu);font-size:14px;line-height:1.75;max-width:58ch}
@@ -846,20 +975,20 @@ img{display:block}
 .search-input-shell input{border:none;padding:16px 18px;font-size:15px;outline:none;font-family:var(--fn);background:transparent}
 .search-input-shell button{background:linear-gradient(135deg,#ffb84d,#ff9900);border:none;padding:0 24px;cursor:pointer;height:54px;display:flex;align-items:center;justify-content:center;transition:.18s}
 .search-input-shell button:hover{filter:brightness(.98)}
-.search-chip-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.search-chip-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .search-chip{padding:9px 12px;border-radius:999px;border:1px solid rgba(209,198,183,.78);background:rgba(255,255,255,.7);color:var(--nv);font-size:12px;font-weight:700;cursor:pointer;transition:.18s}
 .search-chip:hover{background:#fff;transform:translateY(-1px)}
 .search-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
 .search-overview-card{padding:14px 16px;border-radius:20px;background:rgba(255,255,255,.62);border:1px solid rgba(255,255,255,.7);box-shadow:0 14px 30px rgba(23,33,43,.08)}
 .search-overview-card strong{display:block;color:var(--nv);font-size:18px;font-weight:900}
 .search-overview-card span{display:block;font-size:12px;color:var(--mu);margin-top:4px}
-.search-body{padding-top:22px}
-.filterbar{position:sticky;top:90px;z-index:190;background:rgba(251,248,243,.8);backdrop-filter:blur(12px);border-bottom:1px solid rgba(229,221,209,.75)}
-.filterbar-inner{max-width:1500px;margin:0 auto;padding:14px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.search-body{padding-top:14px}
+.filterbar{position:sticky;top:82px;z-index:170;background:rgba(251,248,243,.86);backdrop-filter:blur(12px);border-bottom:1px solid rgba(229,221,209,.75)}
+.filterbar-inner{max-width:1500px;margin:0 auto;padding:10px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .fselect{border:1px solid #d7dde2;background:#fff;border-radius:999px;padding:10px 14px;font-family:var(--fn);font-size:13px;font-weight:700;color:#334155;min-width:150px;box-shadow:var(--sh0)}
 .res-count{margin-left:auto;padding:8px 12px;border-radius:999px;background:#eaf6ff;color:var(--ord);font-size:12px;font-weight:800;border:1px solid var(--br)}
-.search-panel{background:#fff;border:1px solid var(--br);border-radius:24px;padding:22px;box-shadow:var(--sh0)}
-.search-empty{padding:30px 24px;border-radius:22px;background:linear-gradient(135deg,#fff,#eef8ff);border:1px solid var(--br);box-shadow:0 16px 36px rgba(74,168,255,.12)}
+.search-panel{background:#fff;border:1px solid var(--br);border-radius:22px;padding:16px;box-shadow:var(--sh0)}
+.search-empty{padding:22px 18px;border-radius:20px;background:linear-gradient(135deg,#fff,#eef8ff);border:1px solid var(--br);box-shadow:0 16px 36px rgba(74,168,255,.12)}
 .search-empty-title{font-size:24px;font-weight:900;color:#0f172a;letter-spacing:-.5px}
 .search-empty-copy{font-size:14px;color:var(--mu);line-height:1.7;margin-top:8px;max-width:60ch}
 .search-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:16px}
@@ -922,15 +1051,34 @@ img{display:block}
 
 /* CATEGORY BAR */
 .catbar{
-  background:rgba(255,255,255,.92);border-bottom:1px solid rgba(207,230,251,.7);overflow-x:auto;scrollbar-width:none;
-  position:sticky;top:88px;z-index:200;box-shadow:none;backdrop-filter:blur(14px);max-width:var(--shell);margin:0 auto
+  background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(246,251,255,.94));border:1px solid rgba(207,230,251,.86);overflow-x:auto;scrollbar-width:none;
+  position:sticky;top:140px;z-index:180;box-shadow:0 10px 22px rgba(56,73,89,.055);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);max-width:var(--shell);margin:0 auto;padding:6px 8px;
+  max-height:50px;opacity:1;transform:translateY(0);border-radius:0 0 18px 18px;
+  transition:top .22s ease, background .18s ease, max-height .22s ease, opacity .18s ease, transform .18s ease, border-color .18s ease, box-shadow .18s ease, border-radius .18s ease, padding .18s ease
+}
+.catbar.compact{
+  top:82px;max-height:46px;opacity:1;pointer-events:auto;overflow-x:auto;overflow-y:hidden;
+  max-width:min(var(--shell), calc(100% - 24px));padding:0 18px 8px;border-radius:0 0 20px 20px;border:1px solid rgba(189,221,252,.92);border-top:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(237,248,255,.96));
+  box-shadow:0 16px 30px rgba(35,135,232,.12)
 }
 .catbar::-webkit-scrollbar{display:none}
-.catbar-inner{max-width:var(--shell);margin:0 auto;padding:0 10px;display:flex;min-width:max-content}
-.cat-btn{display:flex;align-items:center;gap:6px;padding:13px 14px;cursor:pointer;border-bottom:3px solid transparent;transition:all .2s;font-size:12px;font-weight:700;color:var(--mu);flex-shrink:0;white-space:nowrap;position:relative}
-.cat-btn:hover{color:var(--nv);border-bottom-color:var(--orm)}
-.cat-btn.on{color:var(--nv);border-bottom-color:var(--or);font-weight:800}
-.cat-btn.on::after{content:'';position:absolute;bottom:-1px;left:8px;right:8px;height:3px;background:var(--or-grad);border-radius:2px 2px 0 0}
+.catbar-inner{max-width:var(--shell);margin:0 auto;display:flex;min-width:max-content;gap:6px}
+.cat-btn{display:flex;align-items:center;justify-content:center;padding:7px 13px;cursor:pointer;border:1px solid rgba(207,230,251,.92);border-radius:999px;transition:all .18s;font-size:11px;font-weight:800;color:#516274;flex-shrink:0;white-space:nowrap;position:relative;background:#fff;box-shadow:none;font-family:var(--fn);min-height:34px}
+.catbar.compact .catbar-inner{gap:5px}
+.catbar.compact .cat-btn{
+  min-height:34px;padding:7px 15px;font-size:13px;background:transparent;border:none;border-radius:0;box-shadow:none;color:var(--mu);font-weight:800
+}
+.cat-btn:hover{color:var(--nv);border-color:rgba(74,168,255,.55);background:#f8fcff}
+.cat-btn.on{color:#fff!important;border-color:#2f8fe2!important;background:#2f8fe2!important;box-shadow:0 8px 18px rgba(47,143,226,.18)}
+.catbar.compact .cat-btn.on{background:transparent!important;box-shadow:none;color:var(--nv)!important}
+.catbar.compact .cat-btn.on::before{
+  content:'';position:absolute;left:12px;right:12px;bottom:0;height:4px;border-radius:999px;background:var(--or)
+}
+.cat-btn.on::after{display:none}
+.cat-copy{display:flex;align-items:center;text-align:left}
+.cat-label{font-size:11px;line-height:1}
+.catbar.compact .cat-label{font-size:13px}
 
 /* SECTION TITLES */
 .home-hero{display:grid;grid-template-columns:2fr 1fr;gap:14px;padding:14px 0 6px}
@@ -970,36 +1118,37 @@ img{display:block}
 .hs-inner{display:flex;gap:12px;min-width:max-content}
 
 /* PRODUCT GRID */
-.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:12px;padding:0 14px}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(156px,1fr));gap:10px;padding:0 12px;align-items:stretch}
 
 /* PRODUCT CARD */
 .pc{
-  width:174px;flex-shrink:0;border-radius:18px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.92);
+  width:100%;min-width:0;flex-shrink:0;border-radius:18px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.92);
   border:1px solid rgba(228,221,212,.92);transition:all .24s cubic-bezier(.22,1,.36,1);box-shadow:var(--sh1);animation:fadeUp .35s ease both
 }
+.hs-inner .pc{width:164px}
 .pc:hover{transform:translateY(-8px);box-shadow:var(--sh2);border-color:rgba(217,147,50,.6)}
-.pc-img-wrap{position:relative;aspect-ratio:1 / 1.08;overflow:hidden;background:linear-gradient(180deg,#f8f5f0,#f4f6f8);border-bottom:1px solid #eee7dc}
+.pc-img-wrap{position:relative;aspect-ratio:1 / .94;overflow:hidden;background:linear-gradient(180deg,#f8f5f0,#f4f6f8);border-bottom:1px solid #eee7dc}
 .pc-img{width:100%;height:100%;object-fit:cover;transition:transform .55s ease,filter .55s ease}
 .pc:hover .pc-img{transform:scale(1.07);filter:saturate(1.03)}
 .pc-badge{position:absolute;top:12px;left:12px;background:rgba(139,35,35,.92);color:#fff;font-size:10px;font-weight:800;padding:5px 9px;border-radius:999px;letter-spacing:.25px;box-shadow:0 8px 18px rgba(139,35,35,.24)}
 .pc-wish{position:absolute;top:12px;right:12px;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border:1px solid rgba(15,17,17,.06);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all .2s;box-shadow:var(--sh0)}
 .pc-wish:hover{transform:scale(1.08) translateY(-1px)}
 .pc-wish.on{animation:heartPop .35s ease}
-.pc-body{padding:12px 12px 14px}
-.pc-meta-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.pc-body{padding:10px 10px 12px}
+.pc-meta-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}
 .pc-pill{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:#f6efe5;color:#835219;font-size:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}
-.pc-name{font-size:14px;font-weight:800;line-height:1.4;margin-bottom:6px;color:var(--tx);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:40px}
-.pc-shop{font-size:11px;color:var(--bl2);margin-bottom:7px;display:flex;align-items:center;gap:4px;font-weight:700}
-.pc-stars{margin-bottom:7px}
-.pc-colors{display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap}
+.pc-name{font-size:13px;font-weight:800;line-height:1.35;margin-bottom:5px;color:var(--tx);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:35px}
+.pc-shop{font-size:10px;color:var(--bl2);margin-bottom:5px;display:flex;align-items:center;gap:4px;font-weight:700}
+.pc-stars{margin-bottom:5px}
+.pc-colors{display:flex;gap:5px;margin-bottom:6px;flex-wrap:wrap}
 .pc-cdot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1);cursor:pointer;transition:.15s}
 .pc-cdot:hover{transform:scale(1.3)}
 .pc-price-row{display:flex;align-items:baseline;gap:6px}
-.pc-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:8px}
-.pc-price{font-size:22px;font-weight:900;color:var(--tx);letter-spacing:-.7px}
+.pc-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:6px;margin-top:6px}
+.pc-price{font-size:19px;font-weight:900;color:var(--tx);letter-spacing:-.6px}
 .pc-mrp{display:block;font-size:11px;color:var(--mu);text-decoration:line-through;margin-top:3px}
 .pc-disc{display:inline-flex;font-size:11px;font-weight:800;color:#067d62;background:#e7f8f4;padding:3px 7px;border-radius:999px;margin-top:5px}
-.pc-addbtn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 14px;background:var(--nv-grad);border:1px solid rgba(16,32,51,.1);border-radius:999px;cursor:pointer;font-size:12px;font-weight:800;color:#fff;transition:all .18s;box-shadow:0 14px 26px rgba(16,32,51,.14)}
+.pc-addbtn{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;background:var(--nv-grad);border:1px solid rgba(16,32,51,.1);border-radius:999px;cursor:pointer;font-size:11px;font-weight:800;color:#fff;transition:all .18s;box-shadow:0 14px 26px rgba(16,32,51,.14)}
 .pc-addbtn:hover{transform:translateY(-1px);box-shadow:0 18px 32px rgba(16,32,51,.18)}
 .pc-addbtn:disabled{opacity:.5;cursor:not-allowed}
 .pc-qty{display:flex;align-items:center;gap:0;border:1px solid rgba(217,147,50,.35);border-radius:999px;overflow:hidden;background:#fff8ee;min-width:98px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
@@ -1009,24 +1158,60 @@ img{display:block}
 .pc-v{background:var(--bll);color:var(--bl2);font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;letter-spacing:.3px}
 
 /* SHOP CARD */
-.scard{border-radius:16px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--br);transition:all .2s cubic-bezier(.22,1,.36,1);width:206px;flex-shrink:0;box-shadow:var(--sh0)}
-.scard:hover{transform:translateY(-2px);box-shadow:var(--sh2);border-color:#ff9900}
-.scard-img{width:100%;height:136px;object-fit:cover}
+.scard{border-radius:18px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid rgba(207,230,251,.94);transition:transform .22s cubic-bezier(.22,1,.36,1),box-shadow .22s,border-color .22s;position:relative;width:214px;flex-shrink:0;box-shadow:0 12px 28px rgba(56,73,89,.08)}
+.scard:hover{transform:translateY(-5px);box-shadow:0 22px 46px rgba(56,73,89,.14);border-color:#4aa8ff}
+.scard-media{height:146px;position:relative;overflow:hidden;background:#eef6ff}
+.scard-img{width:100%;height:100%;object-fit:cover;transition:transform .65s ease,filter .65s ease}
+.scard:hover .scard-img{transform:scale(1.08);filter:saturate(1.08)}
+.scard-media::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,23,42,0) 38%,rgba(15,23,42,.48) 100%);pointer-events:none}
+.scard-shine{position:absolute;inset:-35% auto auto -45%;width:46%;height:175%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.28),transparent);transform:rotate(16deg);animation:cardShine 4.8s ease-in-out infinite;pointer-events:none}
+.scard-tag{position:absolute;left:10px;bottom:10px;z-index:2;display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.93);color:#12324d;font-size:10px;font-weight:900;letter-spacing:.25px;text-transform:uppercase;box-shadow:0 8px 18px rgba(15,23,42,.16)}
+.scard-thumbs{position:absolute;right:9px;bottom:9px;z-index:2;display:flex;gap:4px}
+.scard-thumb{width:30px;height:34px;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(15,23,42,.16)}
 .scard-body{padding:12px}
-.scard-name{font-size:15px;font-weight:800;margin-bottom:5px;color:var(--nv);display:flex;align-items:center;gap:6px}
-.scard-meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mu);flex-wrap:wrap}
+.scard-name{font-size:15px;font-weight:900;margin-bottom:6px;color:var(--nv);display:flex;align-items:center;gap:6px;min-width:0}
+.scard-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.scard-status{margin-left:auto;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:900;flex-shrink:0}
+.scard-status.open{background:#dcfce7;color:#15803d}
+.scard-status.closed{background:#fee2e2;color:#b91c1c}
+.scard-meta{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mu);flex-wrap:wrap}
+.scard-style-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid rgba(207,230,251,.82)}
+.scard-style-copy{min-width:0}
+.scard-style-copy strong{display:block;font-size:11px;font-weight:900;color:var(--nv);line-height:1.1}
+.scard-style-copy span{display:block;font-size:10px;font-weight:800;color:var(--mu);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scard-style-cta{display:inline-flex;align-items:center;justify-content:center;min-width:54px;padding:7px 9px;border-radius:999px;background:linear-gradient(135deg,#eef8ff,#dbeeff);color:#1d6fb8;font-size:10px;font-weight:900;box-shadow:inset 0 1px 0 rgba(255,255,255,.8)}
+@keyframes cardShine{0%,58%{transform:translateX(0) rotate(16deg);opacity:0}68%{opacity:1}100%{transform:translateX(390%) rotate(16deg);opacity:0}}
 .vbadge{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;font-size:9px;font-weight:800;padding:2px 7px;border-radius:100px;letter-spacing:.5px}
 
 /* DEAL GRID */
-.deal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 14px}
-@media(max-width:768px){.deal-grid{grid-template-columns:repeat(2,1fr)}}
-.deal-card{border-radius:24px;overflow:hidden;cursor:pointer;aspect-ratio:1;position:relative;background:var(--nv2);transition:all .22s;border:1px solid rgba(255,255,255,.24);box-shadow:var(--sh1)}
-.deal-card:hover{transform:translateY(-6px);box-shadow:var(--sh2)}
-.deal-imgs{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;gap:2px}
-.deal-imgs img{width:100%;height:100%;object-fit:cover}
-.deal-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.7) 0%,rgba(0,0,0,.2) 50%,transparent 100%)}
-.deal-title{position:absolute;bottom:12px;left:12px;color:#fff;font-weight:800;font-size:13px;z-index:2;line-height:1.3}
-.deal-cta{position:absolute;bottom:12px;right:12px;background:var(--or);color:#fff;font-size:10px;font-weight:800;padding:4px 10px;border-radius:100px;z-index:2}
+.deal-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px;padding:0 20px 4px}
+@media(max-width:900px){.deal-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}}
+.deal-card{
+  border-radius:24px;overflow:hidden;cursor:pointer;aspect-ratio:1;position:relative;
+  background:linear-gradient(145deg,#e8f5ff 0%,#78c6ff 58%,#3fa8f5 100%);
+  transition:transform .22s,box-shadow .22s,border-color .22s;
+  border:2px solid rgba(122,194,255,.72);
+  box-shadow:0 18px 40px rgba(35,135,232,.14),inset 0 1px 0 rgba(255,255,255,.72)
+}
+.deal-card:hover{transform:translateY(-5px);box-shadow:0 24px 52px rgba(35,135,232,.2);border-color:#4aa8ff}
+.deal-imgs{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:5px}
+.deal-imgs img{width:100%;height:100%;object-fit:cover;border-radius:16px;background:#f8fbff;box-shadow:0 8px 18px rgba(15,23,42,.08)}
+.deal-card.empty .deal-imgs{display:none}
+.deal-empty-art{position:absolute;inset:16px;border-radius:22px;background:linear-gradient(145deg,rgba(255,255,255,.42),rgba(255,255,255,.1));border:1px solid rgba(255,255,255,.32)}
+.deal-empty-art::before{content:'';position:absolute;inset:28px;border-radius:18px;background:linear-gradient(135deg,rgba(255,255,255,.34),rgba(255,255,255,.08));box-shadow:0 0 0 12px rgba(255,255,255,.06)}
+.deal-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(8,31,56,.68) 0%,rgba(8,31,56,.12) 58%,rgba(255,255,255,.04) 100%)}
+.deal-copy{position:absolute;left:16px;right:16px;bottom:16px;z-index:2;display:flex;align-items:flex-end;justify-content:space-between;gap:10px}
+.deal-title{color:#fff;font-weight:900;font-size:16px;line-height:1.1;text-shadow:0 2px 12px rgba(0,0,0,.26);min-width:0}
+.deal-cta{background:rgba(255,255,255,.94);color:#1f6fb2;font-size:12px;font-weight:900;padding:9px 14px;border-radius:999px;white-space:nowrap;box-shadow:0 10px 24px rgba(15,23,42,.18)}
+@media(max-width:600px){
+  .deal-grid{gap:14px!important;padding-left:14px!important;padding-right:14px!important}
+  .deal-card{border-radius:20px}
+  .deal-imgs{gap:4px;padding:4px}
+  .deal-imgs img{border-radius:13px}
+  .deal-copy{left:12px;right:12px;bottom:12px;gap:8px}
+  .deal-title{font-size:14px}
+  .deal-cta{font-size:10px;padding:7px 10px}
+}
 
 /* SKELETON */
 .skel{background:linear-gradient(90deg,#f6f1ea 25%,#efe7dc 50%,#f6f1ea 75%);background-size:800px 100%;animation:shimmer 1.2s linear infinite}
@@ -1060,9 +1245,9 @@ img{display:block}
 .star-f{color:#f59e0b;font-size:11px}
 .star-e{color:#d1d5db;font-size:11px}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    CHECKOUT - Premium Multi-Step
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .co-overlay{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;animation:fadeIn .2s ease;backdrop-filter:blur(6px)}
 .co-modal{background:var(--surface);border-radius:var(--r24);width:100%;max-width:520px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column;animation:scaleIn .3s cubic-bezier(.22,1,.36,1);box-shadow:var(--sh3)}
 .co-head{background:var(--nv);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
@@ -1098,9 +1283,9 @@ img{display:block}
 /* Map */
 .map-panel{position:absolute;inset:0;background:var(--surface);z-index:20;border-radius:var(--r24);overflow:hidden;display:flex;flex-direction:column;animation:slideUp .3s ease}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    CART DRAWER
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .cart-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);animation:fadeIn .2s ease}
 .cart-drawer{position:fixed;right:0;top:0;bottom:0;width:min(420px,100vw);background:var(--surface);box-shadow:var(--sh3);display:flex;flex-direction:column;animation:slideRight .3s cubic-bezier(.22,1,.36,1)}
 .cart-hd{padding:20px 22px;border-bottom:1px solid var(--br);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:var(--surface)}
@@ -1113,9 +1298,9 @@ img{display:block}
 .cart-total-row{display:flex;justify-content:space-between;margin-bottom:5px;font-size:14px}
 .cart-total-row.main{font-size:18px;font-weight:900;border-top:1px solid var(--br);padding-top:10px;margin-top:6px}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    60-MIN COUNTDOWN TIMER
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .countdown-wrap{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--r12);background:linear-gradient(135deg,#0f172a,#1e293b);border:1px solid rgba(249,115,22,.25);box-shadow:0 4px 16px rgba(0,0,0,.15)}
 .countdown-ring{position:relative;width:52px;height:52px;flex-shrink:0}
 .countdown-svg{transform:rotate(-90deg)}
@@ -1127,9 +1312,9 @@ img{display:block}
 .countdown-time-left{font-size:22px;font-weight:900;color:var(--or);font-family:var(--fn);animation:countPulse 2s ease infinite}
 .countdown-urgent .countdown-time-left{color:var(--rd)}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    ORDER TRACKING - Premium
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .track-overlay{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);animation:fadeIn .2s ease;display:flex;align-items:flex-end;justify-content:center;padding:0}
 .track-sheet{background:var(--surface);border-radius:var(--r24) var(--r24) 0 0;width:100%;max-width:600px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column;animation:slideUp .4s cubic-bezier(.22,1,.36,1)}
 .track-map{height:200px;background:#e2e8f0;flex-shrink:0;position:relative;overflow:hidden}
@@ -1148,9 +1333,9 @@ img{display:block}
 .track-step-sub{font-size:12px;color:var(--mu)}
 .track-step-sub.active{color:var(--or)}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    ORDERS PAGE
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .orders-hd{background:var(--nv-grad);padding:28px 0 22px;color:#fff}
 .order-card{background:var(--surface);border-radius:var(--r16);border:1px solid var(--br);margin-bottom:14px;overflow:hidden;transition:all .2s cubic-bezier(.22,1,.36,1);box-shadow:var(--sh0)}
 .order-card:hover{box-shadow:var(--sh2);border-color:rgba(249,115,22,.2);transform:translateY(-1px)}
@@ -1162,9 +1347,9 @@ img{display:block}
 .order-item-row:last-child{border-bottom:none}
 .order-item-img{width:42px;height:42px;border-radius:var(--r8);object-fit:cover;background:#f8fafc;border:1px solid var(--br);flex-shrink:0}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    AUTH MODAL
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .auth-overlay{position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);animation:fadeIn .2s ease;display:flex;align-items:center;justify-content:center;padding:16px}
 .auth-page{display:flex;min-height:100vh;overflow:hidden;position:relative;background:var(--nv)}
 .auth-left{width:45%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px;position:relative;background:linear-gradient(160deg,#0f172a 0%,#1a2540 50%,#0f172a 100%);border-right:1px solid rgba(255,255,255,.07)}
@@ -1188,9 +1373,9 @@ img{display:block}
 .auth-floating-label input:focus ~ label,.auth-floating-label input:not(:placeholder-shown) ~ label{top:10px;transform:none;font-size:10px;font-weight:700;color:var(--or);text-transform:uppercase;letter-spacing:.5px}
 .auth-card{background:var(--surface);border-radius:var(--r20);padding:28px;width:100%;max-width:460px;box-shadow:var(--sh3);animation:scaleIn .3s ease}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    PRODUCT DETAIL
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .pd-overlay{position:fixed;inset:0;z-index:550;background:rgba(0,0,0,.6);backdrop-filter:blur(5px);animation:fadeIn .2s ease;overflow-y:auto;display:flex;align-items:flex-start;justify-content:center;padding:20px}
 .pd-modal{background:var(--surface);border-radius:var(--r20);width:100%;max-width:640px;overflow:hidden;animation:scaleIn .3s cubic-bezier(.22,1,.36,1);box-shadow:var(--sh3);margin:auto}
 .pd-imgs{position:relative;background:#f8fafc;aspect-ratio:1;overflow:hidden;max-height:320px}
@@ -1219,9 +1404,9 @@ img{display:block}
 .qty-btn:hover{background:var(--orl);color:var(--or)}
 .qty-n{width:40px;text-align:center;font-size:15px;font-weight:800}
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ----------------------------------------
    MISC
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+---------------------------------------- */
 .spin{width:22px;height:22px;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;display:inline-block;vertical-align:middle}
 .spin.dark{border-color:rgba(0,0,0,.1);border-top-color:var(--or)}
 .empty{text-align:center;padding:56px 20px;color:var(--mu)}
@@ -1235,7 +1420,12 @@ img{display:block}
   .auth-visual-stage{grid-template-columns:1fr 1fr;min-height:300px}
   .auth-form-box{min-height:auto;padding:22px 18px 30px}
 }
-@media(max-width:600px){.auth-left{display:block}.auth-right{min-height:auto}.auth-story{gap:16px}.auth-hero-title{font-size:42px;max-width:9ch}.auth-visual-stage{grid-template-columns:1fr;gap:12px;min-height:auto}.auth-visual-column.alt{display:none}.auth-scroll-ribbon{position:relative;left:auto;right:auto;bottom:auto;transform:none;margin-top:4px;overflow:hidden}.auth-form-box{padding:18px 14px 28px}.auth-card{width:100%;padding:24px 18px;border-radius:26px}.deal-grid{grid-template-columns:1fr 1fr}.pd-overlay{padding:0;align-items:flex-end}.pd-modal{border-radius:var(--r24) var(--r24) 0 0}.banner-wrap{margin:0 12px}.banner-slide{min-height:180px}.banner-body{display:none}.banner-nav{display:none}.banner-title{max-width:none;font-size:30px}.home-hero{gap:8px;padding-top:8px}.hero-panel{padding:14px 14px 12px}.hero-points{grid-template-columns:1fr}.pgrid{grid-template-columns:repeat(2,1fr)}.topnav{padding:10px 12px 0}.topnav-inner{gap:8px;height:auto;min-height:64px;padding:8px 10px;border-radius:20px}.topnav-loc{padding:0 4px 8px}.topnav-loc-card{padding:9px 10px;border-radius:16px}.topnav-loc-icon{width:30px;height:30px;border-radius:10px}.topnav-loc-copy strong{font-size:10px}.topnav-loc-copy span{font-size:11px}.topnav-loc-points{min-width:74px;padding:8px 10px;border-radius:14px;gap:6px}.topnav-loc-badge strong{font-size:11px}.topnav-loc-badge span{font-size:9px}.nav-logo{font-size:18px;min-width:56px}.search-box{min-width:0;flex:1}.search-inp{padding:12px 10px;font-size:13px}.search-image-btn{padding:0 10px;min-width:40px}.search-btn{padding:0 12px}.nav-acts{gap:6px}.nav-act{padding:8px;border-radius:14px;min-width:auto}.nav-act-lbl{display:none}.nav-acts .nav-act:not(:first-child):not(:last-child){display:none}.search-cat{display:none}.promo-bar{padding:0 12px}.wrap{padding:0 12px}.sec-wrap{margin-top:12px;border-radius:18px;padding-top:12px}.sec-hd,.hscroll,.deal-grid{padding-left:10px;padding-right:10px}.hs-inner{gap:10px}.pc{width:148px}.scard{width:176px}}
+@media(max-width:600px){.auth-left{display:block}.auth-right{min-height:auto}.auth-story{gap:16px}.auth-hero-title{font-size:42px;max-width:9ch}.auth-visual-stage{grid-template-columns:1fr;gap:12px;min-height:auto}.auth-visual-column.alt{display:none}.auth-scroll-ribbon{position:relative;left:auto;right:auto;bottom:auto;transform:none;margin-top:4px;overflow:hidden}.auth-form-box{padding:18px 14px 28px}.auth-card{width:100%;padding:24px 18px;border-radius:26px}.deal-grid{grid-template-columns:1fr 1fr}.pd-overlay{padding:0;align-items:flex-end}.pd-modal{border-radius:var(--r24) var(--r24) 0 0}.banner-wrap{margin:0 12px}.banner-slide{min-height:180px}.banner-body{display:none}.banner-nav{display:none}.banner-title{max-width:none;font-size:30px}.home-hero{gap:8px;padding-top:8px}.hero-panel{padding:14px 14px 12px}.hero-points{grid-template-columns:1fr}.pgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding-left:10px;padding-right:10px}.topnav{padding:10px 12px 0}.topnav-inner{gap:8px;height:auto;min-height:64px;padding:8px 10px;border-radius:20px}.topnav-loc{padding:0 4px 8px}.topnav-loc-card{padding:9px 10px;border-radius:16px}.topnav-loc-icon{width:30px;height:30px;border-radius:10px}.topnav-loc-copy strong{font-size:10px}.topnav-loc-copy span{font-size:11px}.topnav-loc-points{min-width:74px;padding:8px 10px;border-radius:14px;gap:6px}.topnav-loc-badge strong{font-size:11px}.topnav-loc-badge span{font-size:9px}.nav-logo{font-size:18px;min-width:56px}.search-box{min-width:0;flex:1}.search-inp{padding:12px 10px;font-size:13px}.search-image-btn{padding:0 10px;min-width:40px}.search-btn{padding:0 12px}.nav-acts{gap:6px}.nav-act{padding:8px;border-radius:14px;min-width:auto}.nav-act-lbl{display:none}.nav-acts .nav-act:not(:first-child):not(:last-child){display:none}.search-cat{display:none}.promo-bar{padding:0 12px}.wrap{padding:0 12px}.sec-wrap{margin-top:12px;border-radius:18px;padding-top:12px}.sec-hd,.hscroll,.deal-grid{padding-left:10px;padding-right:10px}.hs-inner{gap:10px}.hs-inner .pc{width:146px}.scard{width:176px}}
+@media(max-width:600px){
+  .catbar.compact{top:82px;padding:0 18px 8px;max-height:44px;border-radius:0 0 18px 18px;max-width:calc(100% - 24px)}
+  .catbar.compact .cat-btn{min-height:32px;padding:6px 14px}
+  .catbar.compact .cat-label{font-size:12px}
+}
 .promo-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:var(--gnl);border:1px solid rgba(22,163,74,.2);border-radius:100px;font-size:12px;font-weight:700;color:var(--gn);margin-top:8px}
 .order-timeline{background:var(--nv);border-radius:var(--r16);padding:18px;margin-top:12px;color:#fff}
 .rate-stars{display:flex;gap:6px}
@@ -1245,7 +1435,7 @@ img{display:block}
 .confetti-piece{position:fixed;width:8px;height:8px;border-radius:2px;animation:confetti 3s ease forwards;pointer-events:none;z-index:9999}
 
 /* AUTH REDESIGN */
-.auth-page{min-height:100vh;display:grid;grid-template-columns:1fr;background:
+.auth-page{height:100dvh;min-height:100dvh;display:grid;grid-template-columns:1fr;background:
   radial-gradient(circle at top left, rgba(240,194,123,.22), transparent 24%),
   radial-gradient(circle at bottom right, rgba(154,188,226,.22), transparent 28%),
   linear-gradient(135deg,#f8fbff 0%,#eef5fc 48%,#e4eef8 100%);overflow:hidden;position:relative}
@@ -1255,9 +1445,9 @@ img{display:block}
   radial-gradient(circle at 20% 20%, rgba(189,221,252,.28), transparent 25%),
   radial-gradient(circle at 80% 80%, rgba(106,137,167,.18), transparent 28%);pointer-events:none}
 .auth-dots{position:absolute;inset:0;background-image:radial-gradient(rgba(23,33,43,.06) 1px,transparent 1px);background-size:30px 30px;mask-image:linear-gradient(180deg,rgba(0,0,0,.95),transparent)}
-.auth-right{position:relative;z-index:3;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px 20px;background:transparent}
-.auth-form-box{width:100%;max-width:640px;min-height:auto;display:flex;align-items:center;justify-content:center;padding:36px 20px}
-.auth-card{width:min(100%,560px);background:rgba(255,255,255,.92);backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.95);border-radius:36px;box-shadow:0 34px 90px rgba(56,73,89,.18),0 8px 30px rgba(56,73,89,.08);padding:38px 34px;animation:scaleIn .35s cubic-bezier(.22,1,.36,1);position:relative}
+.auth-right{position:relative;z-index:3;display:flex;align-items:center;justify-content:center;height:100dvh;min-height:100dvh;padding:28px 20px;background:transparent;overflow:hidden}
+.auth-form-box{width:100%;max-width:640px;height:100%;min-height:0;display:flex;align-items:center;justify-content:center;padding:18px 20px}
+.auth-card{width:min(100%,560px);max-height:calc(100dvh - 44px);background:rgba(255,255,255,.94);backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.95);border-radius:32px;box-shadow:0 34px 90px rgba(56,73,89,.2),0 10px 28px rgba(56,73,89,.1);padding:34px 32px;animation:authCardIn .28s cubic-bezier(.22,1,.36,1);position:relative;overflow:hidden;display:flex;flex-direction:column}
 .auth-story{position:relative;z-index:1;max-width:760px;display:flex;flex-direction:column;gap:22px;justify-content:center;padding-right:42%;min-height:100vh}
 .auth-story-top{display:flex;align-items:center;gap:14px}
 .auth-logo-box{width:78px;height:78px;border-radius:24px;background:linear-gradient(135deg,#69bbff,#4aa8ff);display:flex;align-items:center;justify-content:center;box-shadow:0 20px 50px rgba(74,168,255,.22)}
@@ -1269,7 +1459,7 @@ img{display:block}
 .auth-story-card strong{display:block;font-size:21px;color:var(--nv);font-weight:900}
 .auth-story-card span{display:block;font-size:12px;color:var(--mu);margin-top:5px;line-height:1.6}
 .auth-story-list{display:grid;gap:12px}
-.auth-story-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:rgba(255,255,255,.52);border:1px solid rgba(255,255,255,.72);border-radius:16px;animation:fadeUp .45s ease both}
+.auth-story-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:rgba(255,255,255,.52);border:1px solid rgba(255,255,255,.72);border-radius:16px}
 .auth-story-ico{width:36px;height:36px;border-radius:12px;background:rgba(74,168,255,.16);display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .auth-visual-stage{
   position:absolute;top:50%;right:48px;transform:translateY(-50%);display:grid;grid-template-columns:1.1fr .9fr;gap:18px;min-height:540px;width:min(38vw,460px);padding-top:4px;pointer-events:none
@@ -1287,16 +1477,14 @@ img{display:block}
 }
 .auth-float-chip{
   position:absolute;z-index:2;padding:11px 14px;border-radius:18px;background:rgba(255,255,255,.76);backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,.9);box-shadow:0 18px 34px rgba(56,73,89,.12);font-size:12px;font-weight:800;color:var(--nv);animation:float 5s ease-in-out infinite
+  border:1px solid rgba(255,255,255,.9);box-shadow:0 18px 34px rgba(56,73,89,.12);font-size:12px;font-weight:800;color:var(--nv)
 }
 .auth-float-chip.top{top:22px;left:22px}
-.auth-float-chip.bottom{right:22px;bottom:22px;animation-delay:1.2s}
+.auth-float-chip.bottom{right:22px;bottom:22px}
 .auth-scroll-ribbon{
   position:absolute;left:-20px;right:-20px;bottom:-18px;display:flex;gap:12px;transform:rotate(-2deg)
 }
-.auth-scroll-track{
-  display:flex;gap:12px;min-width:max-content;animation:marquee 24s linear infinite
-}
+.auth-scroll-track{display:flex;gap:12px;min-width:max-content}
 .auth-scroll-pill{
   padding:10px 14px;border-radius:999px;background:rgba(255,255,255,.82);border:1px solid rgba(255,255,255,.92);
   font-size:11px;font-weight:800;letter-spacing:.24px;color:var(--nv);box-shadow:0 12px 24px rgba(56,73,89,.08)
@@ -1309,25 +1497,34 @@ img{display:block}
 .auth-register-strip::-webkit-scrollbar{display:none}
 .auth-register-card{
   min-width:170px;padding:14px 15px;border-radius:18px;background:linear-gradient(180deg,#fff,#f4f8fc);
-  border:1px solid rgba(190,214,236,.8);box-shadow:0 14px 28px rgba(56,73,89,.08);animation:fadeUp .35s ease both
+  border:1px solid rgba(190,214,236,.8);box-shadow:0 14px 28px rgba(56,73,89,.08)
 }
 .auth-register-card strong{display:block;font-size:13px;font-weight:900;color:var(--nv)}
 .auth-register-card span{display:block;font-size:11px;color:var(--mu);line-height:1.6;margin-top:4px}
 .auth-tab-row{display:grid;grid-template-columns:1fr 1fr;background:#f5eee4;border-radius:16px;padding:5px;gap:5px;margin-bottom:22px}
-.auth-tab{padding:12px 14px;border-radius:12px;border:none;cursor:pointer;font-family:var(--fn);font-weight:800;font-size:14px;transition:.22s}
-.auth-tab.on{background:#fff;color:var(--ord);box-shadow:0 12px 28px rgba(23,33,43,.1);transform:translateY(-1px)}
+.auth-tab{padding:12px 14px;border-radius:12px;border:none;cursor:pointer;font-family:var(--fn);font-weight:800;font-size:14px;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,color .18s ease}
+.auth-tab:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(42,116,189,.1)}
+.auth-tab:active{transform:translateY(0) scale(.98)}
+.auth-tab.on{background:#fff;color:var(--ord);box-shadow:0 12px 28px rgba(23,33,43,.12);transform:translateY(-1px)}
 .auth-tab.off{background:transparent;color:var(--mu)}
-.auth-scroll-panel{max-height:72vh;overflow:auto;padding-right:4px}
+.auth-scroll-panel{max-height:min(56dvh,520px);overflow:auto;padding-right:4px;overscroll-behavior:contain}
 .auth-scroll-panel::-webkit-scrollbar{width:6px}
 .auth-scroll-panel::-webkit-scrollbar-thumb{background:#d7e2e7;border-radius:999px}
-.auth-floating-label input{background:rgba(255,255,255,.72);border:1.5px solid var(--br);border-radius:18px}
+.auth-floating-label input{background:rgba(255,255,255,.72);border:1.5px solid var(--br);border-radius:18px;padding-top:22px;padding-bottom:10px;font-weight:600}
 .auth-floating-label input:focus,.auth-floating-label input:not(:placeholder-shown){box-shadow:0 0 0 4px rgba(217,147,50,.12)}
-.auth-submit-btn{border-radius:18px;background:var(--nv-grad);color:#fff;box-shadow:0 18px 36px rgba(16,32,51,.2);font-weight:900}
-.auth-submit-btn:hover{background:linear-gradient(135deg,#18324a,#24425a);transform:translateY(-2px) scale(1.01)}
+.auth-floating-label input:focus ~ label,.auth-floating-label input:not(:placeholder-shown) ~ label{top:7px;font-size:10px;line-height:1;transform:none}
+.auth-submit-btn{border-radius:18px;background:linear-gradient(135deg,#1f6fbe,#4aa8ff);color:#fff;box-shadow:0 18px 36px rgba(74,168,255,.24),0 7px 16px rgba(16,32,51,.12);font-weight:900;position:relative;overflow:hidden}
+.auth-submit-btn::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.2),transparent);transform:translateX(-120%);transition:transform .45s ease;pointer-events:none}
+.auth-submit-btn:hover{background:linear-gradient(135deg,#1668b4,#45a7ff);transform:translateY(-2px);box-shadow:0 24px 48px rgba(74,168,255,.28),0 10px 22px rgba(16,32,51,.14)}
+.auth-submit-btn:hover::after{transform:translateX(120%)}
+.auth-submit-btn:active{transform:translateY(0) scale(.985);box-shadow:0 12px 26px rgba(74,168,255,.22)}
+.auth-submit-btn:disabled::after{display:none}
 .auth-otp-box{gap:10px}
 .auth-otp-input{background:#fff;border:2px solid #d5d9d9}
 .auth-switch-note{margin-top:16px;font-size:13px;color:var(--mu);text-align:center}
-.auth-text-btn{background:none;border:none;color:var(--bl2);font-weight:800;cursor:pointer}
+.auth-text-btn{background:none;border:none;color:var(--bl2);font-weight:800;cursor:pointer;border-radius:999px;padding:2px 4px;transition:background .18s ease,color .18s ease,box-shadow .18s ease}
+.auth-text-btn:hover{background:#eaf6ff;color:#155f9f;box-shadow:0 6px 14px rgba(42,116,189,.08)}
+@keyframes authCardIn{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
 
 /* PRODUCT DETAIL REDESIGN */
 .pd-page{
@@ -1370,10 +1567,10 @@ img{display:block}
 }
 .pd-name{font-size:26px;line-height:1.08;letter-spacing:-1px;color:var(--nv)}
 .pd-section-box .rpill{display:inline-flex;align-items:center;justify-content:center;padding:5px 11px;border-radius:999px;background:#e8f7ef;color:#067d62;font-size:12px;font-weight:800}
-.pd-trust-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.pd-trust-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .pd-trust-chip{
-  display:inline-flex;align-items:center;padding:9px 12px;border-radius:999px;background:rgba(255,255,255,.72);
-  border:1px solid rgba(215,228,240,.9);box-shadow:0 8px 18px rgba(56,73,89,.05)
+  display:inline-flex;align-items:center;padding:6px 9px;border-radius:999px;background:rgba(255,255,255,.78);
+  border:1px solid rgba(215,228,240,.92);box-shadow:0 6px 14px rgba(56,73,89,.04)
 }
 .pd-cpill{
   display:inline-flex;align-items:center;gap:8px;padding:11px 14px;border:1.5px solid rgba(215,228,240,.95);border-radius:999px;
@@ -1406,6 +1603,56 @@ img{display:block}
   padding:6px 10px;border:1.5px solid var(--orm)
 }
 .pd-sticky-actions{display:flex;gap:8px;min-width:0}
+
+/* Product detail polish */
+.pd-page{
+  background:linear-gradient(180deg,#eef8ff 0%,#f7fbff 34%,#ffffff 100%);
+}
+.pd-topbar{
+  position:sticky;top:0;z-index:240;
+  background:rgba(248,252,255,.86);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(207,230,251,.75)
+}
+.pd-topbar button{min-height:44px;border-radius:999px!important;box-shadow:0 10px 24px rgba(56,73,89,.06)!important}
+.pd-grid{gap:20px}
+.pd-main-card,.pd-section-box{
+  background:rgba(255,255,255,.94);
+  border:1px solid rgba(207,230,251,.82);
+  border-radius:26px;
+  box-shadow:0 18px 42px rgba(35,135,232,.08)
+}
+.pd-main-stage{
+  border-radius:22px;background:linear-gradient(180deg,#f6fbff,#eef7ff);
+  border:1px solid rgba(207,230,251,.8)
+}
+.pd-shop-card{
+  border-radius:22px;background:linear-gradient(180deg,#ffffff,#f8fcff);
+  border:1px solid rgba(207,230,251,.88);
+  box-shadow:0 16px 34px rgba(56,73,89,.07)
+}
+.pd-name{color:#1f6fb2;letter-spacing:-1.25px;font-weight:900}
+.pd-trust-chip{
+  background:#fff;border:1px solid rgba(207,230,251,.92);
+  box-shadow:0 8px 18px rgba(56,73,89,.045)
+}
+.pd-cpill,.pd-size{
+  background:#fff;border-color:rgba(207,230,251,.95);
+  box-shadow:0 10px 22px rgba(56,73,89,.045)
+}
+.pd-cpill.on,.pd-size.on{
+  background:linear-gradient(180deg,#eef8ff,#ffffff);
+  box-shadow:0 14px 30px rgba(74,168,255,.14)
+}
+.pd-size{min-height:74px;border-radius:20px;min-width:78px}
+.pd-add-btn{
+  background:linear-gradient(135deg,#69bbff,#4aa8ff);
+  box-shadow:0 16px 32px rgba(74,168,255,.28)
+}
+.pd-sticky-buy{
+  border:1px solid rgba(207,230,251,.9);
+  box-shadow:0 -18px 42px rgba(35,135,232,.16)
+}
+.pd-mobile-hero-title{display:none}
 .back-btn{
   display:inline-flex;align-items:center;gap:8px;padding:11px 16px;background:rgba(255,255,255,.84);border:1px solid rgba(215,228,240,.95);
   border-radius:999px;font-weight:800;color:var(--nv);cursor:pointer;box-shadow:var(--sh0)
@@ -1461,28 +1708,39 @@ img{display:block}
   .co-side{border-left:none;border-top:1px solid #e7ecef}
 }
 @media(max-width:720px){
-  .auth-page{grid-template-columns:1fr}
+  .auth-page{grid-template-columns:1fr;height:100dvh;min-height:100dvh;overflow:hidden}
   .auth-left{display:none}
-  .auth-right{min-height:100vh;padding:22px 14px 34px}
-  .auth-form-box{padding:0;max-width:560px}
-  .auth-card{padding:24px 18px;border-radius:22px}
+  .auth-right{height:100dvh;min-height:100dvh;padding:14px;overflow:hidden}
+  .auth-form-box{height:100%;padding:0;max-width:560px}
+  .auth-card{padding:24px 18px;border-radius:22px;max-height:calc(100dvh - 28px)}
   .orders-head-card{padding:22px 20px}
   .track-hero{grid-template-columns:1fr}
   .search-overview{grid-template-columns:1fr}
   .acct-media-grid,.acct-stat-grid{grid-template-columns:1fr}
 }
 @media(max-width:600px){
-  .auth-page{background:linear-gradient(180deg,#eef6ff 0%,#e9f3ff 100%)}
+  .auth-page{background:linear-gradient(180deg,#eef6ff 0%,#e9f3ff 100%);height:100dvh;min-height:100dvh;overflow:hidden}
   .auth-left{display:none}
-  .auth-right{min-height:100vh;padding:18px 10px 28px}
-  .auth-form-box{padding:0;max-width:100%}
-  .auth-card{width:100%;padding:22px 16px;border-radius:24px;box-shadow:0 20px 44px rgba(56,73,89,.12)}
-  .auth-pane-head{margin-bottom:18px;padding-right:64px;padding-top:18px}
-  .auth-pane-title{font-size:18px;letter-spacing:-.4px}
-  .auth-pane-sub{font-size:12px;line-height:1.5;margin-top:6px}
-  .auth-tab{padding:11px 10px;font-size:13px}
-  .auth-submit-btn{padding:13px;font-size:14px;border-radius:16px}
-  .auth-switch-note{font-size:12px}
+  .auth-right{height:100dvh;min-height:100dvh;padding:8px;overflow:hidden}
+  .auth-form-box{height:100%;padding:0;max-width:100%}
+  .auth-card{width:100%;max-height:calc(100dvh - 16px);padding:16px 14px;border-radius:22px;box-shadow:0 22px 52px rgba(56,73,89,.16),0 8px 20px rgba(56,73,89,.08)}
+  .auth-scroll-panel{max-height:calc(100dvh - 272px);min-height:0;overscroll-behavior:contain;padding-right:2px}
+  .auth-register-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;overflow:visible;margin-bottom:10px;padding:0}
+  .auth-register-card{min-width:0;padding:9px 8px;border-radius:13px;box-shadow:0 8px 18px rgba(56,73,89,.06)}
+  .auth-register-card strong{font-size:11px}
+  .auth-register-card span{font-size:9px;line-height:1.35;margin-top:3px}
+  .auth-pane-head{margin-bottom:12px;padding-right:62px;padding-top:12px}
+  .auth-pane-eyebrow{font-size:10px;margin-bottom:6px}
+  .auth-pane-title{font-size:24px;letter-spacing:-.5px}
+  .auth-pane-sub{font-size:13px;line-height:1.45;margin-top:5px}
+  .auth-tab-row{margin-bottom:12px;border-radius:15px;padding:4px}
+  .auth-tab{padding:10px 9px;font-size:12px;border-radius:12px}
+  .auth-floating-label{margin-bottom:9px}
+  .auth-floating-label input{padding:22px 12px 9px;font-size:16px;border-radius:15px;min-height:56px}
+  .auth-floating-label label{font-size:14px}
+  .auth-floating-label input:focus ~ label,.auth-floating-label input:not(:placeholder-shown) ~ label{top:8px;font-size:10px;letter-spacing:.7px}
+  .auth-submit-btn{padding:12px;font-size:14px;border-radius:16px;margin-top:8px!important}
+  .auth-switch-note{font-size:11px;margin-top:10px}
   .pd-topbar{top:0}
   .pd-main-card,.pd-section-box,.order-card,.sec-wrap{border-radius:16px}
   .pd-main-stage{min-height:320px}
@@ -1506,6 +1764,137 @@ img{display:block}
   .pd-shop-card{margin-bottom:14px}
   .pd-cpill{padding:10px 12px}
   .pd-size{min-width:68px}
+  .pd-page{background:linear-gradient(180deg,#eef8ff 0%,#f9fcff 28%,#ffffff 100%);overflow-x:hidden;max-width:100vw}
+  .pd-page .wrap{padding-left:10px!important;padding-right:10px!important}
+  .pd-page *{box-sizing:border-box;max-width:100%}
+  .pd-page,.pd-grid,.pd-imgs-col,.pd-info-col,.pd-section-box{width:100%;min-width:0}
+  .pd-section-box{overflow:hidden}
+  .pd-grid{gap:10px}
+  .pd-main-card{border-radius:0 0 26px 26px;padding:10px;margin-left:0;margin-right:0;border-left:1px solid rgba(207,230,251,.82);border-right:1px solid rgba(207,230,251,.82);width:100%;overflow:hidden}
+  .pd-main-stage{min-height:300px;border-radius:0 0 24px 24px}
+  .pd-info-col{display:grid;gap:10px}
+  .pd-section-box{border-radius:24px;padding:18px 16px;margin:0;box-shadow:0 14px 34px rgba(35,135,232,.08)}
+  .pd-shop-card{border-radius:22px;padding:14px;margin-bottom:16px}
+  .pd-name{font-size:28px;line-height:1.08;margin-top:4px}
+  .pd-trust-chip{border-radius:999px;padding:9px 12px}
+  .pd-cpill{border-radius:999px;padding:11px 14px}
+  .pd-size{min-width:72px;min-height:76px;border-radius:20px}
+  .pd-topbar .wrap{padding-left:10px!important;padding-right:10px!important}
+  .pd-topbar{position:fixed!important;top:0!important;left:0!important;right:0!important;padding:8px 0!important;z-index:760!important;box-shadow:0 12px 32px rgba(35,135,232,.14)}
+  .pd-topbar button{min-height:40px!important;padding:8px 6px!important;border-radius:14px!important}
+  .pd-sticky-buy{left:10px;right:10px;width:auto;max-width:calc(100vw - 20px);border-radius:24px;padding:14px;background:rgba(255,255,255,.98);overflow:hidden}
+  .pd-mobile-hero-title{
+    display:block;background:rgba(255,255,255,.96);border:1px solid rgba(207,230,251,.86);
+    border-radius:22px;padding:14px 16px;margin:0 0 10px;
+    box-shadow:0 14px 34px rgba(35,135,232,.08)
+  }
+  .pd-mobile-hero-kicker{font-size:10px;font-weight:900;color:var(--or);text-transform:uppercase;letter-spacing:.45px;margin-bottom:6px}
+  .pd-mobile-hero-name{font-size:24px;line-height:1.1;font-weight:900;color:var(--nv);letter-spacing:-.8px}
+  .pd-desktop-name{display:none}
+  .pd-buy-panel{
+    padding:14px!important;border-radius:24px!important;
+    background:linear-gradient(180deg,#ffffff,#f8fcff)!important;
+    box-shadow:0 14px 34px rgba(35,135,232,.08)!important;
+    overflow:hidden
+  }
+  .pd-buy-panel>div:first-child{grid-template-columns:1fr 1fr!important;gap:10px!important}
+  .pd-buy-panel .pd-add-btn,
+  .pd-buy-panel button[style*="Buy at"]{
+    min-height:52px!important;border-radius:18px!important;font-size:15px!important
+  }
+  .pd-buy-panel .pd-wish-btn{display:none!important}
+  .pd-buy-panel>div[style*="display:flex"]{
+    display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px!important;margin-top:12px!important;padding-top:12px!important;
+    border-top:1px solid rgba(207,230,251,.7)
+  }
+  .pd-buy-panel>div[style*="display:flex"]>div{text-align:center;min-width:0}
+  .pd-buy-panel>div[style*="display:flex"] div{overflow:hidden;text-overflow:ellipsis}
+  .pd-buy-panel>div[style*="display:flex"] div[style*="fontSize:12"]{font-size:10px!important}
+  .pd-buy-panel>div[style*="display:flex"] div[style*="fontSize:13"]{font-size:11px!important}
+  .pd-section-box:has(.pd-cpill){padding-top:14px;padding-bottom:14px}
+  .pd-section-box:has(.pd-size){padding-top:14px;padding-bottom:14px}
+  .pd-lbl{font-size:18px!important;margin-bottom:8px!important}
+  .pd-cpill{padding:9px 12px!important}
+  .pd-size{min-width:62px!important;min-height:64px!important;border-radius:18px!important}
+  .pd-size span:first-child{font-size:18px}
+  .pd-size span:last-child{font-size:10px!important}
+  .pd-trust-row{margin-top:8px}
+  .pd-lbl{line-height:1.24;overflow-wrap:anywhere}
+  .pd-offer-card,.pd-store-card,.pd-extra-info{min-width:0;overflow:hidden}
+  .pd-offer-card div,.pd-store-address,.pd-extra-info div{overflow-wrap:anywhere}
+  .pd-cpill{
+    max-width:100%!important;
+    min-width:0!important;
+    white-space:normal!important;
+    overflow-wrap:anywhere;
+    line-height:1.25;
+    flex-wrap:wrap
+  }
+  .pd-cpill .pd-cdot{flex:0 0 auto}
+  .pd-cpill span{flex:0 0 auto}
+  .pd-trust-chip{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+  .pd-delivery-metrics{
+    display:grid!important;
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+    gap:5px!important;
+    margin-top:10px!important;
+    padding-top:10px!important
+  }
+  .pd-delivery-metrics>div{min-width:0;padding:0 1px}
+  .pd-delivery-metrics div[style*="fontSize:9"]{
+    font-size:8px!important;
+    margin-bottom:2px!important;
+    letter-spacing:.15px!important
+  }
+  .pd-delivery-metrics div[style*="fontSize:10"]{
+    font-size:9px!important;
+    line-height:1.2!important;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis
+  }
+  .pd-buy-panel>div:first-child{width:100%;min-width:0}
+  .pd-buy-panel .pd-add-btn,
+  .pd-buy-panel button[style*="Buy at"]{
+    width:100%;
+    min-width:0;
+    padding-left:10px!important;
+    padding-right:10px!important;
+    white-space:normal
+  }
+  .pd-store-card>div,.pd-store-card button,.pd-store-card span{min-width:0}
+  .pd-store-card>div:last-child{max-width:100%}
+  .pd-related-summary{
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:6px!important;
+    margin-bottom:10px!important
+  }
+  .pd-related-summary>div{
+    padding:8px 5px!important;
+    border-radius:12px!important;
+    min-width:0
+  }
+  .pd-related-summary div[style*="fontSize:18"]{font-size:16px!important;line-height:1!important}
+  .pd-related-summary div[style*="fontSize:10"]{font-size:8px!important;letter-spacing:.25px!important}
+  .pd-explore-grid{grid-template-columns:1fr!important}
+  .pd-related-groups,.pd-related-group{min-width:0!important;max-width:100%!important;width:100%;overflow:hidden}
+  .pd-related-group>div:first-child{
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr) auto;
+    align-items:start;
+    gap:8px!important;
+    margin-bottom:8px!important
+  }
+  .pd-related-group>div:first-child>div{min-width:0;overflow:hidden}
+  .pd-related-group>div:first-child div[style*="fontSize:15"]{font-size:14px!important;line-height:1.2!important}
+  .pd-related-group>div:first-child div[style*="fontSize:11"]{font-size:10px!important;line-height:1.3!important;margin-top:2px!important}
+  .pd-related-group>div:first-child span{justify-self:end}
+  .pd-explore-rail{max-width:100%;min-width:0;overflow-x:auto!important}
+  .pd-explore-card{min-width:0!important;width:100%}
+  .pd-explore-card.rail{flex:0 0 150px;width:150px!important}
+  .pd-sticky-meta>div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pd-sticky-actions{width:100%;display:grid!important;grid-template-columns:1fr 1fr}
+  .pd-sticky-actions button{width:100%;padding-left:8px!important;padding-right:8px!important;white-space:normal;line-height:1.15}
   .co-head,.co-body,.co-side{padding:18px}
   .search-hero-card,.search-panel,.acct-style-card{padding:18px}
   .search-hero{padding:12px 0 10px}
@@ -1517,7 +1906,7 @@ img{display:block}
   .search-chip-row-compact{display:flex;flex-wrap:nowrap!important;overflow-x:auto;gap:8px;margin-top:12px;padding-bottom:2px;scrollbar-width:none}
   .search-chip-row-compact::-webkit-scrollbar{display:none}
   .search-chip-row-compact .search-chip{flex:0 0 auto;padding:8px 12px;font-size:12px}
-  .filterbar{top:78px}
+  .filterbar{top:76px}
   .filterbar-inner{display:grid!important;grid-template-columns:1fr 1fr;gap:8px;padding:10px 12px}
   .fselect{min-width:0!important;width:100%;padding:9px 12px;font-size:12px}
   .res-count{margin-left:0!important;grid-column:1 / -1;justify-self:end;padding:7px 10px;font-size:11px}
@@ -1534,9 +1923,10 @@ img{display:block}
   .pd-info-col{position:static}
   .co-side{border-left:none!important;border-top:1px solid var(--br)}
   .co-head,.co-body,.co-side{padding:16px!important}
-  .track-sheet,.cart-drawer,.co-modal,.pd-modal{max-width:100%!important;width:100%!important}
+  .track-sheet,.co-modal,.pd-modal{max-width:100%!important;width:100%!important}
+  .cart-drawer{max-width:calc(100vw - 20px)!important;width:auto!important}
   .cart-overlay{inset:0!important;z-index:320!important}
-  .cart-drawer{top:0!important;bottom:0!important;z-index:330!important;border-radius:18px 18px 0 0;box-shadow:0 10px 26px rgba(35,135,232,.22)}
+  .cart-drawer{top:76px!important;left:10px!important;right:10px!important;bottom:calc(env(safe-area-inset-bottom,0px) + 82px)!important;z-index:330!important;border-radius:28px!important;box-shadow:0 10px 26px rgba(35,135,232,.22)}
   .table-head,.table-row{display:block}
   .topnav{display:block}
   #bottom-nav{
@@ -1574,9 +1964,13 @@ img{display:block}
   .topnav-loc-badge span{font-size:8px}
   .banner-wrap{margin:0 8px;border-radius:0 0 20px 20px}
   .banner-slide{min-height:150px}
-  .catbar{top:72px}
-  .catbar-inner{padding:0 6px}
-  .cat-btn{padding:10px 9px;font-size:11px}
+  .catbar{top:118px;padding:5px 6px;border-radius:0 0 16px 16px}
+  .catbar.compact{top:72px;max-height:42px;max-width:calc(100% - 16px);padding:0 14px 7px;border-radius:0 0 16px 16px}
+  .catbar-inner{gap:5px}
+  .cat-btn{padding:6px 11px;font-size:10px;min-height:32px}
+  .catbar.compact .cat-btn{min-height:31px;padding:6px 12px}
+  .cat-label{font-size:10px}
+  .catbar.compact .cat-label{font-size:12px}
   .wrap{padding:0 8px}
   .sec-wrap{margin-top:10px;padding-top:10px;border-radius:14px}
   .sec-hd,.hscroll,.deal-grid,.pgrid{padding-left:8px;padding-right:8px}
@@ -1585,7 +1979,7 @@ img{display:block}
   .scard{width:164px}
   .search-hero-card,.search-panel{padding:12px!important;border-radius:16px}
   .search-tools-actions{grid-template-columns:1fr!important}
-  .filterbar{top:72px}
+  .filterbar{top:70px}
   .filterbar-inner{grid-template-columns:1fr!important}
   .fselect{padding:8px 10px;font-size:11px}
   #bottom-nav{min-height:62px;padding-top:4px}
@@ -1603,7 +1997,6 @@ img{display:block}
 .search-input-shell button,
 .co-cta,
 .auth-logo-box,
-.auth-submit-btn,
 .banner-cta{
   background:linear-gradient(135deg,#69bbff,#4aa8ff)!important;
   color:#fff!important;
@@ -1611,7 +2004,6 @@ img{display:block}
 }
 .co-payopt.on,
 .pd-tab.on,
-.cat-btn.on,
 .filter-pill.active{
   border-color:var(--or)!important;
   color:var(--nv)!important;
@@ -1629,7 +2021,7 @@ img{display:block}
 
 `
 
-// â”€â”€â”€ utility components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- utility components ----------------------------------------
 function Stars({r,n}){
   if(!r&&!n) return null
   return(
@@ -1659,7 +2051,7 @@ function SkeletonCard(){
 }
 function VeriBadge(){return <span className="vbadge" style={{letterSpacing:'.4px'}}>VERIFIED</span>}
 
-// â”€â”€â”€ MapPicker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- MapPicker ----------------------------------------
 function MapPicker({lat,lng,onPinMove,height=260}){
   const ref=useRef(null);const mapRef=useRef(null);const markerRef=useRef(null)
   useEffect(()=>{
@@ -1681,6 +2073,129 @@ function MapPicker({lat,lng,onPinMove,height=260}){
     setTimeout(()=>mapRef.current?.invalidateSize(),120)
   },[lat,lng])
   return <div ref={ref} style={{height,borderRadius:'var(--r8)',zIndex:1}}/>
+}
+
+function LiveOrderMap({order, riderLocation}){
+  const ref=useRef(null)
+  const mapRef=useRef(null)
+  const markersRef=useRef({})
+  const routeLayersRef=useRef([])
+  const routeRequestRef=useRef(0)
+  const [roadRoute,setRoadRoute]=useState([])
+  const [,forceTick]=useState(0)
+  const shopLat=toFiniteNumber(order?.shop?.lat)
+  const shopLng=toFiniteNumber(order?.shop?.lng)
+  const customerLat=toFiniteNumber(order?.deliveryLat)
+  const customerLng=toFiniteNumber(order?.deliveryLng)
+  const riderLat=toFiniteNumber(riderLocation?.lat)
+  const riderLng=toFiniteNumber(riderLocation?.lng)
+  const hasShop=shopLat!=null&&shopLng!=null
+  const hasCustomer=customerLat!=null&&customerLng!=null
+  const hasRider=riderLat!=null&&riderLng!=null
+
+  useEffect(()=>{
+    if(window.L) return
+    const t=setInterval(()=>forceTick(v=>v+1),300)
+    return()=>clearInterval(t)
+  },[])
+
+  useEffect(()=>{
+    if(!ref.current||mapRef.current||!window.L) return
+    const center=hasRider?[riderLat,riderLng]:hasCustomer?[customerLat,customerLng]:hasShop?[shopLat,shopLng]:[17.385,78.4867]
+    const L=window.L
+    const map=L.map(ref.current,{zoomControl:false,attributionControl:false}).setView(center,14)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map)
+    L.control.zoom({position:'bottomright'}).addTo(map)
+    mapRef.current=map
+    setTimeout(()=>map.invalidateSize(),100)
+    return()=>{map.remove();mapRef.current=null;markersRef.current={};routeLayersRef.current=[]}
+  },[hasRider,hasCustomer,hasShop,riderLat,riderLng,customerLat,customerLng,shopLat,shopLng])
+
+  useEffect(()=>{
+    const points=[
+      ...(hasShop?[[shopLat,shopLng]]:[]),
+      ...(hasRider?[[riderLat,riderLng]]:[]),
+      ...(hasCustomer?[[customerLat,customerLng]]:[]),
+    ]
+    if(points.length<2){setRoadRoute([]);return}
+    const requestId=++routeRequestRef.current
+    const coords=points.map(([lat,lng])=>`${lng},${lat}`).join(';')
+    fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`)
+      .then(r=>r.ok?r.json():null)
+      .then(data=>{
+        if(requestId!==routeRequestRef.current) return
+        const route=data?.routes?.[0]?.geometry?.coordinates
+        if(Array.isArray(route)&&route.length>1) setRoadRoute(route.map(([lng,lat])=>[lat,lng]))
+        else setRoadRoute(points)
+      })
+      .catch(()=>{
+        if(requestId===routeRequestRef.current) setRoadRoute(points)
+      })
+  },[shopLat,shopLng,customerLat,customerLng,riderLat,riderLng,hasShop,hasCustomer,hasRider])
+
+  useEffect(()=>{
+    const L=window.L
+    const map=mapRef.current
+    if(!L||!map) return
+    const makeIcon=(label,color,type='pin')=>L.divIcon({
+      className:'',
+      html:type==='bike'
+        ? `<div style="width:44px;height:44px;border-radius:18px;background:linear-gradient(135deg,#f97316,#ef4444);box-shadow:0 14px 28px rgba(249,115,22,.34);border:3px solid white;display:flex;align-items:center;justify-content:center;color:white;transform:translateZ(0);transition:transform .35s ease"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M8.5 17h5l2-6h-4l-3 6z"/><path d="M12 11l-2-3h3"/><path d="M15 8h3"/><path d="M16 11l2 6"/></svg></div>`
+        : `<div style="width:36px;height:36px;border-radius:14px;background:${color};box-shadow:0 10px 24px rgba(15,23,42,.22);border:3px solid white;display:flex;align-items:center;justify-content:center;color:white;font-weight:900;font-size:13px">${label}</div>`,
+      iconSize:type==='bike'?[44,44]:[36,36],
+      iconAnchor:type==='bike'?[22,22]:[18,18],
+    })
+    const setMarker=(key,lat,lng,label,color,title,type='pin')=>{
+      if(lat==null||lng==null){
+        if(markersRef.current[key]){markersRef.current[key].remove();delete markersRef.current[key]}
+        return
+      }
+      if(markersRef.current[key]){
+        markersRef.current[key].setLatLng([lat,lng])
+      }else{
+        markersRef.current[key]=L.marker([lat,lng],{icon:makeIcon(label,color,type)}).addTo(map)
+      }
+      markersRef.current[key].bindTooltip(title,{direction:'top',offset:[0,-16]})
+    }
+    setMarker('shop',shopLat,shopLng,'S','#1d6fb8',order?.shop?.name||'Shop')
+    setMarker('customer',customerLat,customerLng,'H','#16a34a','Delivery address')
+    setMarker('rider',riderLat,riderLng,'R','#f97316',riderLocation?.riderName||riderLocation?.name||'Rider','bike')
+
+    routeLayersRef.current.forEach(layer=>layer.remove())
+    routeLayersRef.current=[]
+    const fallbackRoute=[
+      ...(hasShop?[[shopLat,shopLng]]:[]),
+      ...(hasRider?[[riderLat,riderLng]]:[]),
+      ...(hasCustomer?[[customerLat,customerLng]]:[]),
+    ]
+    const routePoints=roadRoute.length>=2?roadRoute:fallbackRoute
+    if(routePoints.length>=2){
+      routeLayersRef.current=[
+        L.polyline(routePoints,{color:'#ffffff',weight:10,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map),
+        L.polyline(routePoints,{color:'#1d6fb8',weight:6,opacity:.9,lineCap:'round',lineJoin:'round'}).addTo(map),
+        L.polyline(routePoints,{color:'#69bbff',weight:3,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(map),
+      ]
+    }
+    const boundsPoints=[
+      ...(hasShop?[[shopLat,shopLng]]:[]),
+      ...(hasRider?[[riderLat,riderLng]]:[]),
+      ...(hasCustomer?[[customerLat,customerLng]]:[]),
+    ]
+    if(boundsPoints.length>=2) map.fitBounds(L.latLngBounds(boundsPoints),{padding:[28,28],maxZoom:15})
+    else if(boundsPoints.length===1) map.setView(boundsPoints[0],15)
+    setTimeout(()=>map.invalidateSize(),120)
+  },[order?.shop?.name,shopLat,shopLng,customerLat,customerLng,riderLat,riderLng,hasShop,hasCustomer,hasRider,riderLocation?.riderName,riderLocation?.name,roadRoute])
+
+  return(
+    <div style={{position:'relative',borderRadius:20,overflow:'hidden',border:'1px solid #d7ebff',background:'#eaf6ff',minHeight:230}}>
+      <div ref={ref} style={{height:230,width:'100%'}}/>
+      <div style={{position:'absolute',left:10,right:10,bottom:10,display:'flex',gap:8,flexWrap:'wrap'}}>
+        <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#1d6fb8',boxShadow:'var(--sh0)'}}>S Shop</span>
+        <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#16a34a',boxShadow:'var(--sh0)'}}>H Home</span>
+        <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#f97316',boxShadow:'var(--sh0)'}}>{hasRider?'Bike Rider live':'Bike Waiting for GPS'}</span>
+      </div>
+    </div>
+  )
 }
 function LazySection({children,minHeight=180,rootMargin='200px 0px'}){
   const [visible,setVisible]=useState(false)
@@ -1708,7 +2223,7 @@ function LazySection({children,minHeight=180,rootMargin='200px 0px'}){
   )
 }
 
-// â”€â”€â”€ Banner Carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Banner Carousel ----------------------------------------
 function BannerCarousel({onCtaClick}){
   const[idx,setIdx]=useState(0)
   const timerRef=useRef(null)
@@ -1736,16 +2251,21 @@ function BannerCarousel({onCtaClick}){
   )
 }
 
-// â”€â”€â”€ Product Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Product Card ----------------------------------------
 function ProdCard({p,cart,onCartUpdate,onClick,wishlisted,onWishlist,delay=0}){
   const colors=Array.isArray(p.colors)?p.colors:[]
   const sizesList=normalizeProductSizes(p)
   const requiresSize=sizesList.length>0
+  const orderable = isProductOrderable(p)
   const qty=cart.find(i=>(i._key||String(i.id))===String(p.id))?.qty||0
   const disc=p.mrp&&p.mrp>p.price?Math.round((1-p.price/p.mrp)*100):null
 
   const add=e=>{
     e.stopPropagation()
+    if(!orderable){
+      showToast('This shop is closed right now','error')
+      return
+    }
     if(requiresSize){onClick(p);return}
     // Check if cart has items from a DIFFERENT shop
     const cartShopId=cart.length>0?cart[0].shopId:null
@@ -1776,7 +2296,7 @@ function ProdCard({p,cart,onCartUpdate,onClick,wishlisted,onWishlist,delay=0}){
   }
 
   return(
-    <div className="pc" style={{animationDelay:`${delay}s`}} onClick={()=>onClick(p)}>
+    <div className="pc" style={{animationDelay:`${delay}s`,opacity:orderable?1:0.72}} onClick={()=>onClick(p)}>
       <div className="pc-img-wrap">
         {displayProductImage(p)
               ?<img src={displayProductImage(p)} alt={p.name} className="pc-img" loading="lazy" decoding="async" onError={e=>e.target.style.display='none'}/>
@@ -1794,7 +2314,9 @@ function ProdCard({p,cart,onCartUpdate,onClick,wishlisted,onWishlist,delay=0}){
       <div className="pc-body">
         <div className="pc-meta-row">
           <span className="pc-pill">{p.category || 'Fashion'}</span>
-          {p.avgRating>0&&<span style={{fontSize:11,color:'var(--mu)',fontWeight:700}}>{Number(p.avgRating).toFixed(1)} rating</span>}
+          {orderable
+            ? (p.avgRating>0&&<span style={{fontSize:11,color:'var(--mu)',fontWeight:700}}>{Number(p.avgRating).toFixed(1)} rating</span>)
+            : <span style={{fontSize:11,color:'#dc2626',fontWeight:800}}>Shop closed</span>}
         </div>
         <div className="pc-name">{p.name}</div>
         {p.shopName&&(
@@ -1819,9 +2341,9 @@ function ProdCard({p,cart,onCartUpdate,onClick,wishlisted,onWishlist,delay=0}){
                <span>{qty}</span>
                <button onClick={add} style={{fontWeight:900,fontSize:16,lineHeight:1}}>+</button>
              </div>
-             :<RippleBtn className="pc-addbtn" onClick={add} disabled={!p.isActive}
+             :<RippleBtn className="pc-addbtn" onClick={add} disabled={!orderable}
                 style={{fontSize:11,fontWeight:800,letterSpacing:'.3px',padding:'0 8px',width:'auto',minWidth:30}}>
-                {requiresSize?'SELECT':'ADD'}
+                {orderable ? (requiresSize?'SELECT':'ADD') : 'CLOSED'}
               </RippleBtn>
           }
         </div>
@@ -1830,24 +2352,46 @@ function ProdCard({p,cart,onCartUpdate,onClick,wishlisted,onWishlist,delay=0}){
   )
 }
 
-// â”€â”€â”€ Shop Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ShopCard({shop,onClick}){
+// --- Shop Card ----------------------------------------
+function ShopCard({shop,onClick,featuredProducts=[]}){
+  const orderable = isShopOrderable(shop)
+  const fashionImages = getShopFashionImages(shop, featuredProducts)
+  const heroImage = fashionImages[0]
   return(
-    <div className="scard" onClick={()=>onClick(shop)}>
-      {shop.imageUrl
-              ?<img src={shop.imageUrl} alt={shop.name} className="scard-img" loading="lazy" decoding="async" onError={e=>e.target.style.display='none'}/>
-        :<div style={{height:148,background:'linear-gradient(135deg,var(--nv),var(--nv2))',display:'flex',alignItems:'center',justifyContent:'center'}}><svg width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,.2)' strokeWidth='1.5' strokeLinecap='round'><path d='M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z'/><rect x='9' y='14' width='6' height='7' rx='1'/></svg></div>}
+    <div className="scard" onClick={()=>onClick(shop)} style={{opacity:orderable?1:0.84}}>
+      <div className="scard-media">
+        <img src={heroImage} alt={`${shop.name} clothing styles`} className="scard-img" loading="lazy" decoding="async"/>
+        <span className="scard-shine"/>
+        <span className="scard-tag">{shop.category || 'Fashion picks'}</span>
+        {fashionImages.length>1&&(
+          <div className="scard-thumbs">
+            {fashionImages.slice(1,3).map((img,i)=>(
+              <img key={`${shop.id || shop.name}-thumb-${i}`} src={img} alt="" className="scard-thumb" loading="lazy" decoding="async"/>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="scard-body">
         <div className="scard-name">
-          {shop.name}
+          <span className="scard-name-text">{shop.name}</span>
           {shop.isVerified&&<VeriBadge/>}
+          <span className={`scard-status ${orderable ? 'open' : 'closed'}`}>
+            {orderable ? 'Open' : 'Closed'}
+          </span>
         </div>
         <div className="scard-meta">
           <Stars r={shop.rating||0} n={shop.ratingCount||0}/>
           <span>|</span><span>ETA {shop.deliveryTime}m</span>
           {shop.distanceKm&&<><span>|</span><span style={{fontWeight:700}}>{shop.distanceKm} km away</span></>}
         </div>
-        <div style={{fontSize:11,color:'var(--mu)',marginTop:4}}>{shop.category}</div>
+        <div style={{fontSize:11,color:'var(--mu)',marginTop:4}}>{orderable ? shop.category : `${shop.category} | Ordering disabled for now`}</div>
+        <div className="scard-style-row">
+          <div className="scard-style-copy">
+            <strong>Style preview</strong>
+            <span>{fashionImages.length} clothing looks ready</span>
+          </div>
+          <span className="scard-style-cta">View</span>
+        </div>
       </div>
     </div>
   )
@@ -1856,51 +2400,62 @@ function ShopCard({shop,onClick}){
 function LegalModal({ type, onClose }) {
   const isPrivacy = type === 'privacy'
   const title = isPrivacy ? 'Privacy Policy' : 'Terms & Conditions'
+  const intro = isPrivacy
+    ? 'This policy explains how DOTT handles customer information for account access, nearby shopping, delivery, payments, returns, support, and service safety.'
+    : 'These terms explain the basic rules for using DOTT as a customer marketplace for local shops, orders, delivery, payments, cancellations, returns, and support.'
   const sections = isPrivacy
     ? [
-        ['Information We Collect', 'We collect account details, addresses, order data, and optional location details when you allow location access.'],
-        ['How We Use Data', 'We use your information to show nearby shops, process orders, support delivery, and protect your account and transactions.'],
-        ['Location Access', 'Location helps us show nearby products, calculate delivery range, and support delivery routing when needed.'],
-        ['Security', 'We limit access to customer data and use stored account information only for marketplace operations and support.'],
-        ['Your Controls', 'You can request updates to your account information and ask for support about stored customer details.'],
+        ['1. Information We Collect', 'We collect details you provide such as name, phone number, email address, saved addresses, order history, support requests, and optional device location when you allow access.'],
+        ['2. Use Of Your Information', 'Your information is used to create your account, show nearby shops, calculate delivery range, process orders, enable payments, support returns, and improve safety on the marketplace.'],
+        ['3. Location And Delivery Data', 'Location data is used only for nearby discovery, delivery fee estimation, routing, order tracking, and service availability. You can use manual address entry when you do not want to share GPS access.'],
+        ['4. Sharing With Service Partners', 'Relevant order and delivery details may be shared with the shop, assigned rider, payment providers, and support/admin teams only for completing or supporting your order.'],
+        ['5. Security And Retention', 'We use reasonable safeguards to protect account and order data. We keep records as needed for service, disputes, legal compliance, settlement, fraud prevention, and operational reporting.'],
+        ['6. Your Choices', 'You may update account information, manage saved addresses, contact support for corrections, and choose whether to allow location permissions from your browser or device settings.'],
       ]
     : [
-        ['Using DOTT', 'By using DOTT you agree to provide accurate information and use the platform only for lawful shopping and marketplace activity.'],
-        ['Orders And Delivery', 'Prices, availability, delivery times, and returns depend on shop availability, service range, and current order status.'],
-        ['Account Responsibility', 'You are responsible for your login credentials and for activity performed from your account.'],
-        ['Marketplace Services', 'DOTT connects customers, vendors, riders, and admins to support ordering, delivery, and service communication.'],
-        ['Policy Updates', 'We may update these terms as the product grows, improves safety, or adds new commerce features.'],
+        ['1. Acceptance Of Terms', 'By creating an account or placing an order on DOTT, you agree to these Terms & Conditions and to marketplace rules shown during browsing, checkout, payment, delivery, cancellation, return, and support flows.'],
+        ['2. Marketplace Role', 'DOTT is a local commerce platform connecting customers with independent shops and delivery partners. Product listings, prices, stock, preparation, warranties, and shop policies may be provided by the respective vendor.'],
+        ['3. Account Responsibility', 'You must provide accurate account, address, and contact information. You are responsible for keeping your password private and for activity performed using your account.'],
+        ['4. Orders, Pricing, And Availability', 'Orders are subject to shop acceptance, product availability, serviceable delivery range, payment status, and rider availability. Prices, delivery fees, taxes, platform fees, and discounts are shown before order placement where applicable.'],
+        ['5. Delivery, Cancellation, And Returns', 'Delivery estimates are indicative and can vary due to shop preparation, traffic, rider assignment, weather, or operational constraints. Cancellations, replacements, refunds, and returns depend on order status, product type, vendor policy, and applicable platform rules.'],
+        ['6. Customer Conduct', 'You agree not to misuse the app, place fraudulent orders, abuse offers, harass vendors/riders/support teams, or use the service for illegal, unsafe, or unauthorized activity.'],
+        ['7. Payments And Refunds', 'Payments may be handled through cash, UPI, card, netbanking, or supported payment partners. Refunds, when approved, may take time based on payment method, bank processing, and verification requirements.'],
+        ['8. Updates To Terms', 'DOTT may update these terms as features, safety practices, fees, partner rules, or legal requirements change. Continued use of the service after updates means you accept the revised terms.'],
       ]
 
   return (
-    <div className="overlay" style={{ zIndex: 900, padding: 16 }}>
-      <div className="modal" style={{ width: '100%', maxWidth: 720, maxHeight: '92vh', overflowY: 'auto', padding: 0, borderRadius: 24 }}>
-        <div style={{ padding: '20px 20px 14px', background: 'linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)', borderBottom: '1px solid var(--br)' }}>
+    <div className="overlay" style={{ zIndex: 1200, padding: 12 }} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{ width: '100%', maxWidth: 760, maxHeight: '92dvh', overflowY: 'auto', padding: 0, borderRadius: 22, background:'#fff' }}>
+        <div style={{ padding: '22px 20px 16px', background: '#f8fbff', borderBottom: '1px solid var(--br)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--pr)', textTransform: 'uppercase', letterSpacing: '.08em' }}>DOTT Legal</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--pr)', textTransform: 'uppercase', letterSpacing: '.08em' }}>DOTT Customer App</div>
               <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--tx)', lineHeight: 1.1, marginTop: 4 }}>{title}</div>
+              <div style={{ fontSize: 13, color: 'var(--mu)', marginTop: 8, lineHeight: 1.6 }}>Last updated: May 2026</div>
             </div>
             <button onClick={onClose} style={{ border: '1.5px solid var(--br)', background: '#fff', borderRadius: 999, padding: '10px 16px', fontWeight: 800, color: 'var(--mu)', cursor: 'pointer' }}>Close</button>
           </div>
         </div>
-        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ padding: 14, borderRadius: 18, background: '#f8fbff', border: '1px solid var(--br)', color: 'var(--mu)', fontSize: 14, lineHeight: 1.6 }}>
-            This page covers the customer app experience including account access, browsing, ordering, delivery coordination, and support.
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ padding: 14, borderRadius: 14, background: '#fff', border: '1px solid var(--br)', color: 'var(--mu)', fontSize: 14, lineHeight: 1.65 }}>
+            {intro}
           </div>
           {sections.map(([head, body]) => (
-            <div key={head} style={{ padding: 16, borderRadius: 18, border: '1px solid var(--br)', background: '#fff' }}>
+            <div key={head} style={{ padding: 16, borderRadius: 14, border: '1px solid var(--br)', background: '#fff' }}>
               <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--tx)', marginBottom: 6 }}>{head}</div>
               <div style={{ fontSize: 14, color: 'var(--mu)', lineHeight: 1.7 }}>{body}</div>
             </div>
           ))}
+          <div style={{fontSize:12,color:'var(--mu)',lineHeight:1.6,textAlign:'center',padding:'4px 8px 12px'}}>
+            For account or order help, contact DOTT support from the app.
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-// â”€â”€â”€ Auth Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Auth Modal ----------------------------------------
 function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   const[tab,setTab]=useState(initialTab)
   const[form,setForm]=useState({name:'',email:'',phone:'',password:'',totpCode:''})
@@ -1910,9 +2465,11 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   const[otpStep,setOtpStep]=useState('form')
   const[otpDigits,setOtpDigits]=useState(['','','','','',''])
   const[otpSending,setOtpSending]=useState(false)
+  const[otpPreview,setOtpPreview]=useState('')
   const[otpTimer,setOtpTimer]=useState(0)
   const[loc,setLoc]=useState(null)
   const[showPass,setShowPass]=useState(false)
+  const[loginMethod,setLoginMethod]=useState('otp')
   const timerRef=useRef(null)
   const otpRefs=[useRef(),useRef(),useRef(),useRef(),useRef(),useRef()]
   const s=k=>e=>setForm(f=>({...f,[k]:e.target.value}))
@@ -1935,11 +2492,19 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   }
 
   const sendOtp=async()=>{
-    const phone=form.phone.replace(/\D/g,'')
-    if(phone.length!==10){setErr('Enter valid 10-digit number');return}
-    setOtpSending(true);setErr('')
+    const email=String(form.email||'').trim().toLowerCase()
+    if(!email.includes('@')||!email.split('@')[1]?.includes('.')){setErr('Enter a valid email address');return}
+    if(tab==='register'&&!String(form.name||'').trim()){setErr('Enter your full name');return}
+    if(tab==='register'){
+      const phone=String(form.phone||'').replace(/\D/g,'')
+      if(phone.length!==10){setErr('Enter your 10-digit phone number');return}
+      if(String(form.password||'').length<6){setErr('Password must be at least 6 characters');return}
+    }
+    setOtpSending(true);setErr('');setOtpPreview('')
     try{
-      const r=await api.sendOtp(phone)
+      const r=await api.sendOtp(email)
+      const demoOtp = r.data?.devOtp || r.data?.otp || ''
+      setOtpPreview(demoOtp)
       setOtpStep('otp');startTimer()
       setTimeout(()=>otpRefs[0].current?.focus(),100)
     }catch(e){setErr(e.response?.data?.detail||'OTP failed')}
@@ -1959,23 +2524,31 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   const submit=async()=>{
     setErr('');setLoading(true)
     try{
-      let r
-      if(tab==='login'){
-        const email = String(form.email || '').trim().toLowerCase()
-        const password = String(form.password || '').trim()
-        r=await api.login({email,password,totpCode:form.totpCode||undefined,...loc})
-      }
-      else{
-        if(!form.name||!form.email||!form.password){setErr('All fields are required');setLoading(false);return}
-        r=await api.register({...form,role:'CUSTOMER',otp:otpValue,...loc})
-      }
+      const email=String(form.email||'').trim().toLowerCase()
+      if(!email.includes('@')||!email.split('@')[1]?.includes('.')){setErr('Enter a valid email address');setLoading(false);return}
+      if(otpValue.length!==6){setErr('Enter the 6-digit OTP');setLoading(false);return}
+      if(tab==='register'&&!String(form.name||'').trim()){setErr('Enter your full name');setLoading(false);return}
+      const r=await api.verifyOtp(email,otpValue,{name:form.name||undefined,phone:form.phone||undefined,password:form.password||undefined,role:'CUSTOMER',...loc})
       setTokens(r.data.accessToken,r.data.refreshToken)
       onSuccess(r.data.user)
     }catch(e){setErr(e.response?.data?.detail||'Login failed. Check your details.')}
     setLoading(false)
   }
 
-  const switchTab=(t)=>{setTab(t);setOtpStep('form');setOtpDigits(['','','','','','']);setErr('');setForm({name:'',email:'',phone:'',password:'',totpCode:''})}
+  const passwordLogin=async()=>{
+    setErr('');setLoading(true)
+    try{
+      const loginId=String(form.email||'').trim()
+      if(!loginId){setErr('Enter your email or phone number');setLoading(false);return}
+      if(!form.password){setErr('Enter your password');setLoading(false);return}
+      const r=await api.login({email:loginId,password:form.password,...loc})
+      setTokens(r.data.accessToken,r.data.refreshToken)
+      onSuccess(r.data.user)
+    }catch(e){setErr(e.response?.data?.detail||'Login failed. Check your details.')}
+    setLoading(false)
+  }
+
+  const switchTab=(t)=>{setTab(t);setOtpStep('form');setOtpDigits(['','','','','','']);setOtpPreview('');setErr('');setLoginMethod('otp');setShowPass(false);setForm({name:'',email:'',phone:'',password:'',totpCode:''})}
 
   const FEATURES=[
     {icon:<Ic.Shop  width={18} height={18} stroke="var(--or)"/>, text:'Shop from local fashion stores'},
@@ -1994,7 +2567,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
 
   return(
     <div className="auth-page">
-      {/* LEFT â€” brand panel */}
+      {/* LEFT - brand panel */}
       <div className="auth-left">
         <div className="auth-dots"/>
         <div className="auth-story">
@@ -2005,8 +2578,8 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
               <div style={{fontWeight:900,fontSize:32,color:'var(--nv)',letterSpacing:'-1px',marginTop:8}}>Near<span style={{color:'var(--or)'}}>Now</span></div>
             </div>
           </div>
-          <div className="auth-hero-title">{tab==='register'?'Create your shopping account with a premium onboarding flow.':'Sign in and continue your fashion orders in seconds.'}</div>
-          <div className="auth-hero-copy">A cleaner, faster customer experience inspired by marketplace storefronts and food-delivery polish. Scroll, browse, sign up, track orders, and check out with a more premium feel.</div>
+          <div className="auth-hero-title">{tab==='register'?'Start shopping nearby styles in minutes.':'Sign in and continue your fashion orders in seconds.'}</div>
+          <div className="auth-hero-copy">Create one account for nearby shops, wishlist saves, delivery tracking, rewards, and faster checkout.</div>
           <div className="auth-story-grid">
             <div className="auth-story-card"><strong>60 min</strong><span>Fast local delivery with better order visibility.</span></div>
             <div className="auth-story-card"><strong>Verified</strong><span>Trusted stores and cleaner product presentation.</span></div>
@@ -2057,7 +2630,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
         </div>
       </div>
 
-      {/* RIGHT â€” form panel */}
+      {/* RIGHT - form panel */}
       <div className="auth-right">
         <div className="auth-form-box">
           <div className="auth-card">
@@ -2069,38 +2642,29 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
             )}
           </div>
           <div className="auth-pane-head">
-            <div className="auth-pane-eyebrow">{tab==='login'?'Customer sign in':'Dedicated sign-up page'}</div>
+            <div className="auth-pane-eyebrow">{tab==='login'?'Customer sign in':'Customer onboarding'}</div>
             <div className="auth-pane-title">
-              {tab==='login'?'Welcome back':'Create your account'}
+              {tab==='login'?'Welcome back':'Create your DOTT account'}
             </div>
             <div className="auth-pane-sub">
-              {tab==='login'?'Continue your orders, wishlist, and checkout history.':'A richer full-screen sign-up flow with smoother onboarding.'}
+              {tab==='login'?'Continue your orders, wishlist, and checkout history.':'Save your details once and shop faster from nearby stores.'}
             </div>
           </div>
-          {tab==='register'&&(
-            <div className="auth-register-strip">
-              {[['Fast setup','Smooth onboarding and saved details.'],['Style-first shopping','Wishlist, orders, and curated discovery in one account.'],['Premium access','Cleaner checkout flow and better local fashion browsing.']].map(([title,copy],i)=>(
-                <div key={title} className="auth-register-card" style={{animationDelay:`${i*0.06}s`}}>
-                  <strong>{title}</strong>
-                  <span>{copy}</span>
-                </div>
-              ))}
+          {tab==='login'&&(
+            <div className="auth-tab-row" style={{marginTop:2}}>
+              <button className={`auth-tab ${loginMethod==='otp'?'on':'off'}`} onClick={()=>{setLoginMethod('otp');setErr('')}}>OTP</button>
+              <button className={`auth-tab ${loginMethod==='password'?'on':'off'}`} onClick={()=>{setLoginMethod('password');setErr('')}}>Password</button>
             </div>
           )}
 
-          {/* Tab switcher */}
-          <div className="auth-tab-row">
-            <button className={`auth-tab ${tab==='login'?'on':'off'}`} onClick={()=>switchTab('login')}>Sign In</button>
-            <button className={`auth-tab ${tab==='register'?'on':'off'}`} onClick={()=>switchTab('register')}>Sign Up</button>
-          </div>
-
           {/* OTP verification step */}
-          {false && tab==='register'&&otpStep==='otp'?(
+          {otpStep==='otp'?(
             <div className="auth-scroll-panel" style={{animation:'slideRight .3s ease'}}>
               <div style={{textAlign:'center',padding:'20px',background:'linear-gradient(135deg,var(--orl),#fffbeb)',borderRadius:'var(--r12)',border:'2px solid var(--orm)',marginBottom:20}}>
                 <div style={{width:56,height:56,borderRadius:14,background:'var(--orl)',border:'2px solid var(--orm)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px'}}><svg width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='var(--ord)' strokeWidth='2' strokeLinecap='round'><rect x='5' y='2' width='14' height='20' rx='2' ry='2'/><line x1='12' y1='18' x2='12.01' y2='18'/></svg></div>
-                <div style={{fontWeight:800,fontSize:16,color:'var(--ord)'}}>OTP sent to {form.phone}</div>
+                <div style={{fontWeight:800,fontSize:16,color:'var(--ord)'}}>OTP sent to {form.email}</div>
                 <div style={{fontSize:12,color:'var(--mu)',marginTop:4}}>Enter the 6-digit code below</div>
+                {otpPreview&&<div style={{fontSize:13,color:'var(--nv)',marginTop:8,fontWeight:800}}>Demo OTP: {otpPreview}</div>}
               </div>
 
               {/* 6 individual OTP digit boxes */}
@@ -2121,11 +2685,11 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
                     <span style={{width:18,height:18,border:'2.5px solid rgba(255,255,255,.4)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin 1s linear infinite',display:'inline-block'}}/>
                     Verifying...
                   </span>
-                ):'Verify & Create Account'}
+                ):(tab==='register'?'Verify & Create Account':'Verify & Login')}
               </button>
 
               <div style={{display:'flex',justifyContent:'space-between',marginTop:14,fontSize:13}}>
-                <button onClick={()=>{setOtpStep('form');setOtpDigits(['','','','','',''])}} style={{background:'none',border:'none',color:'var(--mu)',cursor:'pointer',fontWeight:600}}>Change number</button>
+                <button onClick={()=>{setOtpStep('form');setOtpDigits(['','','','','',''])}} style={{background:'none',border:'none',color:'var(--mu)',cursor:'pointer',fontWeight:600}}>Change email</button>
                 {otpTimer>0
                   ?<span style={{color:'var(--mu)'}}>Resend in <strong>{otpTimer}s</strong></span>
                   :<button onClick={sendOtp} style={{background:'none',border:'none',color:'var(--or)',cursor:'pointer',fontWeight:800}}>Resend OTP</button>}
@@ -2139,27 +2703,32 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
                     <input placeholder=" " value={form.name} onChange={s('name')}/>
                     <label>Full Name *</label>
                   </div>
-                  <div className="auth-floating-label">
-                    <input placeholder=" " value={form.phone} onChange={s('phone')} inputMode="tel"/>
-                    <label>Phone Number *</label>
-                  </div>
                 </>
               )}
               <div className="auth-floating-label">
-                <input type="email" placeholder=" " value={form.email} onChange={s('email')}/>
-                <label>Email Address *</label>
+                <input type={loginMethod==='password'&&tab==='login'?'text':'email'} placeholder=" " value={form.email} onChange={s('email')} inputMode={loginMethod==='password'&&tab==='login'?'text':'email'} onKeyDown={e=>e.key==='Enter'&&(loginMethod==='password'&&tab==='login'?passwordLogin():sendOtp())}/>
+                <label>{loginMethod==='password'&&tab==='login'?'Email or Phone Number *':'Email Address *'}</label>
               </div>
-              <div className="auth-floating-label" style={{position:'relative'}}>
-                <input type={showPass?'text':'password'} placeholder=" " value={form.password} onChange={s('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/>
-                <label>Password *</label>
-                <button onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'var(--mu)'}}>
-                  {showPass?'Hide':'Show'}
-                </button>
-              </div>
-              {tab==='login'&&(
-                <div className="auth-floating-label">
-                  <input placeholder=" " value={form.totpCode} onChange={s('totpCode')} inputMode="numeric"/>
-                  <label>Authenticator Code (optional)</label>
+
+              {tab==='register'&&(
+                <>
+                  <div className="auth-floating-label">
+                    <input type="tel" placeholder=" " value={form.phone} onChange={s('phone')} inputMode="numeric" maxLength={10}/>
+                    <label>Phone Number *</label>
+                  </div>
+                  <div className="auth-floating-label" style={{position:'relative'}}>
+                    <input type={showPass?'text':'password'} placeholder=" " value={form.password} onChange={s('password')} onKeyDown={e=>e.key==='Enter'&&sendOtp()}/>
+                    <label>Password *</label>
+                    <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:12,top:15,border:'none',background:'transparent',color:'var(--or)',fontWeight:800,cursor:'pointer',fontSize:12}}>{showPass?'Hide':'Show'}</button>
+                  </div>
+                </>
+              )}
+
+              {tab==='login'&&loginMethod==='password'&&(
+                <div className="auth-floating-label" style={{position:'relative'}}>
+                  <input type={showPass?'text':'password'} placeholder=" " value={form.password} onChange={s('password')} onKeyDown={e=>e.key==='Enter'&&passwordLogin()}/>
+                  <label>Password *</label>
+                  <button type="button" onClick={()=>setShowPass(v=>!v)} style={{position:'absolute',right:12,top:15,border:'none',background:'transparent',color:'var(--or)',fontWeight:800,cursor:'pointer',fontSize:12}}>{showPass?'Hide':'Show'}</button>
                 </div>
               )}
 
@@ -2175,29 +2744,27 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
 
               {err&&<div style={{color:'var(--rd)',fontSize:12,padding:'9px 13px',background:'var(--rdl)',borderRadius:'var(--r8)',marginTop:4}}>{err}</div>}
 
-              <button className="auth-submit-btn" style={{marginTop:12}} onClick={submit} disabled={loading||otpSending}>
+              <button className="auth-submit-btn" style={{marginTop:12}} onClick={loginMethod==='password'&&tab==='login'?passwordLogin:sendOtp} disabled={loading||otpSending}>
                 {loading||otpSending?(
                   <span style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
                     <span style={{width:18,height:18,border:'2.5px solid rgba(255,255,255,.4)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin 1s linear infinite',display:'inline-block'}}/>
-                    {otpSending?'Please wait...':'Signing in...'}
+                    Please wait...
                   </span>
-                ):tab==='login'?'Sign In':'Create Account'}
+                ):(loginMethod==='password'&&tab==='login'?'Login':'Send OTP')}
               </button>
 
-              {tab==='register'&&(
-                <div style={{marginTop:10,fontSize:12,color:'var(--mu)',textAlign:'center',lineHeight:1.7}}>
-                  By registering you agree to our{' '}
-                  <button className="auth-text-btn" onClick={()=>setLegalDoc('terms')}>Terms of Service</button>
-                  {' '}and{' '}
-                  <button className="auth-text-btn" onClick={()=>setLegalDoc('privacy')}>Privacy Policy</button>
-                </div>
-              )}
-
               <div className="auth-switch-note">
-                {tab==='login'?'New here? ':'Already have an account? '}
+                {tab==='login'?'New customer? ':'Already have an account? '}
                 <button className="auth-text-btn" onClick={()=>switchTab(tab==='login'?'register':'login')}>
-                  {tab==='login'?'Open Sign Up':'Back to Sign In'}
+                  {tab==='login'?'Create account':'Sign in'}
                 </button>
+              </div>
+
+              <div style={{marginTop:8,fontSize:12,color:'var(--mu)',textAlign:'center',lineHeight:1.7}}>
+                {tab==='register'?'By creating an account, you agree to the ':'By continuing, you agree to the '}
+                <button className="auth-text-btn" onClick={()=>setLegalDoc('terms')}>Terms & Conditions</button>
+                {' '}and{' '}
+                <button className="auth-text-btn" onClick={()=>setLegalDoc('privacy')}>Privacy Policy</button>
               </div>
 
               {onClose&&(
@@ -2211,27 +2778,30 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
         </div>
         </div>
       </div>
+      {legalDoc&&<LegalModal type={legalDoc} onClose={()=>setLegalDoc('')}/>}
     </div>
   )
 }
 
-// â”€â”€â”€ Checkout Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Checkout Modal ----------------------------------------
 
-// â”€â”€â”€ 60-Minute Delivery Countdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- 60-Minute Delivery Countdown ----------------------------------------
 
 
 function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
   const isNarrow = useIsNarrowLayout(980)
   const currentItem = cart?.[0] || null
+  const savedLat = toFiniteNumber(user?.lat)
+  const savedLng = toFiniteNumber(user?.lng)
   const[savedAddresses,setSavedAddresses]=useState([])
   useEffect(()=>{if(user)api.getAddresses().then(r=>setSavedAddresses(r.data||[])).catch(()=>{})},[user])
-  const[addr,setAddr]=useState(user?.lat?`Near your saved location`:'' )
-  const[dLat,setDLat]=useState(user?.lat||null)
-  const[dLng,setDLng]=useState(user?.lng||null)
+  const[addr,setAddr]=useState(savedLat != null && savedLng != null ? 'Near your saved location' :'' )
+  const[dLat,setDLat]=useState(savedLat)
+  const[dLng,setDLng]=useState(savedLng)
   const[payment,setPayment]=useState('cod')
   const[loading,setLoading]=useState(false)
   const[manualAddr,setManualAddr]=useState('')
-  const[locMode,setLocMode]=useState(user?.lat?'saved':'manual')
+  const[locMode,setLocMode]=useState(savedLat != null && savedLng != null ? 'saved':'manual')
   const[feeData,setFeeData]=useState(null)
   const[feeLd,setFeeLd]=useState(false)
   const[showMap,setShowMap]=useState(false)
@@ -2252,14 +2822,13 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
   const freeDeliveryDiscount=feeData?.freeDeliveryDiscount ?? 0
   const promoDiscount=promoData?.discount||0
   const grand=Math.max(0,sub+fee+platformFee+gstAmount-promoDiscount)
-  const paymentLabel=payment==='cod'?'Cash on Delivery':payment==='upi'?'UPI / Netbanking':'Card Payment'
+  const paymentLabel='Cash on Delivery'
   const finalAddr=(locMode==='saved'?addr:manualAddr)||''
   const orderRangeLimit=getOrderRangeLimit(radius)
   const orderBlocked=!!rangeError
   const priceRows=[
     {k:'Items total',v:`Rs ${sub.toFixed(2)}`},
-    {k:'Base delivery',v:`Rs ${baseFee.toFixed(2)}`},
-    {k:`Distance fee${km?` (${km} km)`:''}`,v:feeLd?'Calculating...':`Rs ${distanceFee.toFixed(2)}`},
+    {k:`Delivery total${km?` (${km} km)`:''}`,v:feeLd?'Calculating...':`Rs ${fee.toFixed(2)}`},
     {k:'Surge fee',v:`Rs ${surgeFee.toFixed(2)}`},
     {k:'Platform fee',v:`Rs ${platformFee.toFixed(2)}`},
     {k:`GST (${Math.round((feeData?.gstRate||0.05)*100)}%)`,v:`Rs ${gstAmount.toFixed(2)}`},
@@ -2289,9 +2858,10 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
       const r=await api.placeOrder({
         shopId:currentItem.shopId,
         items:(cart||[]).map(i=>({productId:i.id,qty:i.qty,size:i.selectedSize||undefined})),
-        deliveryAddress:finalAddr,paymentMethod:payment,
+        deliveryAddress:finalAddr,paymentMethod:'cod',
         deliveryLat:dLat,deliveryLng:dLng,promoCode:promo||undefined,
-        deliveryRadiusKm:orderRangeLimit
+        deliveryRadiusKm:orderRangeLimit,
+        maxRadiusKm:orderRangeLimit
       })
       onSuccess(r.data)
     }catch(e){showToast(e.response?.data?.detail||'Order failed. Please try again.','error')}
@@ -2356,21 +2926,21 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
             </div>
           )}
 
-          {/* â”€â”€ STEP 1: DELIVERY â”€â”€ */}
+          {/* -- STEP 1: DELIVERY -- */}
           {step===1&&(
             <div style={{animation:'fadeUp .3s ease'}}>
               <div style={{fontWeight:800,fontSize:13,letterSpacing:'.5px',textTransform:'uppercase',color:'#64748b',marginBottom:14}}>Delivery Address</div>
 
               {/* Saved location option */}
-              {user?.lat&&(
-                <div onClick={()=>{setLocMode('saved');setAddr(`Near your saved location (${user.lat?.toFixed(3)} deg N, ${user.lng?.toFixed(3)} deg E)`);setDLat(user.lat);setDLng(user.lng)}}
+              {savedLat != null && savedLng != null &&(
+                <div onClick={()=>{setLocMode('saved');setAddr(formatSavedLocationLabel(savedLat, savedLng, 3));setDLat(savedLat);setDLng(savedLng)}}
                   style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',borderRadius:14,border:`2px solid ${locMode==='saved'?'#f97316':'#e2e8f0'}`,background:locMode==='saved'?'#fff7ed':'#fff',cursor:'pointer',marginBottom:10,transition:'all .2s'}}>
                   <div style={{width:40,height:40,borderRadius:12,background:locMode==='saved'?'#f97316':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'.2s'}}>
                     <Ic.Map width={18} height={18} stroke={locMode==='saved'?'#fff':'#64748b'}/>
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontWeight:700,fontSize:14,color:'#0f172a'}}>Saved Location</div>
-                    <div style={{fontSize:12,color:'#64748b',marginTop:1}}>{user.lat?.toFixed(4)} deg N, {user.lng?.toFixed(4)} deg E</div>
+                    <div style={{fontSize:12,color:'#64748b',marginTop:1}}>{formatCoord(savedLat, 4)} deg N, {formatCoord(savedLng, 4)} deg E</div>
                   </div>
                   <div style={{width:20,height:20,borderRadius:'50%',border:`2px solid ${locMode==='saved'?'#f97316':'#e2e8f0'}`,display:'flex',alignItems:'center',justifyContent:'center',background:locMode==='saved'?'#f97316':'transparent',flexShrink:0}}>
                     {locMode==='saved'&&<Ic.Check width={10} height={10} stroke="#fff"/>}
@@ -2383,7 +2953,7 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
                 <div key={a.id} onClick={()=>{setManualAddr(a.address);setLocMode('manual');if(a.lat){setDLat(a.lat);setDLng(a.lng)}}}
                   style={{display:'flex',alignItems:'center',gap:12,padding:'13px 16px',borderRadius:14,border:`2px solid ${manualAddr===a.address&&locMode==='manual'?'#f97316':'#e2e8f0'}`,background:manualAddr===a.address&&locMode==='manual'?'#fff7ed':'#fff',cursor:'pointer',marginBottom:8,transition:'all .2s'}}>
                   <div style={{width:36,height:36,borderRadius:10,background:'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontWeight:800,fontSize:12,color:'#475569'}}>
-                    {a.label==='Home'?'ðŸ ':a.label==='Work'?'ðŸ’¼':'ðŸ“'}
+                    {a.label==='Home'?'Home':a.label==='Work'?'Work':'Pin'}
                   </div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontWeight:700,fontSize:13}}>{a.label}</div>
@@ -2454,16 +3024,16 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
             </div>
           )}
 
-          {/* â”€â”€ STEP 2: PAYMENT â”€â”€ */}
+          {/* -- STEP 2: PAYMENT -- */}
           {step===2&&(
             <div style={{animation:'fadeUp .3s ease'}}>
               <div style={{fontWeight:800,fontSize:13,letterSpacing:'.5px',textTransform:'uppercase',color:'#64748b',marginBottom:14}}>Payment Method</div>
               {[
-                {v:'cod',label:'Cash on Delivery',sub:'Pay when your order arrives',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,c:'#16a34a',bg:'#f0fdf4'},
-                {v:'upi',label:'UPI / GPay / PhonePe',sub:'Pay instantly, zero fees',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,c:'#7c3aed',bg:'#f5f3ff'},
-                {v:'card',label:'Credit / Debit Card',sub:'Visa | Mastercard | Rupay',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg>,c:'#2563eb',bg:'#eff6ff'},
-              ].map(({v,label,sub,icon,c,bg})=>(
-                <div key={v} onClick={()=>setPayment(v)} style={{display:'flex',alignItems:'center',gap:14,padding:'16px',borderRadius:16,border:`2px solid ${payment===v?c:'#e2e8f0'}`,background:payment===v?bg:'#fff',cursor:'pointer',marginBottom:10,transition:'all .2s',boxShadow:payment===v?`0 0 0 4px ${c}18`:'none'}}>
+                {v:'cod',label:'Cash on Delivery',sub:'Pay when your order arrives',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,c:'#16a34a',bg:'#f0fdf4',disabled:false},
+                {v:'upi',label:'UPI / GPay / PhonePe',sub:'Disabled for now',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,c:'#94a3b8',bg:'#f8fafc',disabled:true},
+                {v:'card',label:'Credit / Debit Card',sub:'Disabled for now',icon:<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg>,c:'#94a3b8',bg:'#f8fafc',disabled:true},
+              ].map(({v,label,sub,icon,c,bg,disabled})=>(
+                <div key={v} onClick={()=>!disabled&&setPayment('cod')} style={{display:'flex',alignItems:'center',gap:14,padding:'16px',borderRadius:16,border:`2px solid ${payment===v?c:'#e2e8f0'}`,background:payment===v?bg:'#fff',cursor:disabled?'not-allowed':'pointer',opacity:disabled ? .55 : 1,marginBottom:10,transition:'all .2s',boxShadow:payment===v?`0 0 0 4px ${c}18`:'none'}}>
                   <div style={{width:48,height:48,borderRadius:12,background:payment===v?c+'15':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',color:payment===v?c:'#94a3b8',flexShrink:0,transition:'.2s'}}>{icon}</div>
                   <div style={{flex:1}}>
                     <div style={{fontWeight:800,fontSize:14,color:'#0f172a'}}>{label}</div>
@@ -2495,7 +3065,7 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
             </div>
           )}
 
-          {/* â”€â”€ STEP 3: CONFIRM â”€â”€ */}
+          {/* -- STEP 3: CONFIRM -- */}
           {step===3&&(
             <div style={{animation:'fadeUp .3s ease'}}>
               {/* Order items */}
@@ -2541,8 +3111,8 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
               <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10,marginTop:-4,marginBottom:18}}>
                 <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:14,padding:'12px 14px'}}>
                   <div style={{fontSize:10,textTransform:'uppercase',letterSpacing:'.6px',color:'#94a3b8',marginBottom:4}}>Delivery logic</div>
-                  <div style={{fontWeight:800,fontSize:13,color:'#0f172a'}}>Rs {baseFee} + Rs {distanceFee}</div>
-                  <div style={{fontSize:11,color:'#64748b',marginTop:4}}>Base fee + distance fee</div>
+                  <div style={{fontWeight:800,fontSize:13,color:'#0f172a'}}>Rs {fee}</div>
+                  <div style={{fontSize:11,color:'#64748b',marginTop:4}}>{km ? `${Number(km).toFixed(1)} km delivery total` : 'Delivery total'}</div>
                 </div>
                 <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:14,padding:'12px 14px'}}>
                   <div style={{fontSize:10,textTransform:'uppercase',letterSpacing:'.6px',color:'#94a3b8',marginBottom:4}}>Dynamic extras</div>
@@ -2564,7 +3134,7 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
                 </div>
                 <div style={{padding:'12px 14px',background:'#f8fafc',borderRadius:12,border:'1px solid #e2e8f0'}}>
                   <div style={{fontSize:10,fontWeight:800,textTransform:'uppercase',letterSpacing:'.6px',color:'#94a3b8',marginBottom:4}}>Payment</div>
-                  <div style={{fontSize:12,fontWeight:700,color:'#0f172a'}}>{payment==='cod'?'Cash on Delivery':payment==='upi'?'UPI':'Card'}</div>
+                  <div style={{fontSize:12,fontWeight:700,color:'#0f172a'}}>Cash on Delivery</div>
                 </div>
               </div>
 
@@ -2600,7 +3170,7 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
                   </div>
                   <div style={{padding:'12px 10px',borderRadius:16,background:'rgba(255,255,255,.08)'}}>
                     <div style={{fontSize:10,color:'rgba(255,255,255,.52)',textTransform:'uppercase'}}>Pay mode</div>
-                    <div style={{fontWeight:800,fontSize:13,marginTop:4}}>{payment==='cod'?'COD':payment==='upi'?'UPI':'CARD'}</div>
+                    <div style={{fontWeight:800,fontSize:13,marginTop:4}}>COD</div>
                   </div>
                 </div>
               </div>
@@ -2673,7 +3243,7 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
             <div style={{padding:'16px',background:'#fff',display:'flex',gap:10,borderTop:'1px solid #e2e8f0'}}>
               <button onClick={()=>setShowMap(false)} style={{flex:1,padding:'12px',borderRadius:12,border:'1.5px solid #e2e8f0',background:'#fff',cursor:'pointer',fontWeight:700,fontSize:14,color:'#475569',transition:'.2s'}}
                 onMouseEnter={e=>e.currentTarget.style.borderColor='#f97316'} onMouseLeave={e=>e.currentTarget.style.borderColor='#e2e8f0'}>Cancel</button>
-              <button onClick={()=>{setManualAddr(`Pinned location (${dLat?.toFixed(4)} deg N, ${dLng?.toFixed(4)} deg E)`);setLocMode('manual');setShowMap(false);showToast('Location pinned successfully','success')}}
+              <button onClick={()=>{setManualAddr(`Pinned location (${formatCoord(dLat, 4) || '--'} deg N, ${formatCoord(dLng, 4) || '--'} deg E)`);setLocMode('manual');setShowMap(false);showToast('Location pinned successfully','success')}}
                 style={{flex:2,padding:'12px',background:'linear-gradient(135deg,#f97316,#ea580c)',color:'#fff',border:'none',borderRadius:12,cursor:'pointer',fontWeight:800,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
                 <Ic.Check width={16} height={16}/> Confirm Location
               </button>
@@ -2686,26 +3256,44 @@ function CheckoutModal({cart,user,onClose,onSuccess,radius=15}){
 }
 
 
-function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
+function StableCheckoutModal({
+  cart,
+  user,
+  onClose,
+  onSuccess,
+  radius=15,
+  currentLocation=null,
+  currentLocationLabel='',
+  savedAddressesProp=[],
+  recentLocationsProp=[],
+}){
   const isNarrow = useIsNarrowLayout(980)
   const currentItem = cart?.[0] || null
-  const [savedAddresses,setSavedAddresses]=useState([])
+  const savedLat = toFiniteNumber(currentLocation?.lat ?? user?.lat)
+  const savedLng = toFiniteNumber(currentLocation?.lng ?? user?.lng)
+  const [savedAddresses,setSavedAddresses]=useState(()=>Array.isArray(savedAddressesProp) ? savedAddressesProp : [])
   const [payment,setPayment]=useState('cod')
   const [loading,setLoading]=useState(false)
-  const [manualAddr,setManualAddr]=useState(user?.lat ? 'Near your saved location' : '')
-  const [dLat,setDLat]=useState(user?.lat ?? null)
-  const [dLng,setDLng]=useState(user?.lng ?? null)
+  const initialAddressLabel = currentLocationLabel || user?.address || (savedLat != null && savedLng != null ? 'Near your saved location' : '')
+  const [manualAddr,setManualAddr]=useState(initialAddressLabel)
+  const [dLat,setDLat]=useState(savedLat)
+  const [dLng,setDLng]=useState(savedLng)
   const [feeData,setFeeData]=useState(null)
   const [feeLd,setFeeLd]=useState(false)
   const [rangeError,setRangeError]=useState('')
+  const [checkoutNotice,setCheckoutNotice]=useState('')
+  const [checkoutError,setCheckoutError]=useState('')
+  const placeLockRef=useRef(false)
   const orderRangeLimit = getOrderRangeLimit(radius)
   const orderBlocked = !!rangeError
+  const missingLocation = dLat == null || dLng == null
   const sub = (cart||[]).reduce((s,i)=>s+(Number(i.price)||0)*(Number(i.qty)||0),0)
+  const shopLat = currentItem?.shopLat ?? currentItem?.shop?.lat
+  const shopLng = currentItem?.shopLng ?? currentItem?.shop?.lng
   const instantKm = (dLat != null && dLng != null && currentItem)
-    ? (
-        typeof currentItem?.distanceKm === 'number'
-          ? currentItem.distanceKm
-          : haversine(dLat, dLng, currentItem?.shopLat ?? currentItem?.shop?.lat, currentItem?.shopLng ?? currentItem?.shop?.lng)
+    ? (shopLat != null && shopLng != null
+        ? haversine(dLat, dLng, shopLat, shopLng)
+        : (typeof currentItem?.distanceKm === 'number' ? currentItem.distanceKm : null)
       )
     : null
   const pricingView = feeData || (instantKm != null ? buildLocalPricingEstimate(sub, instantKm) : null)
@@ -2719,22 +3307,31 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
   const km = pricingView?.km ?? instantKm ?? null
   const grand = pricingView?.total ?? Math.max(0, sub + fee + gstAmount + platformFee)
   const paymentOptions = [
-    { id:'cod', label:'Cash on Delivery', sub:'Pay when order arrives', icon:<Ic.Truck width={18} height={18}/> },
-    { id:'upi', label:'UPI / Netbanking', sub:'GPay, PhonePe, UPI', icon:<Ic.Flash width={18} height={18}/> },
-    { id:'card', label:'Card Payment', sub:'Credit / Debit card', icon:<Ic.Tag width={18} height={18}/> },
+    { id:'cod', label:'Cash on Delivery', sub:'Pay when order arrives', icon:<Ic.Truck width={18} height={18}/>, disabled:false },
+    { id:'upi', label:'UPI / Netbanking', sub:'Disabled for now', icon:<Ic.Flash width={18} height={18}/>, disabled:true },
+    { id:'card', label:'Card Payment', sub:'Disabled for now', icon:<Ic.Tag width={18} height={18}/>, disabled:true },
   ]
   const compactRows = [
     ['Items total', money(sub)],
-    ['Base delivery', money(baseFee)],
-    [`Distance ${km ? `(${Number(km).toFixed(1)} km)` : ''}`.trim(), feeLd ? 'Calculating...' : money(distanceFee)],
-    ['Delivery total', feeLd ? 'Calculating...' : money(fee)],
+    [`Delivery total${km ? ` (${Number(km).toFixed(1)} km)` : ''}`, feeLd ? 'Calculating...' : money(fee)],
     ['Platform fee', money(platformFee)],
     ['GST', money(gstAmount)],
   ]
+  const placeButtonText = loading
+    ? 'Placing order...'
+    : missingLocation
+      ? 'Choose delivery location'
+      : feeLd
+        ? 'Updating delivery charge...'
+        : orderBlocked
+          ? (/choose a delivery location/i.test(rangeError) ? 'Choose delivery location' : `Outside ${orderRangeLimit} km range`)
+          : `Place Order | ${money(grand)}`
   const [locating,setLocating]=useState(false)
   const [locStatus,setLocStatus]=useState('')
   const [showMap,setShowMap]=useState(false)
   const [recentLocationChoices] = useState(()=>{
+    const appRecent = normalizeRecentLocations(Array.isArray(recentLocationsProp) ? recentLocationsProp : [])
+    if(appRecent.length) return appRecent.slice(0,3)
     const parsed = safeStorageParse('dott_recent_locations', [])
     return normalizeRecentLocations(parsed).slice(0,3)
   })
@@ -2793,6 +3390,10 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
     setDLat(lat)
     setDLng(lng)
     setManualAddr(label)
+    setFeeData(null)
+    setRangeError('')
+    setCheckoutError('')
+    setCheckoutNotice('Recalculating delivery charge for the new location...')
     setLocStatus('')
   }
   const updateAddressFromCoords = async(coords, fallbackLabel='') => {
@@ -2814,7 +3415,7 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
         setLocStatus(result?.errorMessage || 'Unable to detect current location')
         return
       }
-      const fallbackLabel = result?.label || `Current location (${Number(result.lat).toFixed(4)}, ${Number(result.lng).toFixed(4)})`
+      const fallbackLabel = result?.label || `Current location (${formatCoord(result.lat, 4) || '--'}, ${formatCoord(result.lng, 4) || '--'})`
       applyLocation({ lat:result.lat, lng:result.lng }, fallbackLabel)
       await updateAddressFromCoords({ lat:result.lat, lng:result.lng }, fallbackLabel)
       if(result?.message) setLocStatus(result.message)
@@ -2823,27 +3424,51 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
     }
   }
 
-  useEffect(()=>{ if(user) api.getAddresses().then(r=>setSavedAddresses(Array.isArray(r.data)?r.data:[])).catch(()=>{}) },[user])
+  useEffect(()=>{
+    if(savedLat == null || savedLng == null) return
+    setDLat(savedLat)
+    setDLng(savedLng)
+    if(currentLocationLabel){
+      setManualAddr(prev=>prev && prev.trim() ? prev : currentLocationLabel)
+    }
+  },[savedLat, savedLng, currentLocationLabel])
+
+  useEffect(()=>{
+    if(Array.isArray(savedAddressesProp) && savedAddressesProp.length){
+      setSavedAddresses(savedAddressesProp)
+      return
+    }
+    if(user) api.getAddresses().then(r=>setSavedAddresses(Array.isArray(r.data)?r.data:[])).catch(()=>{})
+  },[user, savedAddressesProp])
   useEffect(()=>{
     if(!currentItem || dLat==null || dLng==null){
       setFeeLd(false)
+      setFeeData(null)
+      setRangeError(dLat==null || dLng==null ? 'Choose a delivery location to calculate charges.' : '')
       return
     }
     let done = false
-    const fallbackEstimate = buildLocalPricingEstimate(sub, instantKm ?? 0)
+    const fallbackEstimate = instantKm != null ? buildLocalPricingEstimate(sub, instantKm) : null
     const timer = setTimeout(()=>{
       if(done) return
       setFeeLd(false)
       setRangeError('')
-      setFeeData(prev=>prev || fallbackEstimate)
+      if(fallbackEstimate) setFeeData(prev=>prev || fallbackEstimate)
+      setCheckoutNotice(fallbackEstimate ? 'Using estimated delivery charge. You can place the order now.' : 'Delivery charge will be confirmed while placing the order.')
     }, 3500)
     setFeeLd(true)
     setRangeError('')
+    setCheckoutNotice('Recalculating delivery charge...')
+    setFeeData(fallbackEstimate)
     api.pricingPreview(currentItem.shopId, sub, dLat, dLng, null, orderRangeLimit)
       .then(r=>{
         done = true
         clearTimeout(timer)
-        setFeeData(r.data)
+        setFeeData({
+          ...r.data,
+          km: r.data?.km ?? r.data?.deliveryKm ?? instantKm,
+        })
+        setCheckoutNotice('Delivery charge updated for this location.')
       })
       .catch(e=>{
         done = true
@@ -2851,11 +3476,13 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
         const detail = e.response?.data?.detail || ''
         const isRangeError = /outside|range|too far|distance/i.test(detail)
         if(isRangeError){
-          setFeeData(null)
+          setFeeData(fallbackEstimate)
           setRangeError(detail || `This shop is outside your ${orderRangeLimit} km local delivery range.`)
+          setCheckoutNotice('')
         }else{
           setRangeError('')
-          setFeeData(fallbackEstimate)
+          if(fallbackEstimate) setFeeData(fallbackEstimate)
+          setCheckoutNotice(fallbackEstimate ? 'Using estimated delivery charge. You can place the order now.' : 'Could not calculate delivery charge yet. Try changing location.')
         }
       })
       .finally(()=>setFeeLd(false))
@@ -2863,25 +3490,49 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
   },[currentItem, dLat, dLng, sub, orderRangeLimit, instantKm])
 
   const place = async()=>{
-    if(!currentItem){ showToast('Product missing in checkout','error'); return }
-    if(!manualAddr.trim()){ showToast('Please enter a delivery address','error'); return }
-    if(orderBlocked){ showToast(rangeError,'error'); return }
+    if(placeLockRef.current || loading) return
+    setCheckoutError('')
+    if(!currentItem){ setCheckoutError('Product missing in checkout. Please go back and try again.'); showToast('Product missing in checkout','error'); return }
+    if(!manualAddr.trim()){ setCheckoutError('Please enter a delivery address.'); showToast('Please enter a delivery address','error'); return }
+    if(dLat == null || dLng == null){ setCheckoutError('Choose a delivery location first.'); showToast('Choose a delivery location first','error'); return }
+    if(feeLd){ setCheckoutError('Delivery charge is still updating. Please tap Place Order again in a moment.'); showToast('Please wait, delivery charge is updating','info'); return }
+    if(orderBlocked){ setCheckoutError(rangeError); showToast(rangeError,'error'); return }
+    placeLockRef.current = true
     setLoading(true)
     try{
-      const r = await api.placeOrder({
-        shopId: currentItem.shopId,
-        items: (cart||[]).map(i=>({ productId:i.id, qty:i.qty, size:i.selectedSize || undefined })),
-        deliveryAddress: manualAddr,
-        deliveryLat: dLat,
-        deliveryLng: dLng,
-        paymentMethod: payment,
-        deliveryRadiusKm: orderRangeLimit
-      })
-      onSuccess(r.data)
+      const groups = groupCartByShop(cart)
+      const placed = []
+      for(const group of groups){
+        const r = await api.placeOrder({
+          shopId: group.shopId,
+          items: group.items.map(i=>({ productId:i.id, qty:i.qty, size:i.selectedSize || undefined })),
+          deliveryAddress: manualAddr,
+          deliveryLat: dLat,
+          deliveryLng: dLng,
+          paymentMethod: 'cod',
+          deliveryRadiusKm: orderRangeLimit,
+          maxRadiusKm: orderRangeLimit
+        })
+        placed.push({...r.data, shopName: group.shopName})
+      }
+      const combined = placed.length === 1 ? placed[0] : {
+        ok: true,
+        orders: placed,
+        total: placed.reduce((s,o)=>s+Number(o.total||0),0),
+        subtotal: placed.reduce((s,o)=>s+Number(o.subtotal||0),0),
+        deliveryFee: placed.reduce((s,o)=>s+Number(o.deliveryFee||0),0),
+        platformFee: placed.reduce((s,o)=>s+Number(o.platformFee||0),0),
+        gstAmount: placed.reduce((s,o)=>s+Number(o.gstAmount||0),0),
+      }
+      onSuccess(combined)
     }catch(e){
-      showToast(e.response?.data?.detail || 'Order failed. Please try again.','error')
+      const detail = e.response?.data?.detail || 'Order failed. Please try again.'
+      if(/outside|range|too far|distance/i.test(detail)) setRangeError(detail)
+      setCheckoutError(detail)
+      showToast(detail,'error')
     }finally{
       setLoading(false)
+      placeLockRef.current = false
     }
   }
 
@@ -2942,13 +3593,13 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
               </button>
               <button
                 onClick={async()=>{
-                  if(user?.lat == null || user?.lng == null) return
+                  if(savedLat == null || savedLng == null) return
                   const fallback = user?.address || 'Near your saved location'
-                  applyLocation({ lat:user.lat, lng:user.lng }, fallback)
-                  await updateAddressFromCoords({ lat:user.lat, lng:user.lng }, fallback)
+                  applyLocation({ lat:savedLat, lng:savedLng }, fallback)
+                  await updateAddressFromCoords({ lat:savedLat, lng:savedLng }, fallback)
                 }}
-                disabled={user?.lat == null || user?.lng == null}
-                style={{padding:'10px 8px',borderRadius:12,border:'1px solid #dbeafe',background:'#fff',cursor:user?.lat == null?'not-allowed':'pointer',fontSize:11,fontWeight:800,color:'#334155'}}
+                disabled={savedLat == null || savedLng == null}
+                style={{padding:'10px 8px',borderRadius:12,border:'1px solid #dbeafe',background:'#fff',cursor:savedLat == null || savedLng == null?'not-allowed':'pointer',fontSize:11,fontWeight:800,color:'#334155'}}
               >
                 Saved
               </button>
@@ -2990,6 +3641,7 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
               </div>
             )}
             {locStatus && <div style={{marginTop:8,padding:'8px 10px',borderRadius:10,background:'#eff6ff',color:'#1e3a8a',fontSize:11,border:'1px solid #bfdbfe'}}>{locStatus}</div>}
+            {checkoutNotice && !rangeError && <div style={{marginTop:8,padding:'8px 10px',borderRadius:10,background:'#eff6ff',color:'#1e3a8a',fontSize:11,border:'1px solid #bfdbfe',fontWeight:700}}>{checkoutNotice}</div>}
             {rangeError && <div style={{marginTop:8,padding:'10px 12px',borderRadius:10,background:'#fef2f2',color:'#991b1b',fontSize:11,fontWeight:700,border:'1px solid #fecaca'}}>{rangeError}</div>}
           </div>
 
@@ -2997,7 +3649,7 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
             <div style={{fontWeight:800,fontSize:13,letterSpacing:'.4px',textTransform:'uppercase',color:'#64748b',marginBottom:10}}>Payment</div>
             <div style={{display:'grid',gap:10}}>
               {paymentOptions.map(option=>(
-                <button key={option.id} onClick={()=>setPayment(option.id)} style={{textAlign:'left',padding:'13px 14px',borderRadius:16,border:`2px solid ${payment===option.id?'#4aa8ff':'#e2e8f0'}`,background:payment===option.id?'linear-gradient(180deg,#eef8ff,#ffffff)':'#fff',cursor:'pointer',boxShadow:payment===option.id?'0 10px 22px rgba(74,168,255,.10)':'none',display:'flex',alignItems:'center',gap:10}}>
+                <button key={option.id} onClick={()=>!option.disabled&&setPayment('cod')} disabled={option.disabled} style={{textAlign:'left',padding:'13px 14px',borderRadius:16,border:`2px solid ${payment===option.id?'#4aa8ff':'#e2e8f0'}`,background:payment===option.id?'linear-gradient(180deg,#eef8ff,#ffffff)':'#fff',cursor:option.disabled?'not-allowed':'pointer',opacity:option.disabled ? .55 : 1,boxShadow:payment===option.id?'0 10px 22px rgba(74,168,255,.10)':'none',display:'flex',alignItems:'center',gap:10}}>
                   <div style={{width:32,height:32,borderRadius:10,background:payment===option.id?'#dbeeff':'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',color:payment===option.id?'#2563eb':'#64748b',flexShrink:0}}>
                     {option.icon}
                   </div>
@@ -3046,10 +3698,8 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
           <div style={{padding:'18px',borderRadius:20,background:'rgba(255,255,255,.08)',marginBottom:20}}>
             {[
               ['Items total', money(sub)],
-              ['Base delivery', money(baseFee)],
-              [`Rider distance charge${km ? ` (${Number(km).toFixed(1)} km)` : ''}`, money(distanceFee)],
               ['Surge charge', money(surgeFee)],
-              ['Delivery total', money(fee)],
+              [`Delivery total${km ? ` (${Number(km).toFixed(1)} km)` : ''}`, money(fee)],
               ['Platform fee', money(platformFee)],
               ['GST', money(gstAmount)],
               ['Free delivery savings', freeDeliveryDiscount ? `- ${money(freeDeliveryDiscount)}` : 'Rs 0'],
@@ -3061,15 +3711,17 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
           <div style={{padding:'14px 16px',borderRadius:18,background:'rgba(255,255,255,.08)',marginBottom:18,border:'1px solid rgba(255,255,255,.08)'}}>
             <div style={{fontSize:11,fontWeight:800,letterSpacing:'.5px',textTransform:'uppercase',color:'rgba(255,255,255,.62)',marginBottom:8}}>Charge details</div>
             <div style={{display:'grid',gap:6,fontSize:12,color:'rgba(255,255,255,.82)',lineHeight:1.6}}>
-              <div>Base delivery covers pickup and local handoff handling.</div>
-              <div>Rider distance charge depends on the shop-to-customer distance.</div>
+              <div>Delivery total includes Rs 20 up to 1 km.</div>
+              <div>After 1 km, Rs 8 is added for each started extra km.</div>
+              <div>This order: Rs {baseFee} + Rs {distanceFee} distance = {money((baseFee || 0) + (distanceFee || 0))} before surge or discounts.</div>
               <div>Surge charge is applied only when delivery demand is high.</div>
               <div>Platform fee and GST are shown separately before payment.</div>
             </div>
           </div>
           <button onClick={place} disabled={loading || orderBlocked} style={{width:'100%',padding:'16px 18px',borderRadius:16,border:'none',background:(loading||orderBlocked)?'#94a3b8':'linear-gradient(135deg,#69bbff,#4aa8ff)',color:'#fff',fontWeight:900,fontSize:16,cursor:(loading||orderBlocked)?'not-allowed':'pointer',boxShadow:(loading||orderBlocked)?'none':'0 16px 36px rgba(74,168,255,.35)'}}>
-            {loading ? 'Placing order...' : orderBlocked ? `Outside ${orderRangeLimit} km range` : `Place Order | ${money(grand)}`}
+            {placeButtonText}
           </button>
+          {checkoutError && <div style={{marginTop:10,padding:'10px 12px',borderRadius:12,background:'#fef2f2',color:'#991b1b',fontSize:12,fontWeight:800,lineHeight:1.45,border:'1px solid #fecaca'}}>{checkoutError}</div>}
           <button onClick={onClose} style={{width:'100%',padding:'13px 18px',borderRadius:16,border:'1px solid rgba(255,255,255,.2)',background:'transparent',color:'#fff',fontWeight:800,fontSize:14,cursor:'pointer',marginTop:10}}>Back to product</button>
         </div>
         )}
@@ -3077,16 +3729,17 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
         {isNarrow&&(
           <div style={{padding:'10px 12px 14px',borderTop:'1px solid #dbeafe',background:'linear-gradient(180deg,#ffffff,#f8fbff)',display:'grid',gap:8,flexShrink:0}}>
             {orderBlocked && <div style={{fontSize:12,color:'#991b1b',padding:'8px 10px',background:'#fef2f2',borderRadius:10,border:'1px solid #fecaca'}}>{rangeError}</div>}
+            {checkoutError && !orderBlocked && <div style={{fontSize:12,color:'#991b1b',padding:'8px 10px',background:'#fef2f2',borderRadius:10,border:'1px solid #fecaca',fontWeight:800}}>{checkoutError}</div>}
             <button onClick={place} disabled={loading || orderBlocked} style={{width:'100%',padding:'14px 16px',borderRadius:14,border:'none',background:(loading||orderBlocked)?'#94a3b8':'linear-gradient(135deg,#69bbff,#4aa8ff)',color:'#fff',fontWeight:900,fontSize:16,cursor:(loading||orderBlocked)?'not-allowed':'pointer',boxShadow:(loading||orderBlocked)?'none':'0 10px 24px rgba(74,168,255,.35)'}}>
-              {loading ? 'Placing order...' : orderBlocked ? `Outside ${orderRangeLimit} km range` : `Place Order | ${money(grand)}`}
+              {placeButtonText}
             </button>
             <button onClick={onClose} style={{width:'100%',padding:'12px 14px',borderRadius:12,border:'1px solid #cbd5e1',background:'#fff',color:'#334155',fontWeight:800,fontSize:13,cursor:'pointer'}}>Back to product</button>
           </div>
         )}
         {showMap&&(
           <MapLocationModal
-            currentLat={dLat ?? user?.lat ?? 17.385}
-            currentLng={dLng ?? user?.lng ?? 78.4867}
+            currentLat={dLat ?? savedLat ?? 17.385}
+            currentLng={dLng ?? savedLng ?? 78.4867}
             radius={orderRangeLimit}
             savedAddresses={savedAddresses}
             recentLocations={recentLocationChoices}
@@ -3100,19 +3753,28 @@ function StableCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
           />
         )}
       </div>
-      {legalDoc && <LegalModal type={legalDoc} onClose={()=>setLegalDoc('')} />}
     </div>
   )
 }
 
-function EmergencyCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
+function EmergencyCheckoutModal({
+  cart,
+  user,
+  onClose,
+  onSuccess,
+  radius=15,
+  currentLocation=null,
+  currentLocationLabel='',
+}){
   const currentItem = cart?.[0] || null
-  const [address,setAddress]=useState(user?.lat ? 'Near your saved location' : '')
+  const savedLat = toFiniteNumber(currentLocation?.lat ?? user?.lat)
+  const savedLng = toFiniteNumber(currentLocation?.lng ?? user?.lng)
+  const [address,setAddress]=useState(currentLocationLabel || (savedLat != null && savedLng != null ? 'Near your saved location' : ''))
   const [payment,setPayment]=useState('cod')
   const [loading,setLoading]=useState(false)
   const [rangeError,setRangeError]=useState('')
-  const dLat = user?.lat ?? null
-  const dLng = user?.lng ?? null
+  const dLat = savedLat
+  const dLng = savedLng
   const orderRangeLimit = getOrderRangeLimit(radius)
   const subtotal = (cart||[]).reduce((s,i)=>s+(Number(i.price)||0)*(Number(i.qty)||0),0)
 
@@ -3135,8 +3797,9 @@ function EmergencyCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
         deliveryAddress: address,
         deliveryLat: dLat,
         deliveryLng: dLng,
-        paymentMethod: payment,
-        deliveryRadiusKm: orderRangeLimit
+        paymentMethod: 'cod',
+        deliveryRadiusKm: orderRangeLimit,
+        maxRadiusKm: orderRangeLimit
       })
       onSuccess(r.data)
     }catch(e){
@@ -3150,10 +3813,10 @@ function EmergencyCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
     <div style={{position:'fixed',inset:0,zIndex:700,background:'rgba(15,23,42,.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
       <div style={{background:'#fff',borderRadius:24,padding:24,maxWidth:520,width:'100%',boxShadow:'0 30px 80px rgba(0,0,0,.24)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-          <div style={{fontWeight:900,fontSize:22,color:'#0f172a'}}>Quick Checkout</div>
+          <div style={{fontWeight:900,fontSize:22,color:'#0f172a'}}>Checkout</div>
           <button onClick={onClose} style={{width:36,height:36,borderRadius:'50%',border:'1px solid #e2e8f0',background:'#fff',cursor:'pointer'}}>x</button>
         </div>
-        <div style={{fontSize:13,color:'#64748b',lineHeight:1.7,marginBottom:14}}>The app opened the simple checkout mode so you can continue the order without the white-screen issue.</div>
+        <div style={{fontSize:13,color:'#64748b',lineHeight:1.7,marginBottom:14}}>Review your item, delivery address, and payment method before placing the order.</div>
         {currentItem && (
           <div style={{padding:'14px 16px',border:'1px solid #e2e8f0',borderRadius:16,background:'#f8fafc',marginBottom:14}}>
             <div style={{fontWeight:800,fontSize:15,color:'#0f172a'}}>{currentItem.name}</div>
@@ -3162,8 +3825,12 @@ function EmergencyCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
         )}
         <textarea value={address} onChange={e=>setAddress(e.target.value)} rows={3} placeholder="Delivery address" style={{width:'100%',resize:'none',border:'1.5px solid #e2e8f0',borderRadius:14,padding:'12px 14px',fontSize:14,fontFamily:'var(--fn)',outline:'none',marginBottom:12}} />
         <div style={{display:'flex',gap:8,marginBottom:12}}>
-          {['cod','upi','card'].map(mode=>(
-            <button key={mode} onClick={()=>setPayment(mode)} style={{flex:1,padding:'11px 12px',borderRadius:12,border:`2px solid ${payment===mode?'#f97316':'#e2e8f0'}`,background:payment===mode?'#fff7ed':'#fff',cursor:'pointer',fontWeight:800,textTransform:'uppercase',fontSize:12}}>{mode}</button>
+          {[
+            {mode:'cod',disabled:false},
+            {mode:'upi',disabled:true},
+            {mode:'card',disabled:true},
+          ].map(({mode,disabled})=>(
+            <button key={mode} onClick={()=>!disabled&&setPayment('cod')} disabled={disabled} style={{flex:1,padding:'11px 12px',borderRadius:12,border:`2px solid ${payment===mode?'#f97316':'#e2e8f0'}`,background:payment===mode?'#fff7ed':'#fff',cursor:disabled?'not-allowed':'pointer',opacity:disabled ? .55 : 1,fontWeight:800,textTransform:'uppercase',fontSize:12}}>{mode}{disabled?' off':''}</button>
           ))}
         </div>
         {rangeError && <div style={{padding:'10px 12px',borderRadius:12,background:'#fef2f2',color:'#991b1b',fontSize:12,fontWeight:700,border:'1px solid #fecaca',marginBottom:12}}>{rangeError}</div>}
@@ -3179,19 +3846,63 @@ function EmergencyCheckoutModal({cart,user,onClose,onSuccess,radius=15}){
   )
 }
 
+function MinimalCheckoutFallback({cart,onClose,onHome,onPlace}){
+  const currentItem = Array.isArray(cart) ? cart[0] : null
+  const total = (Array.isArray(cart) ? cart : []).reduce((sum,item)=>sum + (Number(item?.price)||0) * Math.max(1, Number(item?.qty)||1),0)
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:710,background:'rgba(15,23,42,.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div style={{background:'#fff',borderRadius:24,padding:24,maxWidth:480,width:'100%',boxShadow:'0 30px 80px rgba(0,0,0,.24)'}}>
+        <div style={{fontWeight:900,fontSize:22,color:'#0f172a',marginBottom:8}}>Checkout could not open</div>
+        <div style={{fontSize:13,color:'#64748b',lineHeight:1.7,marginBottom:14}}>Please reopen the full checkout. Your selected item is still safe.</div>
+        {currentItem && (
+          <div style={{padding:'14px 16px',border:'1px solid #e2e8f0',borderRadius:16,background:'#f8fafc',marginBottom:14}}>
+            <div style={{fontWeight:800,fontSize:15,color:'#0f172a'}}>{currentItem.name}</div>
+            <div style={{fontSize:12,color:'#64748b',marginTop:6}}>Qty {currentItem.qty || 1} | {money(total)}</div>
+          </div>
+        )}
+        <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <button className="btn btn-out" onClick={onHome} style={{flex:1,justifyContent:'center',minWidth:140}}>Go Home</button>
+          <button className="btn btn-out" onClick={onClose} style={{flex:1,justifyContent:'center',minWidth:140}}>Back</button>
+          <button className="btn btn-or" onClick={onPlace} style={{flex:'1 1 100%',justifyContent:'center'}}>Open full checkout</button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
-// â”€â”€â”€ Cart Drawer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function CartDrawer({cart,onUpdate,onClose,user,onCheckout,minOrderShop}){
+
+// --- Cart Drawer ----------------------------------------
+function cartShopKey(item){
+  return item?.shopId != null ? `shop-${item.shopId}` : `shop-${item?.shopName || item?.shop?.name || 'unknown'}`
+}
+function cartShopName(item){
+  return item?.shopName || item?.shop?.name || 'Shop'
+}
+function groupCartByShop(items=[]){
+  return Object.values((items || []).reduce((acc,item)=>{
+    const key=cartShopKey(item)
+    if(!acc[key]) acc[key]={key,shopId:item?.shopId,shopName:cartShopName(item),items:[],subtotal:0,count:0}
+    acc[key].items.push(item)
+    acc[key].subtotal += Number(item?.price || 0) * Number(item?.qty || 0)
+    acc[key].count += Number(item?.qty || 0)
+    return acc
+  },{}))
+}
+
+function CartDrawer({cart,onUpdate,onClose,user,onCheckout,minOrderShop,pageMode=false}){
   const isNarrow = useIsNarrowLayout(640)
+  const shopGroups=groupCartByShop(cart)
   const sub=cart.reduce((s,i)=>s+i.price*i.qty,0)
   const count=cart.reduce((s,i)=>s+i.qty,0)
-  const fee=29
-  const estimatedGst=Math.round(fee*0.05)
-  const total=sub+fee+PLATFORM_FEE+estimatedGst
+  const estimatedDelivery=shopGroups.length * 20
+  const estimatedPlatform=shopGroups.length * PLATFORM_FEE
+  const estimatedGst=Math.round(estimatedDelivery*0.05)
+  const total=sub+estimatedDelivery+estimatedPlatform+estimatedGst
   const mobileFooterPad = isNarrow ? 'calc(env(safe-area-inset-bottom,0px) + 92px)' : '20px'
+  const pageFooterBottom = isNarrow ? 'calc(env(safe-area-inset-bottom,0px) + 72px)' : '18px'
 
-  const upd=(id,delta)=>onUpdate(prev=>{
-    const idx=prev.findIndex(i=>i.id===id)
+  const upd=(lineKey,delta)=>onUpdate(prev=>{
+    const idx=prev.findIndex(i=>(i._key || String(i.id))===lineKey)
     if(idx<0)return prev
     const u=[...prev]
     const nextQty = clampCartQty(u[idx].qty+delta)
@@ -3206,52 +3917,69 @@ function CartDrawer({cart,onUpdate,onClose,user,onCheckout,minOrderShop}){
 
   return(
     <>
+      {!pageMode&&(
+        <div
+          className="cart-overlay"
+          onClick={onClose}
+          style={{
+            position:'fixed',
+            inset:0,
+            background:'rgba(0,0,0,.55)',
+            zIndex:isNarrow ? 320 : 500,
+            animation:'fadeIn .2s ease',
+            backdropFilter:'blur(4px)'
+          }}
+        />
+      )}
       <div
-        className="cart-overlay"
-        onClick={onClose}
+        className={pageMode ? 'cart-page' : 'cart-drawer'}
         style={{
-          position:'fixed',
-          inset:0,
-          background:'rgba(0,0,0,.55)',
-          zIndex:isNarrow ? 320 : 500,
-          animation:'fadeIn .2s ease',
-          backdropFilter:'blur(4px)'
-        }}
-      />
-      <div
-        className="cart-drawer"
-        style={{
-          position:'fixed',
-          right:0,
-          top:0,
-          bottom:0,
-          width:'min(420px,100vw)',
-          background:'#fff',
-          zIndex:isNarrow ? 330 : 501,
+          position:pageMode ? 'relative' : 'fixed',
+          right:pageMode ? 'auto' : (isNarrow ? 10 : 0),
+          left:pageMode ? 'auto' : (isNarrow ? 10 : 'auto'),
+          top:pageMode ? 'auto' : (isNarrow ? 76 : 0),
+          bottom:pageMode ? 'auto' : (isNarrow ? 'calc(env(safe-area-inset-bottom,0px) + 82px)' : 0),
+          width:pageMode ? 'min(980px,calc(100% - 28px))' : (isNarrow ? 'auto' : 'min(460px,100vw)'),
+          minHeight:pageMode ? 'calc(100vh - 28px)' : 'auto',
+          margin:pageMode ? '14px auto 90px' : 0,
+          background:'linear-gradient(180deg,#f7fbff 0%,#ffffff 36%,#f8fbff 100%)',
+          zIndex:pageMode ? 1 : (isNarrow ? 330 : 501),
           display:'flex',
           flexDirection:'column',
-          animation:'slideRight .3s cubic-bezier(.22,1,.36,1)',
-          boxShadow:isNarrow ? '0 10px 26px rgba(35,135,232,.22)' : '-8px 0 48px rgba(0,0,0,.15)',
-          borderRadius:isNarrow ? '18px 18px 0 0' : 0
+          animation:pageMode ? 'fadeUp .25s ease' : 'slideRight .3s cubic-bezier(.22,1,.36,1)',
+          boxShadow:pageMode ? '0 18px 48px rgba(35,135,232,.12)' : (isNarrow ? '0 10px 26px rgba(35,135,232,.22)' : '-8px 0 48px rgba(0,0,0,.15)'),
+          borderRadius:pageMode ? 28 : (isNarrow ? 28 : '28px 0 0 28px'),
+          overflow:pageMode ? 'visible' : 'hidden',
+          border:'1px solid #dbeafe'
         }}
       >
 
         {/* Header */}
-        <div style={{padding:'20px 22px',borderBottom:'1px solid #f1f5f9',display:'flex',alignItems:'center',justifyContent:'space-between',background:'#fff'}}>
+        <div style={{padding:'20px 22px',borderBottom:'1px solid #dbeafe',display:'flex',alignItems:'center',justifyContent:'space-between',background:'linear-gradient(135deg,#eaf6ff,#ffffff)'}}>
           <div>
             <div style={{fontWeight:900,fontSize:20,color:'#0f172a',letterSpacing:'-.4px',display:'flex',alignItems:'center',gap:8}}>
-              <Ic.Cart width={22} height={22} stroke="#4aa8ff"/> Cart Summary
+              <Ic.Cart width={22} height={22} stroke="#4aa8ff"/> Your Cart
             </div>
-            <div style={{fontSize:13,color:'#64748b',marginTop:1}}>{count} item{count!==1?'s':''} ready for checkout</div>
+            <div style={{fontSize:13,color:'#64748b',marginTop:1}}>{count} item{count!==1?'s':''} from {shopGroups.length} shop{shopGroups.length!==1?'s':''}</div>
           </div>
           <button onClick={onClose} style={{width:38,height:38,borderRadius:'50%',background:'#f1f5f9',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',transition:'.2s'}}
             onMouseEnter={e=>e.currentTarget.style.background='#e2e8f0'} onMouseLeave={e=>e.currentTarget.style.background='#f1f5f9'}>
-            <Ic.X width={17} height={17} stroke="#475569"/>
+            {pageMode ? <Ic.ChevL width={17} height={17} stroke="#475569"/> : <Ic.X width={17} height={17} stroke="#475569"/>}
           </button>
         </div>
+        {cart.length>0&&(
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,padding:'12px 16px',background:'rgba(255,255,255,.78)',borderBottom:'1px solid #eaf3ff'}}>
+            {[['Shops',shopGroups.length],['Items',count],['Value',`Rs ${sub}`]].map(([k,v])=>(
+              <div key={k} style={{padding:'10px 8px',borderRadius:16,background:'#fff',border:'1px solid #dbeafe',textAlign:'center',boxShadow:'0 8px 18px rgba(35,135,232,.05)'}}>
+                <div style={{fontSize:10,fontWeight:900,textTransform:'uppercase',letterSpacing:'.4px',color:'#64748b'}}>{k}</div>
+                <div style={{fontSize:15,fontWeight:900,color:'#0f172a',marginTop:3}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Items */}
-        <div style={{flex:1,overflowY:'auto',padding:'16px 22px'}}>
+        <div style={{flex:1,overflowY:pageMode?'visible':'auto',padding:isNarrow?'14px 12px':'16px 18px',paddingBottom:pageMode?(isNarrow?260:230):undefined}}>
           {cart.length===0?(
             <div style={{textAlign:'center',padding:'60px 20px',color:'#94a3b8'}}>
               <div style={{width:72,height:72,borderRadius:20,background:'#f8fafc',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px'}}>
@@ -3267,38 +3995,62 @@ function CartDrawer({cart,onUpdate,onClose,user,onCheckout,minOrderShop}){
                 Back to shopping
               </button>
             </div>
-          ):cart.map((item,i)=>(
-            <div key={item.id} style={{display:'flex',gap:14,padding:'14px 0',borderBottom:i<cart.length-1?'1px solid #f8fafc':'none',animation:'fadeUp .3s ease',animationDelay:`${i*0.04}s`}}>
-              {item.imageUrl?
-                <img src={item.imageUrl} alt={item.name} style={{width:76,height:76,borderRadius:14,objectFit:'cover',border:'1px solid #f1f5f9',flexShrink:0}}/>:
-                <div style={{width:76,height:76,borderRadius:14,background:'#f8fafc',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',border:'1px solid #f1f5f9'}}><Ic.Shop width={28} height={28} stroke="#e2e8f0"/></div>}
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:14,fontWeight:700,lineHeight:1.35,marginBottom:3,color:'#0f172a',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{item.name}</div>
-                {item.selectedSize&&<div style={{fontSize:11,color:'#64748b',marginBottom:4}}>Size: {item.selectedSize}</div>}
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:6}}>
-                  <div style={{fontWeight:900,fontSize:16,color:'#4aa8ff'}}>Rs {item.price*item.qty}</div>
-                  <div style={{display:'flex',alignItems:'center',gap:0,border:'1.5px solid #4aa8ff',borderRadius:10,overflow:'hidden'}}>
-                    <button onClick={()=>upd(item.id,-1)} style={{width:32,height:32,background:'#eef7ff',border:'none',cursor:'pointer',fontSize:17,fontWeight:800,color:'#4aa8ff',display:'flex',alignItems:'center',justifyContent:'center',transition:'.15s'}}
-                      onMouseEnter={e=>e.currentTarget.style.background='#dff1ff'} onMouseLeave={e=>e.currentTarget.style.background='#eef7ff'}>
-                      <Ic.Minus width={14} height={14} stroke="#4aa8ff"/>
-                    </button>
-                    <span style={{width:32,textAlign:'center',fontWeight:800,fontSize:14,color:'#4aa8ff'}}>{item.qty}</span>
-                    <button onClick={()=>upd(item.id,1)} style={{width:32,height:32,background:'#eef7ff',border:'none',cursor:'pointer',fontSize:17,fontWeight:800,color:'#4aa8ff',display:'flex',alignItems:'center',justifyContent:'center',transition:'.15s'}}
-                      onMouseEnter={e=>e.currentTarget.style.background='#dff1ff'} onMouseLeave={e=>e.currentTarget.style.background='#eef7ff'}>
-                      <Ic.Plus width={14} height={14} stroke="#4aa8ff"/>
-                    </button>
+          ):shopGroups.map((group,gi)=>(
+            <div key={group.key} style={{border:'1px solid #dbeafe',borderRadius:22,background:'linear-gradient(180deg,#ffffff,#f6fbff)',padding:14,marginBottom:14,boxShadow:'0 14px 30px rgba(35,135,232,.07)',animation:'fadeUp .3s ease',animationDelay:`${gi*0.04}s`}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:10}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:900,fontSize:15,color:'#0f172a',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{group.shopName}</div>
+                  <div style={{fontSize:11,color:'#64748b',marginTop:2}}>{group.count} item{group.count!==1?'s':''} | Separate vendor order</div>
+                </div>
+                <div style={{padding:'6px 10px',borderRadius:999,background:'#eff6ff',color:'#1d4ed8',fontSize:11,fontWeight:900}}>Rs {group.subtotal}</div>
+              </div>
+              {group.items.map((item,i)=>(
+                <div key={item._key || `${item.id}-${i}`} style={{display:'flex',gap:12,padding:'12px 0',borderTop:i?'1px solid #eef6ff':'none'}}>
+                  {item.imageUrl?
+                    <img src={item.imageUrl} alt={item.name} style={{width:70,height:70,borderRadius:16,objectFit:'cover',border:'1px solid #dbeafe',flexShrink:0}}/>:
+                    <div style={{width:70,height:70,borderRadius:16,background:'#eff6ff',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',border:'1px solid #dbeafe'}}><Ic.Shop width={26} height={26} stroke="#93c5fd"/></div>}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:14,fontWeight:800,lineHeight:1.35,marginBottom:4,color:'#0f172a',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{item.name}</div>
+                    <div style={{fontSize:11,color:'#64748b',display:'flex',gap:6,flexWrap:'wrap'}}>
+                      {item.selectedSize&&<span>Size {item.selectedSize}</span>}
+                      {item.selectedColor&&<span>{item.selectedColor}</span>}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginTop:8}}>
+                      <div style={{fontWeight:900,fontSize:16,color:'#4aa8ff'}}>Rs {item.price*item.qty}</div>
+                      <div style={{display:'flex',alignItems:'center',gap:0,border:'1.5px solid #4aa8ff',borderRadius:12,overflow:'hidden',background:'#fff'}}>
+                        <button onClick={()=>upd(item._key || String(item.id),-1)} style={{width:32,height:32,background:'#eef7ff',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic.Minus width={14} height={14} stroke="#4aa8ff"/></button>
+                        <span style={{width:32,textAlign:'center',fontWeight:900,fontSize:14,color:'#2563eb'}}>{item.qty}</span>
+                        <button onClick={()=>upd(item._key || String(item.id),1)} style={{width:32,height:32,background:'#eef7ff',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic.Plus width={14} height={14} stroke="#4aa8ff"/></button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ))}
             </div>
           ))}
         </div>
 
         {/* Footer */}
         {cart.length>0&&(
-          <div style={{padding:`20px 22px ${mobileFooterPad}`,borderTop:'1px solid #f1f5f9',background:'#fafafa'}}>
+          <div style={{
+            padding:`18px 18px ${pageMode ? '16px' : mobileFooterPad}`,
+            borderTop:'1px solid #dbeafe',
+            background:'rgba(255,255,255,.96)',
+            boxShadow:'0 -16px 34px rgba(35,135,232,.08)',
+            ...(pageMode ? {
+              position:'fixed',
+              left:'50%',
+              bottom:pageFooterBottom,
+              transform:'translateX(-50%)',
+              width:'min(980px,calc(100% - 28px))',
+              zIndex:305,
+              border:'1px solid #dbeafe',
+              borderRadius:'22px 22px 0 0',
+              backdropFilter:'blur(16px)'
+            } : {})
+          }}>
             <div style={{marginBottom:14}}>
-              {[{k:'Items total',v:`Rs ${sub}`},{k:'Delivery',v:`Rs ${fee}`},{k:'Platform fee',v:`Rs ${PLATFORM_FEE}`}].map(({k,v})=>(
+              {[{k:'Items total',v:`Rs ${sub}`},{k:`Estimated delivery (${shopGroups.length} order${shopGroups.length!==1?'s':''})`,v:`Rs ${estimatedDelivery}`},{k:'Platform fee',v:`Rs ${estimatedPlatform}`}].map(({k,v})=>(
                 <div key={k} style={{display:'flex',justifyContent:'space-between',marginBottom:5,fontSize:13}}>
                 <span style={{color:'#64748b'}}>{k}</span>
                   <span style={{fontWeight:700}}>{v}</span>
@@ -3309,7 +4061,8 @@ function CartDrawer({cart,onUpdate,onClose,user,onCheckout,minOrderShop}){
                 <span style={{color:'#4aa8ff'}}>Rs {total}</span>
               </div>
             </div>
-            <button onClick={()=>{onClose();onCheckout()}} style={{width:'100%',padding:'15px',background:'linear-gradient(135deg,#69bbff,#4aa8ff)',color:'#fff',border:'none',borderRadius:14,fontWeight:900,fontSize:16,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:10,boxShadow:'0 6px 22px rgba(74,168,255,.35)',transition:'all .2s'}}
+            {shopGroups.length>1&&<div style={{fontSize:11,color:'#64748b',lineHeight:1.5,marginBottom:10}}>Different shop products will be placed as separate orders, so each vendor and rider gets the correct details.</div>}
+            <button onClick={()=>{if(!pageMode) onClose();onCheckout()}} style={{width:'100%',padding:'15px',background:'linear-gradient(135deg,#69bbff,#4aa8ff)',color:'#fff',border:'none',borderRadius:14,fontWeight:900,fontSize:16,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:10,boxShadow:'0 6px 22px rgba(74,168,255,.35)',transition:'all .2s'}}
               onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-1px)';e.currentTarget.style.boxShadow='0 10px 32px rgba(74,168,255,.45)'}}
               onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 6px 22px rgba(74,168,255,.35)'}}>
               <Ic.Check width={18} height={18}/> Continue to payment
@@ -3333,6 +4086,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
   const[rating,setRating]=useState(0)
   const[hover,setHover]=useState(0)
   const[comment,setComment]=useState('')
+  const[reviewImages,setReviewImages]=useState([])
   const[submitting,setSubmitting]=useState(false)
   const[eligibleOrders,setEligibleOrders]=useState([])
   const[relatedProducts,setRelatedProducts]=useState([])
@@ -3340,6 +4094,8 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
   const[showAllRelated,setShowAllRelated]=useState(false)
   const[zoomOpen,setZoomOpen]=useState(false)
   const[showReturnRules,setShowReturnRules]=useState(false)
+  const[showTopActions,setShowTopActions]=useState(false)
+  const[topSection,setTopSection]=useState('details')
   const colors=Array.isArray(product.colors)?product.colors:[]
   const sizesList=normalizeProductSizes(product)
   const requiresSize=sizesList.length>0
@@ -3354,15 +4110,54 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
     setRating(0)
     setHover(0)
     setComment('')
+    setReviewImages([])
     setEligibleOrders([])
     setRelatedProducts([])
     setSelSize(null)
     setShowAllRelated(false)
     setZoomOpen(false)
     setShowReturnRules(false)
+    setShowTopActions(false)
+    setTopSection('details')
     setSelColorIdx((Array.isArray(init.colors)&&init.colors.length>0)?0:null)
     setActiveImg(displayProductImage(init)||null)
   },[init, shopProp])
+
+  useEffect(()=>{
+    if(typeof window==='undefined') return
+    window.scrollTo({top:0,left:0,behavior:'auto'})
+    let ticking = false
+    const onScroll=()=>{
+      if(ticking) return
+      ticking = true
+      window.requestAnimationFrame(()=>{
+        const pageTop = document.querySelector('.pd-page')?.getBoundingClientRect?.().top ?? 0
+        const galleryTop = document.getElementById('product-gallery')?.getBoundingClientRect?.().top ?? 0
+        const scrollTop = window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0
+        setShowTopActions(scrollTop > 160 || pageTop < -120 || galleryTop < -160)
+        const anchor = Math.min(240, Math.max(110, window.innerHeight * 0.28))
+        const sections = [
+          ['explore', document.getElementById('related-products')],
+          ['reviews', document.getElementById('product-reviews-section')],
+          ['details', document.getElementById('product-details-section')],
+        ]
+        const current = sections.find(([,el])=>{
+          if(!el) return false
+          const rect = el.getBoundingClientRect()
+          return rect.top <= anchor && rect.bottom > anchor
+        })
+        if(current) setTopSection(current[0])
+        ticking = false
+      })
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive:true })
+    document.addEventListener('scroll', onScroll, { passive:true, capture:true })
+    return()=>{
+      window.removeEventListener('scroll', onScroll)
+      document.removeEventListener('scroll', onScroll, { capture:true })
+    }
+  },[product?.id])
 
   useEffect(()=>{
     if(selColorIdx!==null&&colors[selColorIdx]?.imageUrl) setActiveImg(colors[selColorIdx].imageUrl)
@@ -3371,7 +4166,12 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
 
   useEffect(()=>{
     api.getProductReviews(product.id).then(r=>setReviews(r.data)).catch(()=>{})
-    if(user) api.myOrders().then(r=>setEligibleOrders(r.data.filter(o=>o.status==='DELIVERED'&&!o.isReviewed&&o.shop?.id===product.shopId))).catch(()=>{})
+    if(user) api.myOrders().then(r=>setEligibleOrders(r.data.filter(o=>
+      o.status==='DELIVERED' &&
+      !o.isReviewed &&
+      Array.isArray(o.items) &&
+      o.items.some(item=>Number(item.productId)===Number(product.id))
+    ))).catch(()=>{})
     // Load shop if not passed as prop
     if(!shopProp&&product.shopId){
       api.getShops({}).then(r=>{
@@ -3393,7 +4193,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             fuzzyProductScore(p, product.name||product.category||'')
         }))
         .sort((a,b)=>b._nearScore-a._nearScore)
-        .slice(0,12)
+        .slice(0,36)
       setRelatedProducts(ranked)
     }).catch(()=>{
       const ranked=[]
@@ -3408,29 +4208,83 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             fuzzyProductScore(p, product.name||product.category||'')
         }))
         .sort((a,b)=>b._nearScore-a._nearScore)
-        .slice(0,12)
+        .slice(0,36)
       setRelatedProducts(ranked)
     })
   },[product.id, userLoc?.lat, userLoc?.lng, radius, shop?.name, user, shopProp])
 
   const selColor=selColorIdx!==null?colors[selColorIdx]:null
   const shopDistanceKm=getShopDistanceKm(shop,userLoc)
+  const productDistanceKm=getOrderDistanceKm(product,userLoc) ?? shopDistanceKm
+  const orderRangeLimit=getOrderRangeLimit(radius)
+  const shopOrderable = isShopOrderable(shop)
+  const[deliveryPreview,setDeliveryPreview]=useState(null)
+  const[deliveryPreviewLoading,setDeliveryPreviewLoading]=useState(false)
+  const[deliveryPreviewError,setDeliveryPreviewError]=useState('')
+  const[buyNotice,setBuyNotice]=useState('')
   const cartKey=`${product.id}${selColor?'__'+selColor.name:''}${selSize?'__'+selSize:''}`
   const qty=cart.find(i=>i._key===cartKey)?.qty||cart.find(i=>i.id===product.id)?.qty||0
   const scrollToSizeSection=()=>{
     document.getElementById('product-size-section')?.scrollIntoView({behavior:'smooth',block:'center'})
   }
 
+  useEffect(()=>{
+    setBuyNotice('')
+  },[product.id, selSize, selColorIdx])
+
+  useEffect(()=>{
+    const subtotal = Number(product.price || 0)
+    const fallbackEstimate = productDistanceKm != null ? buildLocalPricingEstimate(subtotal, productDistanceKm) : null
+    setDeliveryPreviewError('')
+    setDeliveryPreview(fallbackEstimate)
+    if(!product.shopId || userLoc?.lat == null || userLoc?.lng == null){
+      setDeliveryPreviewLoading(false)
+      if(!fallbackEstimate) setDeliveryPreviewError('Set your delivery location to see distance and charges.')
+      return
+    }
+    let cancelled = false
+    setDeliveryPreviewLoading(true)
+    api.pricingPreview(product.shopId, subtotal, userLoc.lat, userLoc.lng, null, orderRangeLimit)
+      .then(r=>{
+        if(cancelled) return
+        setDeliveryPreview({
+          ...r.data,
+          km: r.data?.km ?? r.data?.deliveryKm ?? productDistanceKm,
+        })
+        setDeliveryPreviewError('')
+      })
+      .catch(e=>{
+        if(cancelled) return
+        const detail = e.response?.data?.detail || ''
+        const isRangeError = /outside|range|too far|distance/i.test(detail)
+        setDeliveryPreview(fallbackEstimate)
+        setDeliveryPreviewError(isRangeError ? (detail || `This shop is outside your ${orderRangeLimit} km local delivery range.`) : '')
+      })
+      .finally(()=>{ if(!cancelled) setDeliveryPreviewLoading(false) })
+    return()=>{ cancelled = true }
+  },[product.id, product.shopId, product.price, productDistanceKm, userLoc?.lat, userLoc?.lng, orderRangeLimit])
+
+  const deliveryKm = deliveryPreview?.km ?? deliveryPreview?.deliveryKm ?? productDistanceKm
+  const deliveryFee = deliveryPreview?.deliveryFee
+  const productTotalEstimate = deliveryPreview?.total ?? (
+    Number(product.price || 0) +
+    Number(deliveryFee || 0) +
+    Number(deliveryPreview?.platformFee ?? PLATFORM_FEE) +
+    Number(deliveryPreview?.gstAmount || 0)
+  )
+  const rangeBlocked = !!(userLoc && !canOrderProduct(product,userLoc,radius))
+  const deliveryBlockMessage = rangeBlocked
+    ? 'This product is outside your current delivery range.'
+    : deliveryPreviewError
+
   const add=()=>{
+    if(!shopOrderable){
+      showToast('This shop is closed right now','error')
+      return
+    }
     if(requiresSize&&!selSize){
       scrollToSizeSection()
       showToast('Pick a size first','error')
-      return
-    }
-    // Check different shop
-    const cartShopId=cart.length>0?cart[0].shopId:null
-    if(cartShopId && product.shopId && cartShopId!==product.shopId){
-      showToast('Clear your cart first - different shop','error')
       return
     }
     onCartUpdate(prev=>{
@@ -3455,12 +4309,32 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
   }
 
   const buyNow=()=>{
+    setBuyNotice('')
+    if(!shopOrderable){
+      setBuyNotice('This shop is closed right now.')
+      showToast('This shop is closed right now','error')
+      return
+    }
     if(requiresSize&&!selSize){
       scrollToSizeSection()
+      setBuyNotice('Please pick a size to continue.')
       showToast('Pick a size first','error')
       return
     }
     const immediateItem={...product,_key:cartKey,selectedSize:selSize,selectedColor:selColor?.name,selectedColorHex:selColor?.hex,imageUrl:activeImg||displayProductImage(product),qty:1}
+    if(!user){
+      setBuyNotice('Sign in to continue checkout. We will bring you back to this product.')
+      showToast('Sign in to continue checkout','info')
+      onBuyNow&&onBuyNow(immediateItem)
+      return
+    }
+    if(!canOrderProduct(immediateItem,userLoc,radius)){
+      const msg = 'This product is outside your current delivery range.'
+      setBuyNotice(msg)
+      showToast(msg,'error')
+      return
+    }
+    setBuyNotice('Opening checkout...')
     onBuyNow&&onBuyNow(immediateItem)
   }
 
@@ -3469,9 +4343,16 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
     if(!eligibleOrders.length){showToast('No eligible order','error');return}
     setSubmitting(true)
     try{
-      await api.addReview({productId:product.id,orderId:eligibleOrders[0].id,rating,comment})
-      showToast('Review submitted successfully','success');setRating(0);setComment('')
+      const uploadedImages = []
+      for(const file of reviewImages){
+        const r = await api.uploadImage(file)
+        if(r.data?.url) uploadedImages.push(r.data.url)
+      }
+      await api.addReview({productId:product.id,orderId:eligibleOrders[0].id,rating,comment,images:uploadedImages})
+      showToast('Review submitted successfully','success');setRating(0);setComment('');setReviewImages([])
       const r=await api.getProductReviews(product.id);setReviews(r.data)
+      setEligibleOrders([])
+      setTab('reviews')
     }catch(e){showToast(e.response?.data?.detail||'Failed','error')}
     setSubmitting(false)
   }
@@ -3479,14 +4360,19 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
   const disc=product.mrp&&product.mrp>product.price?Math.round((1-product.price/product.mrp)*100):null
   const openZoom=()=>setZoomOpen(true)
   const closeZoom=()=>setZoomOpen(false)
-  const scrollToRelated=()=>document.getElementById('related-products')?.scrollIntoView({behavior:'smooth',block:'start'})
+  const scrollToRelated=()=>{
+    setTopSection('explore')
+    document.getElementById('related-products')?.scrollIntoView({behavior:'smooth',block:'start'})
+  }
   const scrollToGallery=()=>document.getElementById('product-gallery')?.scrollIntoView({behavior:'smooth',block:'center'})
   const scrollToProductSection=()=>{
     setTab('details')
+    setTopSection('details')
     document.getElementById('product-info-tabs')?.scrollIntoView({behavior:'smooth',block:'start'})
   }
   const scrollToReviewsSection=()=>{
     setTab('reviews')
+    setTopSection('reviews')
     document.getElementById('product-info-tabs')?.scrollIntoView({behavior:'smooth',block:'start'})
   }
   const openNearbyProduct=(p)=>{
@@ -3494,6 +4380,64 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
     onProductClick&&onProductClick(p)
     window.scrollTo({top:0,behavior:'smooth'})
   }
+  const relatedGroups = (() => {
+    const source = Array.isArray(relatedProducts) ? relatedProducts : []
+    const used = new Set()
+    const take = (label, subtitle, matcher, limit=8) => {
+      const items = source.filter(p=>!used.has(p.id) && matcher(p)).slice(0, limit)
+      items.forEach(p=>used.add(p.id))
+      return items.length ? { label, subtitle, items } : null
+    }
+    const sameShop = take(
+      shop?.name ? `More from ${shop.name}` : 'More from this shop',
+      'Keep browsing this seller for matching colours, sizes, and delivery speed.',
+      p=>p.shopId===product.shopId || (shop?.name && (p.shopName||'').toLowerCase()===shop.name.toLowerCase()),
+      showAllRelated ? 10 : 6
+    )
+    const similarStyle = take(
+      `${product.category || 'Similar'} styles`,
+      'Products with close category, name, or style match.',
+      p=>(p.category||'').toLowerCase()===(product.category||'').toLowerCase() || fuzzyProductScore(p, product.name||product.category||'') > 0.28,
+      showAllRelated ? 12 : 8
+    )
+    const nearby = take(
+      'Nearby picks',
+      'Fast local options from shops around your delivery area.',
+      p=>typeof p.distanceKm==='number',
+      showAllRelated ? 10 : 6
+    )
+    const budget = take(
+      'Best value alternatives',
+      'Lower or close-price products customers can compare quickly.',
+      p=>Number(p.price||0) <= Number(product.price||0) * 1.2,
+      showAllRelated ? 8 : 4
+    )
+    const remaining = source.filter(p=>!used.has(p.id)).slice(0, showAllRelated ? 12 : 6)
+    return [sameShop, similarStyle, nearby, budget, remaining.length ? {
+      label: 'More to explore',
+      subtitle: 'Extra product suggestions to keep discovery moving.',
+      items: remaining
+    } : null].filter(Boolean)
+  })()
+  const renderExploreProduct = (p, variant='grid') => (
+    <div key={p.id} className={`pd-explore-card${variant==='rail'?' rail':''}`} onClick={()=>openNearbyProduct(p)} style={{cursor:'pointer',border:'1px solid rgba(215,228,240,.95)',borderRadius:18,overflow:'hidden',background:'#fff',boxShadow:'0 12px 24px rgba(56,73,89,.06)',minWidth:variant==='rail'?150:0}}>
+      <div style={{aspectRatio:'1 / .9',background:'#f8fafc',position:'relative',overflow:'hidden'}}>
+        {p.imageUrl&&<img src={p.imageUrl} alt={p.name} style={{width:'100%',height:'100%',objectFit:'cover',transition:'transform .25s ease'}}/>}
+        {typeof p.distanceKm==='number'&&<span style={{position:'absolute',left:8,bottom:8,padding:'5px 8px',borderRadius:999,background:'rgba(15,23,42,.72)',color:'#fff',fontSize:10,fontWeight:800}}>{p.distanceKm.toFixed(1)} km</span>}
+      </div>
+      <div style={{padding:10}}>
+        <div style={{fontWeight:900,fontSize:12,color:'#0f172a',lineHeight:1.35,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{p.name}</div>
+        <div style={{fontSize:11,color:'var(--mu)',marginTop:5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.shopName||shop?.name||'Nearby shop'}</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginTop:8}}>
+          <div>
+            <div style={{fontWeight:900,fontSize:14,color:'var(--or)'}}>Rs {p.price}</div>
+            {p.mrp&&p.mrp>p.price&&<div style={{fontSize:10,color:'var(--mu)',textDecoration:'line-through'}}>Rs {p.mrp}</div>}
+          </div>
+          <button onClick={e=>{e.stopPropagation();openNearbyProduct(p)}} style={{border:'none',borderRadius:999,padding:'7px 10px',background:'var(--nv-grad)',color:'#fff',fontSize:10,fontWeight:900,cursor:'pointer'}}>View</button>
+        </div>
+      </div>
+    </div>
+  )
 
   return(
     <div className="pd-page">
@@ -3508,14 +4452,14 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
       )}
 
       {/* Back nav */}
-      <div className="pd-topbar" style={{padding:'12px 0'}}>
+      {showTopActions&&<div className="pd-topbar" style={{padding:'12px 0'}}>
         <div className="wrap">
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:8}}>
             {[
               {key:'back',label:'Back',onClick:onBack,active:false},
-              {key:'details',label:'Details',onClick:scrollToProductSection,active:tab==='details'},
-              {key:'reviews',label:'Reviews',onClick:scrollToReviewsSection,active:tab==='reviews'},
-              {key:'explore',label:'Explore',onClick:scrollToRelated,active:false},
+              {key:'details',label:'Details',onClick:scrollToProductSection,active:topSection==='details'},
+              {key:'reviews',label:'Reviews',onClick:scrollToReviewsSection,active:topSection==='reviews'},
+              {key:'explore',label:'Explore',onClick:scrollToRelated,active:topSection==='explore'},
             ].map(item=>(
               <button
                 key={item.key}
@@ -3538,11 +4482,15 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             ))}
           </div>
         </div>
-      </div>
+      </div>}
 
       <div className="wrap" style={{paddingTop:20,paddingBottom:132}}>
+        <div className="pd-mobile-hero-title">
+          <div className="pd-mobile-hero-kicker">{product.category || 'Fashion'}{product.brand ? ` | ${product.brand}` : ''}</div>
+          <div className="pd-mobile-hero-name">{product.name}</div>
+        </div>
         <div className="pd-grid">
-          {/* â”€â”€ IMAGE COLUMN â”€â”€ */}
+          {/* -- IMAGE COLUMN -- */}
           <div className="pd-imgs-col">
             {/* Main image */}
             <div className="pd-main-card" id="product-gallery">
@@ -3602,7 +4550,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
 
           </div>
 
-          {/* â”€â”€ INFO COLUMN â”€â”€ */}
+          {/* -- INFO COLUMN -- */}
           <div className="pd-info-col">
             {/* Brand + title */}
             <div className="pd-section-box">
@@ -3621,12 +4569,17 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                   <span style={{color:'var(--mu)',fontSize:14}}>&gt;</span>
                 </div>
               )}
+              {shop && !shopOrderable && (
+                <div style={{marginBottom:14,padding:'12px 14px',borderRadius:16,background:'#fff1f2',border:'1px solid rgba(244,114,182,.22)',color:'#9f1239',fontSize:13,fontWeight:700}}>
+                  This shop is closed now, so checkout and add-to-cart are disabled for this product.
+                </div>
+              )}
 
               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
                 <span style={{display:'inline-flex',alignItems:'center',padding:'7px 12px',borderRadius:999,background:'var(--orl)',color:'var(--nv)',fontSize:11,fontWeight:800,letterSpacing:'.24px',textTransform:'uppercase'}}>{product.category||'Fashion'}</span>
                 {product.brand&&<span style={{display:'inline-flex',alignItems:'center',padding:'7px 12px',borderRadius:999,background:'rgba(255,255,255,.72)',border:'1px solid rgba(215,228,240,.95)',color:'var(--mu)',fontSize:11,fontWeight:800,letterSpacing:'.24px',textTransform:'uppercase'}}>{product.brand}</span>}
               </div>
-              <div className="pd-name" style={{marginBottom:12}}>{product.name}</div>
+              <div className="pd-name pd-desktop-name" style={{marginBottom:12}}>{product.name}</div>
 
               {/* Rating row */}
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
@@ -3641,10 +4594,24 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                 {product.mrp&&product.mrp>product.price&&<span style={{fontSize:16,color:'var(--mu)',textDecoration:'line-through'}}>Rs {product.mrp}</span>}
                 {disc>0&&<span style={{background:'#eef8ff',color:'var(--nv)',fontSize:12,fontWeight:800,padding:'6px 11px',borderRadius:999,border:'1px solid rgba(189,221,252,.9)'}}>{disc}% off</span>}
               </div>
-              <div style={{padding:'12px 14px',borderRadius:18,background:'linear-gradient(135deg,#eaf6ff,#ffffff)',border:'1px solid var(--br)',marginBottom:16}}>
-                <div style={{fontSize:12,fontWeight:800,color:'var(--nv)',marginBottom:4}}>Apply offers for maximum savings</div>
-                <div style={{fontSize:12,color:'var(--mu)',lineHeight:1.6}}>Bank offers, cashback, and seller discounts appear here in a simpler mobile card.</div>
+              <div className="pd-offer-card" style={{padding:'10px 12px',borderRadius:16,background:'linear-gradient(135deg,#eaf6ff,#ffffff)',border:'1px solid var(--br)',marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:800,color:'var(--nv)',marginBottom:3}}>Apply offers for maximum savings</div>
+                <div style={{fontSize:11,color:'var(--mu)',lineHeight:1.45}}>Bank offers, cashback, and seller discounts appear here in a simpler mobile card.</div>
               </div>
+
+              {deliveryBlockMessage&&(
+              <div className="pd-delivery-preview" style={{padding:'12px 14px',borderRadius:18,background:'#fff7ed',border:'1px solid #fed7aa',marginBottom:12,display:'grid',gap:10}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:11,fontWeight:900,color:'var(--nv)',textTransform:'uppercase',letterSpacing:'.35px'}}>Delivery note</div>
+                    <div style={{fontSize:11,color:'var(--mu)',marginTop:3,lineHeight:1.35}}>
+                      {deliveryBlockMessage}
+                    </div>
+                  </div>
+                  {rangeBlocked&&<span style={{padding:'5px 8px',borderRadius:999,background:'#fef2f2',color:'#991b1b',fontSize:10,fontWeight:900,whiteSpace:'nowrap'}}>Out of range</span>}
+                </div>
+              </div>
+              )}
 
               {/* Trust chips */}
               <div className="pd-trust-row">
@@ -3695,7 +4662,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             )}
 
             {/* Add to cart */}
-            <div className="pd-section-box" style={{boxShadow:'0 18px 36px rgba(56,73,89,.1)'}}>
+            <div className="pd-section-box pd-buy-panel" style={{boxShadow:'0 18px 36px rgba(56,73,89,.1)'}}>
               {qty>0?(
                 <div style={{display:'flex',alignItems:'center',gap:14,background:'var(--orl)',borderRadius:'20px',padding:'14px 16px',border:'1.5px solid var(--orm)',boxShadow:'inset 0 1px 0 rgba(255,255,255,.7)'}}>
                   <button onClick={rem} style={{width:40,height:40,borderRadius:10,border:'2px solid var(--or)',background:'#fff',color:'var(--or)',fontSize:22,cursor:'pointer',fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center'}}>-</button>
@@ -3719,11 +4686,16 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                   )}
                 </div>
               )}
+              {(buyNotice || deliveryBlockMessage)&&(
+                <div style={{marginTop:10,padding:'10px 12px',borderRadius:14,background:buyNotice==='Opening checkout...'?'#eff6ff':'#fff7ed',border:'1px solid rgba(251,146,60,.35)',color:buyNotice==='Opening checkout...'?'#1d4ed8':'#9a3412',fontSize:12,fontWeight:800,lineHeight:1.45}}>
+                  {buyNotice || deliveryBlockMessage}
+                </div>
+              )}
 
               {/* Delivery info */}
               {shop&&(
-                <div style={{display:'flex',gap:14,marginTop:14,paddingTop:14,borderTop:'1px solid var(--br2)'}}>
-                  {[['Shop',shop.name],['ETA',`${shop.deliveryTime} min`],['Distance',typeof shopDistanceKm==='number'?`${shopDistanceKm.toFixed(1)} km`:'Nearby'],['Area',shop.address?.split(',')[0]||'Hyderabad']].map(([icon,text])=>(
+                  <div className="pd-delivery-metrics" style={{display:'flex',gap:14,marginTop:14,paddingTop:14,borderTop:'1px solid var(--br2)'}}>
+                  {[['Shop',shop.name],['ETA',`${shop.deliveryTime} min`],['Area',shop.address?.split(',')[0]||'Hyderabad']].map(([icon,text])=>(
                     <div key={icon} style={{flex:1,textAlign:'center'}}>
                       <div style={{fontSize:9,fontWeight:800,color:'var(--or)',letterSpacing:'.3px',marginBottom:3}}>{icon}</div>
                       <div style={{fontSize:10,color:'var(--mu)',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{text}</div>
@@ -3781,9 +4753,9 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                   </div>
                   <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(189,221,252,.25)',fontSize:11,fontWeight:800,color:'var(--nv)'}}>{shop.city||'Nearby store'}</span>
                 </div>
-                <div style={{padding:'14px 16px',borderRadius:18,background:'linear-gradient(135deg,#ffffff,#f3f8fd)',border:'1px solid rgba(215,228,240,.95)',boxShadow:'0 12px 24px rgba(56,73,89,.05)'}}>
+                <div className="pd-store-card" style={{padding:'14px 16px',borderRadius:18,background:'linear-gradient(135deg,#ffffff,#f3f8fd)',border:'1px solid rgba(215,228,240,.95)',boxShadow:'0 12px 24px rgba(56,73,89,.05)'}}>
                   <div style={{fontSize:13,fontWeight:800,color:'var(--tx)',marginBottom:6}}>{shop.name}</div>
-                  <div style={{fontSize:12,color:'var(--mu)',lineHeight:1.7}}>{shop.address || shop.city || 'Local delivery area available'}</div>
+                  <div className="pd-store-address" style={{fontSize:12,color:'var(--mu)',lineHeight:1.7}}>{shop.address || shop.city || 'Local delivery area available'}</div>
                   <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>
                     <span style={{padding:'6px 10px',borderRadius:999,background:'#fff',border:'1px solid rgba(215,228,240,.95)',fontSize:11,fontWeight:800,color:'var(--nv)'}}>Delivery in {shop.deliveryTime || 25} min</span>
                     <button onClick={scrollToRelated} style={{padding:'6px 12px',borderRadius:999,border:'none',background:'var(--nv-grad)',color:'#fff',fontSize:11,fontWeight:800,cursor:'pointer'}}>See products near your address</button>
@@ -3796,7 +4768,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             <div className="pd-section-box" id="product-info-tabs" style={{padding:0,overflow:'hidden'}}>
               <div className="pd-tabs" style={{padding:'0 22px',background:'linear-gradient(180deg,#fbfdff,#f3f8fd)',borderBottom:'1px solid rgba(215,228,240,.92)'}}>
                 {['details','reviews',user&&eligibleOrders.length>0&&'write'].filter(Boolean).map(t=>(
-                  <button key={t} className={`pd-tab${tab===t?' on':''}`} onClick={()=>setTab(t)}>
+                  <button key={t} className={`pd-tab${tab===t?' on':''}`} onClick={()=>{setTab(t);setTopSection(t==='details'?'details':'reviews')}}>
                     {t==='details'?'Details':t==='reviews'?`Reviews (${reviews.length})`:'Write Review'}
                   </button>
                 ))}
@@ -3804,7 +4776,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
 
               <div style={{padding:'18px 20px'}}>
                 {tab==='details'&&(
-                  <div style={{fontSize:14,lineHeight:1.8,color:'#374151'}}>
+                  <div id="product-details-section" style={{fontSize:14,lineHeight:1.8,color:'#374151'}}>
                     <p style={{marginBottom:14,color:'var(--mu)',lineHeight:1.7}}>{product.description||'Premium quality product.'}</p>
                     {[{k:'Category',v:product.category},{k:'Brand',v:product.brand||product.shopName||null},{k:'Material',v:product.material},{k:'Stock',v:`${product.stock} units`},{k:'Colors',v:colors.length>0?colors.map(col=>col.name).join(', '):null}]
                       .filter(({v})=>v).map(({k,v})=>(
@@ -3822,7 +4794,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                 )}
 
                 {tab==='reviews'&&(
-                  <div>
+                  <div id="product-reviews-section">
                     {reviews.length>0&&(()=>{
                       const avg=reviews.reduce((s,r)=>s+r.rating,0)/reviews.length
                       const counts=[5,4,3,2,1].map(n=>({n,count:reviews.filter(r=>r.rating===n).length}))
@@ -3862,6 +4834,13 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                             </div>
                             <Stars r={r.rating} n={0}/>
                             {r.comment&&<div style={{fontSize:13,color:'#374151',lineHeight:1.6,background:'#f8fafc',borderRadius:8,padding:'8px 12px',marginTop:6}}>{r.comment}</div>}
+                            {Array.isArray(r.images)&&r.images.length>0&&(
+                              <div style={{display:'flex',gap:8,overflowX:'auto',marginTop:8,paddingBottom:2}}>
+                                {r.images.map((img,i)=>(
+                                  <img key={`${r.id}-img-${i}`} src={img} alt="Customer review" style={{width:74,height:74,borderRadius:12,objectFit:'cover',border:'1px solid var(--br)',flexShrink:0}}/>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       ))
@@ -3870,7 +4849,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                 )}
 
                 {tab==='write'&&(
-                  <div>
+                  <div id="product-reviews-section">
                     <div style={{background:'#f8fafc',borderRadius:'var(--r12)',padding:16,marginBottom:13,border:'1px solid var(--br)'}}>
                       <div style={{fontWeight:800,fontSize:14,marginBottom:11}}>Rate this product</div>
                       <div style={{display:'flex',gap:5,justifyContent:'center',marginBottom:8}}>
@@ -3884,6 +4863,27 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
                     <div style={{marginBottom:11}}>
                       <label className="inp-lbl">Your Review (optional)</label>
                       <textarea className="inp" rows={4} value={comment} onChange={e=>setComment(e.target.value)} placeholder="Quality? Fit? Delivery?" style={{resize:'none'}}/>
+                    </div>
+                    <div style={{marginBottom:13}}>
+                      <label className="inp-lbl">Add product photos (optional)</label>
+                      <label style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,minHeight:50,border:'1.5px dashed var(--br)',borderRadius:14,background:'#f8fafc',cursor:'pointer',fontSize:13,fontWeight:800,color:'var(--nv)'}}>
+                        Upload images
+                        <input type="file" accept="image/*" multiple hidden onChange={e=>{
+                          const files=[...(e.target.files||[])].slice(0,5-reviewImages.length)
+                          if(files.length) setReviewImages(prev=>[...prev,...files].slice(0,5))
+                          e.target.value=''
+                        }}/>
+                      </label>
+                      {reviewImages.length>0&&(
+                        <div style={{display:'flex',gap:8,overflowX:'auto',marginTop:10,paddingBottom:2}}>
+                          {reviewImages.map((file,i)=>(
+                            <div key={`${file.name}-${i}`} style={{position:'relative',flexShrink:0}}>
+                              <img src={URL.createObjectURL(file)} alt="Review preview" style={{width:72,height:72,borderRadius:12,objectFit:'cover',border:'1px solid var(--br)'}}/>
+                              <button type="button" onClick={()=>setReviewImages(prev=>prev.filter((_,idx)=>idx!==i))} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:999,border:'1px solid #fee2e2',background:'#fff',color:'#dc2626',fontWeight:900,cursor:'pointer',lineHeight:1}}>x</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:13}}>
                       {['True to size','Great quality','Fast delivery','As pictured','Comfortable','Good value'].map(tag=>(
@@ -3903,31 +4903,48 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
               </div>
             </div>
 
-            {relatedProducts.length>0&&(
-              <div className="pd-section-box pd-extra-info" id="related-products" style={{marginTop:12,marginBottom:12}}>
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+            {relatedGroups.length>0&&(
+              <div className="pd-section-box pd-extra-info" id="related-products" style={{marginTop:12,marginBottom:12,background:'linear-gradient(180deg,#f8fbff,#ffffff)',border:'1px solid rgba(207,230,251,.95)'}}>
+                <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12,marginBottom:14,flexWrap:'wrap'}}>
                   <div>
-                    <div style={{fontWeight:900,fontSize:15,color:'#0f172a'}}>Similar Products Near You</div>
-                    <div style={{fontSize:11,color:'var(--mu)',fontWeight:700,marginTop:4}}>More nearby styles after the details section, so customers can compare quickly.</div>
+                    <div style={{fontWeight:900,fontSize:18,color:'#0f172a'}}>Explore More Styles</div>
+                    <div style={{fontSize:12,color:'var(--mu)',fontWeight:700,marginTop:5,lineHeight:1.5}}>Grouped picks help customers compare shops, prices, distance, and similar products without going back.</div>
                   </div>
-                  <button onClick={()=>setShowAllRelated(v=>!v)} style={{padding:'8px 12px',borderRadius:999,border:'1px solid rgba(215,228,240,.95)',background:'#fff',cursor:'pointer',fontSize:11,fontWeight:800,color:'var(--nv)'}}>
-                    {showAllRelated ? 'Show Less' : `View All (${relatedProducts.length})`}
+                  <button onClick={()=>setShowAllRelated(v=>!v)} style={{padding:'9px 13px',borderRadius:999,border:'1px solid rgba(215,228,240,.95)',background:'#fff',cursor:'pointer',fontSize:11,fontWeight:900,color:'var(--nv)',boxShadow:'0 8px 18px rgba(56,73,89,.06)'}}>
+                    {showAllRelated ? 'Show Less' : `Show More (${relatedProducts.length})`}
                   </button>
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                  {relatedProducts.slice(0,showAllRelated?relatedProducts.length:4).map(p=>(
-                    <div key={p.id} onClick={()=>openNearbyProduct(p)} style={{cursor:'pointer',border:'1px solid rgba(215,228,240,.95)',borderRadius:20,overflow:'hidden',background:'#fff',transition:'.18s',boxShadow:'0 12px 24px rgba(56,73,89,.06)'}}>
-                      <div style={{aspectRatio:'1 / .92',background:'#f8fafc'}}>
-                        {p.imageUrl&&<img src={p.imageUrl} alt={p.name} style={{width:'100%',height:'100%',objectFit:'cover'}}/>}
-                      </div>
-                      <div style={{padding:10}}>
-                        <div style={{fontWeight:800,fontSize:12,color:'#0f172a',lineHeight:1.4}}>{p.name}</div>
-                        <div style={{fontSize:11,color:'var(--mu)',marginTop:4}}>{p.shopName||shop?.name}{typeof p.distanceKm==='number'?` | ${p.distanceKm.toFixed(1)} km`:''}</div>
-                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginTop:8}}>
-                          <div style={{fontWeight:900,fontSize:14,color:'var(--or)'}}>Rs {p.price}</div>
-                          <button onClick={e=>{e.stopPropagation();openNearbyProduct(p)}} style={{border:'none',borderRadius:999,padding:'8px 12px',background:'var(--nv-grad)',color:'#fff',fontSize:10,fontWeight:800,cursor:'pointer',boxShadow:'0 10px 20px rgba(56,73,89,.14)'}}>Open Product</button>
+                <div className="pd-related-summary" style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:16}}>
+                  {[
+                    ['Similar', relatedProducts.filter(p=>(p.category||'')===(product.category||'')).length],
+                    ['Nearby', relatedProducts.filter(p=>typeof p.distanceKm==='number').length],
+                    ['Shops', new Set(relatedProducts.map(p=>p.shopId||p.shopName).filter(Boolean)).size],
+                  ].map(([label,count])=>(
+                    <div key={label} style={{padding:'12px 10px',borderRadius:16,background:'#fff',border:'1px solid rgba(215,228,240,.92)',textAlign:'center'}}>
+                      <div style={{fontWeight:900,fontSize:18,color:'var(--nv)'}}>{count}</div>
+                      <div style={{fontSize:10,fontWeight:900,color:'var(--mu)',textTransform:'uppercase',letterSpacing:'.5px',marginTop:3}}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="pd-related-groups" style={{display:'grid',gap:18}}>
+                  {relatedGroups.map((group,idx)=>(
+                    <div key={group.label} className="pd-related-group">
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:10}}>
+                        <div>
+                          <div style={{fontWeight:900,fontSize:15,color:'#0f172a'}}>{group.label}</div>
+                          <div style={{fontSize:11,color:'var(--mu)',marginTop:3,lineHeight:1.45}}>{group.subtitle}</div>
                         </div>
+                        <span style={{padding:'6px 9px',borderRadius:999,background:'#eef7ff',color:'var(--nv)',fontSize:10,fontWeight:900,whiteSpace:'nowrap'}}>{group.items.length} picks</span>
                       </div>
+                      {idx===0 ? (
+                        <div className="pd-explore-grid" style={{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:10}}>
+                          {group.items.map(p=>renderExploreProduct(p))}
+                        </div>
+                      ) : (
+                        <div className="pd-explore-rail" style={{display:'flex',gap:10,overflowX:'auto',paddingBottom:4,scrollSnapType:'x proximity'}}>
+                          {group.items.map(p=>renderExploreProduct(p,'rail'))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -3941,7 +4958,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
       <div className="pd-sticky-buy">
         <div className="pd-sticky-meta">
           <div style={{fontWeight:900,fontSize:18}}>Rs {product.price}</div>
-          <div style={{fontSize:11,color:'var(--mu)',fontWeight:700}}>{selColor?.name||product.category||'Selected product'}</div>
+          <div style={{fontSize:11,color:'var(--mu)',fontWeight:700}}>{selColor?.name||selSize||product.category||'Selected product'}</div>
         </div>
         <div className="pd-sticky-qty">
           <button className="qty-btn" onClick={rem} disabled={qty<=0}>-</button>
@@ -3961,7 +4978,7 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
             disabled={!product.isActive}
             style={{padding:'11px 14px',background:'var(--or-grad)',border:'none',borderRadius:12,color:'#fff',fontWeight:800,fontSize:14,cursor:'pointer',fontFamily:'var(--fn)'}}
           >
-            Buy now
+            {requiresSize&&!selSize?'Pick Size':rangeBlocked?'Check range':'Buy now'}
           </button>
         </div>
       </div>
@@ -3969,13 +4986,14 @@ function ProductDetail({product:init,shop:shopProp,cart,onCartUpdate,onBack,user
   )
 }
 
-// â”€â”€â”€ Shop Detail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Shop Detail ----------------------------------------
 function ShopDetail({shop:initShop,cart,onCartUpdate,onBack,user,onProductClick,wishlistIds,onWishlist,userLoc}){
   const[shop]=useState(initShop)
   const[products,setProducts]=useState([])
   const[loading,setLoading]=useState(true)
   const[cat,setCat]=useState('All')
   const shopDistanceKm=getShopDistanceKm(shop,userLoc)
+  const shopOrderable = isShopOrderable(shop)
 
   useEffect(()=>{
     api.getProducts({shopId:initShop.id})
@@ -4020,6 +5038,11 @@ function ShopDetail({shop:initShop,cart,onCartUpdate,onBack,user,onProductClick,
       </div>
       <div className="wrap" style={{paddingTop:18}}>
         <div style={{background:'#fff',border:'1px solid rgba(207,230,251,.92)',borderRadius:22,padding:'14px 14px 12px',boxShadow:'0 14px 32px rgba(56,73,89,.08)',marginTop:-6,marginBottom:16}}>
+          {!shopOrderable&&(
+            <div style={{marginBottom:12,padding:'12px 14px',borderRadius:16,background:'#fff1f2',border:'1px solid rgba(244,114,182,.22)',color:'#9f1239',fontSize:13,fontWeight:700}}>
+              This shop is closed right now. Customers can view products, but ordering stays disabled until the shop reopens.
+            </div>
+          )}
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:10,flexWrap:'wrap'}}>
             <div style={{fontSize:11,fontWeight:900,color:'#94a3b8',textTransform:'uppercase',letterSpacing:'.6px'}}>Shop Details</div>
             <button
@@ -4073,7 +5096,7 @@ function ShopDetail({shop:initShop,cart,onCartUpdate,onBack,user,onProductClick,
   )
 }
 
-// â”€â”€â”€ Orders Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Orders Page ----------------------------------------
 
 
 function DeliveryCountdown({ placedAt, deadline, serverNow, deliveredTime, isDelayed }){
@@ -4169,6 +5192,7 @@ function OrdersPage({user,onTrack,onBuyAgain}){
   const[loading,setLoading]=useState(true)
   const[trackId,setTrackId]=useState(null)
   const[trackData,setTrackData]=useState(null)
+  const[riderLive,setRiderLive]=useState(null)
   const[otpMap,setOtpMap]=useState({})  // orderId -> otp string
   const[returnOtpMap,setReturnOtpMap]=useState({})
   const[otpLoading,setOtpLoading]=useState(null)
@@ -4200,10 +5224,46 @@ function OrdersPage({user,onTrack,onBuyAgain}){
   },[user])
 
   const openTrack=async(id)=>{
-    if(trackId===id){setTrackId(null);setTrackData(null);return}
-    setTrackId(id);setTrackData(null)
-    try{const r=await api.trackOrder(id);setTrackData(r.data)}catch(e){}
+    if(trackId===id){setTrackId(null);setTrackData(null);setRiderLive(null);return}
+    setTrackId(id);setTrackData(null);setRiderLive(null)
+    try{
+      const r=await api.trackOrder(id)
+      setTrackData(r.data)
+      if(r.data?.riderLocation) setRiderLive(r.data.riderLocation)
+    }catch(e){}
   }
+
+  useEffect(()=>{
+    if(!trackId) return
+    let stopped=false
+    const refresh=async()=>{
+      try{
+        const [trackRes, riderRes] = await Promise.allSettled([
+          api.trackOrder(trackId),
+          api.riderLocation(trackId),
+        ])
+        if(stopped) return
+        if(trackRes.status==='fulfilled'){
+          setTrackData(trackRes.value.data)
+          if(trackRes.value.data?.riderLocation) setRiderLive(trackRes.value.data.riderLocation)
+        }
+        if(riderRes.status==='fulfilled'&&riderRes.value.data?.available){
+          setRiderLive({
+            lat:riderRes.value.data.lat,
+            lng:riderRes.value.data.lng,
+            name:riderRes.value.data.riderName,
+            riderName:riderRes.value.data.riderName,
+            phone:riderRes.value.data.riderPhone,
+            status:riderRes.value.data.status,
+            mapsUrl:riderRes.value.data.mapsUrl,
+          })
+        }
+      }catch{}
+    }
+    refresh()
+    const t=setInterval(refresh,8000)
+    return()=>{stopped=true;clearInterval(t)}
+  },[trackId])
 
   if(!user)return(
     <div className="wrap" style={{padding:'40px 16px'}}>
@@ -4315,7 +5375,11 @@ function OrdersPage({user,onTrack,onBuyAgain}){
                           <div style={{width:8,height:8,borderRadius:'50%',background:'#22c55e',animation:'pulse 1.5s ease infinite'}}/>
                           Live Tracking
                         </div>
-                        <span style={{fontSize:11,color:'#94a3b8',fontWeight:600}}>Updates every 20s</span>
+                        <span style={{fontSize:11,color:'#94a3b8',fontWeight:600}}>Updates every 8s</span>
+                      </div>
+
+                      <div style={{marginBottom:14}}>
+                        <LiveOrderMap order={trackData || o} riderLocation={riderLive || trackData?.riderLocation}/>
                       </div>
 
                       {/* Track steps */}
@@ -4349,19 +5413,19 @@ function OrdersPage({user,onTrack,onBuyAgain}){
                       )}
 
                       {/* Rider info */}
-                      {trackData?.riderLocation&&(
+                      {(riderLive || trackData?.riderLocation)&&(
                         <div className="track-hero" style={{marginTop:10}}>
                           <div className="track-stat-card" style={{background:'linear-gradient(135deg,#fff7ed,#fffbeb)',border:'1px solid rgba(249,115,22,.2)'}}>
                           <div style={{fontWeight:800,fontSize:13,color:'#ea580c',marginBottom:8,display:'flex',alignItems:'center',gap:6}}>
                             <Ic.Truck width={14} height={14} stroke="#ea580c"/> Rider is on the way
                           </div>
-                          <div style={{fontWeight:700,fontSize:14,color:'#0f172a'}}>{trackData.riderLocation.name}</div>
+                          <div style={{fontWeight:700,fontSize:14,color:'#0f172a'}}>{(riderLive || trackData.riderLocation).riderName || (riderLive || trackData.riderLocation).name}</div>
                           <div style={{display:'flex',gap:10,marginTop:8}}>
-                            <a href={`https://maps.google.com/?q=${trackData.riderLocation.lat},${trackData.riderLocation.lng}`} target="_blank" rel="noreferrer"
+                            <a href={(riderLive || trackData.riderLocation).mapsUrl || `https://maps.google.com/?q=${(riderLive || trackData.riderLocation).lat},${(riderLive || trackData.riderLocation).lng}`} target="_blank" rel="noreferrer"
                               style={{flex:1,padding:'9px',borderRadius:10,background:'#fff',border:'1px solid rgba(249,115,22,.3)',color:'#ea580c',fontSize:12,fontWeight:700,textDecoration:'none',textAlign:'center',transition:'.2s'}}>
                               Track on Map
                             </a>
-                            <a href={`tel:${trackData.riderLocation.phone}`}
+                            <a href={`tel:${(riderLive || trackData.riderLocation).phone || (riderLive || trackData.riderLocation).riderPhone || ''}`}
                               style={{flex:1,padding:'9px',borderRadius:10,background:'#fff',border:'1px solid rgba(22,163,74,.3)',color:'#16a34a',fontSize:12,fontWeight:700,textDecoration:'none',textAlign:'center',transition:'.2s'}}>
                               Call Rider
                             </a>
@@ -4532,7 +5596,7 @@ function OrdersPage({user,onTrack,onBuyAgain}){
   )
 }
 
-// â”€â”€â”€ Wishlist Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Wishlist Page ----------------------------------------
 function WishlistPage({user,cart,onCartUpdate,onProductClick,wishlistIds,onWishlist}){
   const[items,setItems]=useState([])
   const[loading,setLoading]=useState(true)
@@ -4567,8 +5631,8 @@ function WishlistPage({user,cart,onCartUpdate,onProductClick,wishlistIds,onWishl
   )
 }
 
-// â”€â”€â”€ Search Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function SearchPage({initialQuery,cart,onCartUpdate,onProductClick,user,wishlistIds,onWishlist,userLoc,radius}){
+// --- Search Page ----------------------------------------
+function SearchPage({initialQuery,imageFile,autoOpenImageSearch=false,cart,onCartUpdate,onProductClick,user,wishlistIds,onWishlist,userLoc,radius}){
   const[query,setQuery]=useState(initialQuery||'')
   const[results,setResults]=useState([])
   const[similar,setSimilar]=useState([])
@@ -4578,10 +5642,17 @@ function SearchPage({initialQuery,cart,onCartUpdate,onProductClick,user,wishlist
   const[minRating,setMinRating]=useState('')
   const[category,setCategory]=useState('')
   const[searched,setSearched]=useState(false)
+  const[imageMode,setImageMode]=useState(false)
+  const[imagePreview,setImagePreview]=useState('')
+  const fileInputRef=useRef(null)
+  const activeImageFileRef=useRef(null)
 
   const doSearch=useCallback(async(q)=>{
     if(!q.trim())return
     setLoading(true);setSearched(true)
+    setImageMode(false)
+    setImagePreview('')
+    activeImageFileRef.current=null
     try{
     const r=await api.search({
       q,
@@ -4604,24 +5675,73 @@ function SearchPage({initialQuery,cart,onCartUpdate,onProductClick,user,wishlist
     setLoading(false)
   },[sortBy,priceMax,minRating,category,userLoc?.lat,userLoc?.lng,radius])
 
+  const doImageSearch=useCallback(async(file)=>{
+    if(!file)return
+    activeImageFileRef.current=file
+    setLoading(true)
+    setSearched(true)
+    setImageMode(true)
+    setSimilar([])
+    setQuery(file.name ? file.name.replace(/\.[^.]+$/,'') : 'Image search')
+    try{
+      const r=await api.searchByImage({
+        file,
+        lat:userLoc?.lat,
+        lng:userLoc?.lng,
+        radius,
+        category:category||undefined,
+        limit:24
+      })
+      setResults(r.data.results||[])
+      setImagePreview(r.data.queryImageUrl||'')
+    }catch(e){
+      setResults([])
+      setImagePreview('')
+    }
+    setLoading(false)
+  },[userLoc?.lat,userLoc?.lng,radius,category])
+
   useEffect(()=>{
+    if(imageFile){
+      doImageSearch(imageFile)
+      return
+    }
     const next = initialQuery || ''
     setQuery(next)
     if(next.trim()) doSearch(next)
-  },[initialQuery,doSearch])
-  useEffect(()=>{if(searched&&query)doSearch(query)},[sortBy,priceMax,minRating,category])
+  },[initialQuery,imageFile,doSearch,doImageSearch])
+  useEffect(()=>{
+    if(!searched)return
+    if(imageMode&&activeImageFileRef.current){
+      doImageSearch(activeImageFileRef.current)
+    }else if(query){
+      doSearch(query)
+    }
+  },[sortBy,priceMax,minRating,category])
 
   return(
     <div style={{paddingBottom:48}}>
       <div style={{background:'linear-gradient(180deg,#111827,#172231)',padding:'20px 0 18px'}}>
         <div className="wrap">
-          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',background:'linear-gradient(180deg,#fff,#fbfdff)',borderRadius:22,overflow:'hidden',boxShadow:'0 18px 42px rgba(0,0,0,.2)',border:'1px solid rgba(255,255,255,.08)'}}>
+          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto auto',background:'linear-gradient(180deg,#fff,#fbfdff)',borderRadius:22,overflow:'hidden',boxShadow:'0 18px 42px rgba(0,0,0,.2)',border:'1px solid rgba(255,255,255,.08)'}}>
             <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doSearch(query)}
               style={{flex:1,border:'none',padding:'12px 16px',fontSize:15,outline:'none',fontFamily:'var(--fn)'}} placeholder="Search products, brands, categories..."/>
+            <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={e=>{
+              const file=e.target.files?.[0]
+              if(file) doImageSearch(file)
+              e.target.value=''
+            }}/>
+            <button onClick={()=>fileInputRef.current?.click()} title="Search products by image" style={{background:'#f8fbff',border:'none',borderLeft:'1px solid var(--br)',padding:'0 16px',cursor:'pointer',height:44,display:'flex',alignItems:'center',justifyContent:'center',color:'#1d6fb8'}}>
+              <Ic.Camera width={17} height={17}/>
+            </button>
             <button onClick={()=>doSearch(query)} style={{background:'var(--or)',border:'none',padding:'0 20px',cursor:'pointer',height:44,display:'flex',alignItems:'center',justifyContent:'center'}}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </button>
           </div>
+          {(imageMode||autoOpenImageSearch)&&<div style={{marginTop:12,display:'flex',alignItems:'center',gap:10,color:'#dbeafe',fontSize:12,fontWeight:700}}>
+            {imagePreview&&<img src={imagePreview} alt="Search upload" style={{width:34,height:34,borderRadius:10,objectFit:'cover',border:'1px solid rgba(255,255,255,.35)'}}/>}
+            <span>{imageMode?'Showing products matched from your photo':'Choose a photo to search matching products'}</span>
+          </div>}
         </div>
       </div>
       <div className="filterbar">
@@ -4672,286 +5792,110 @@ function SearchPage({initialQuery,cart,onCartUpdate,onProductClick,user,wishlist
   )
 }
 
-// â”€â”€â”€ Referral Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Referral Page ----------------------------------------
 function SearchPagePremium(props){
-  const {initialQuery,cart,onCartUpdate,onProductClick,wishlistIds,onWishlist,userLoc,radius,autoOpenImageSearch=false}=props
+  const {initialQuery,userLoc,radius,onShopOpen}=props
   const[query,setQuery]=useState(initialQuery||'')
-  const[results,setResults]=useState([])
-  const[similar,setSimilar]=useState([])
-  const[imagePreview,setImagePreview]=useState('')
-  const[imageSearchMeta,setImageSearchMeta]=useState(null)
+  const[shops,setShops]=useState([])
   const[loading,setLoading]=useState(false)
-  const[sortBy,setSortBy]=useState('relevance')
-  const[priceMax,setPriceMax]=useState('')
-  const[minRating,setMinRating]=useState('')
   const[category,setCategory]=useState('')
-  const[searched,setSearched]=useState(false)
-  const fileRef=useRef(null)
+  const[sortBy,setSortBy]=useState('distance')
 
-  const applySearchFilters=useCallback((list=[])=>{
-    return (Array.isArray(list)?list:[]).filter(p=>{
-      if(category && !categoriesRoughMatch(p.category, category)) return false
-      if(priceMax && Number(p.price)>Number(priceMax)) return false
-      if(minRating && Number(p.avgRating||0)<Number(minRating)) return false
-      return true
-    })
-  },[category,priceMax,minRating])
-
-  const sortSearchList=useCallback((list=[], q='')=>{
-    const trimmed=(q||'').trim().toLowerCase()
-    const safe=[...(Array.isArray(list)?list:[])]
-    return safe.sort((a,b)=>{
-      if(sortBy==='price_asc') return Number(a.price||0)-Number(b.price||0)
-      if(sortBy==='price_desc') return Number(b.price||0)-Number(a.price||0)
-      if(sortBy==='rating') return Number(b.avgRating||0)-Number(a.avgRating||0)
-      if(trimmed){
-        const aScore=Number(a._score||0)
-        const bScore=Number(b._score||0)
-        if(bScore!==aScore) return bScore-aScore
-      }
-      const aKm=typeof a.distanceKm==='number'?a.distanceKm:999
-      const bKm=typeof b.distanceKm==='number'?b.distanceKm:999
-      return aKm-bKm
-    })
-  },[sortBy])
-
-  const getNearbyCatalog=useCallback(async()=>{
-    try{
-      const all=await api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius})
-      const data=Array.isArray(all.data) ? all.data : []
-      return applySearchFilters(data)
-    }catch(e){
-      return applySearchFilters([])
-    }
-  },[applySearchFilters,userLoc?.lat,userLoc?.lng,radius])
-
-  const doSearch=useCallback(async(q)=>{
+  const loadShops=useCallback(async()=>{
     setLoading(true)
-    setSearched(true)
-    const trimmed=(q||'').trim()
     try{
-      const catalog=await getNearbyCatalog()
-      setImageSearchMeta(null)
-      if(!trimmed){
-        setResults(sortSearchList(catalog).slice(0,24))
-        setSimilar([])
-        setLoading(false)
-        return
-      }
-      if(trimmed.length < 2){
-        const quick = sortSearchList(
-          catalog
-            .map(p=>({...p,_score:fuzzyProductScore(p,trimmed)}))
-            .filter(p=>p._score>0)
-            .slice(0,24),
-          trimmed
-        )
-        setResults(quick)
-        setSimilar([])
-        setLoading(false)
-        return
-      }
-
-      let exactApi=[]
-      try{
-    const r=await api.search({
-      q:trimmed,
-      sortBy,
-      maxPrice:priceMax||undefined,
-      minRating:minRating||undefined,
-      category:category||undefined,
-      lat:userLoc?.lat,
-      lng:userLoc?.lng,
-      radius
-    })
-        exactApi=Array.isArray(r.data?.results)?r.data.results:[]
-      }catch(e){}
-
-      const rankedLocal=sortSearchList(
-        catalog
-          .map(p=>({...p,_score:fuzzyProductScore(p,trimmed)}))
-          .filter(p=>p._score>0),
-        trimmed
-      )
-
-      const merged=[]
-      const seen=new Set()
-      ;[...exactApi,...rankedLocal].forEach(item=>{
-        if(!item?.id || seen.has(item.id)) return
-        seen.add(item.id)
-        merged.push(item)
-      })
-
-      setResults(merged)
-      if(merged.length===0){
-        const fallbackRanked = sortSearchList(
-          catalog.map(p=>({...p,_score:fuzzyProductScore(p,trimmed)})),
-          trimmed
-        )
-        const fallbackStrong = fallbackRanked.filter(p=>Number(p._score||0) >= 4)
-        setSimilar((fallbackStrong.length ? fallbackStrong : fallbackRanked).slice(0,12))
-      }else{
-        setSimilar([])
-      }
+      const r=await api.getShops({lat:userLoc?.lat,lng:userLoc?.lng,radius})
+      setShops(sortShopsByLocation(Array.isArray(r.data)?r.data:[],userLoc))
     }catch(e){
-      setResults([])
-      setSimilar(await getNearbyCatalog().then(list=>sortSearchList(list).slice(0,12)))
+      setShops([])
+    }finally{
+      setLoading(false)
     }
-    setLoading(false)
-  },[sortBy,priceMax,minRating,category,getNearbyCatalog,sortSearchList])
-
-  const doImageSearch = async(file) => {
-    if(!file) return
-    const localUrl = URL.createObjectURL(file)
-    setImagePreview(localUrl)
-    setLoading(true)
-    setSearched(true)
-    try{
-      const r = await api.searchByImage({file,lat:userLoc?.lat,lng:userLoc?.lng,radius,category:category||'',limit:12})
-      setResults(r.data.results||[])
-      setSimilar([])
-      setImageSearchMeta({
-        queryImageUrl:r.data.queryImageUrl || localUrl,
-        model:r.data.model,
-        fallbackMode:r.data.fallbackMode,
-      })
-    }catch(e){
-      setResults([])
-      setSimilar([])
-      setImageSearchMeta({
-        queryImageUrl: localUrl,
-        model: 'unavailable',
-        fallbackMode: true,
-      })
-    }
-    setLoading(false)
-  }
+  },[userLoc?.lat,userLoc?.lng,radius])
 
   useEffect(()=>{
-    const next = initialQuery || ''
-    setQuery(next)
-    doSearch(next)
-  },[initialQuery,doSearch])
-  useEffect(()=>{if(searched)doSearch(query)},[sortBy,priceMax,minRating,category])
-  useEffect(()=>{
-    if(!autoOpenImageSearch) return
-    const t=setTimeout(()=>fileRef.current?.click(),180)
-    return()=>clearTimeout(t)
-  },[autoOpenImageSearch])
+    setQuery(initialQuery || '')
+  },[initialQuery])
+  useEffect(()=>{loadShops()},[loadShops])
 
+  const normalizedQuery = (query || '').trim()
+  const filteredShops = shops
+    .filter(shop=>{
+      if(category && !categoriesRoughMatch(shop.category, category)) return false
+      if(!normalizedQuery) return true
+      const haystack = normalizeSearchText([
+        shop.name,
+        shop.category,
+        shop.address,
+        shop.city,
+        shop.area,
+      ].filter(Boolean).join(' '))
+      return haystack.includes(normalizeSearchText(normalizedQuery))
+    })
+    .sort((a,b)=>{
+      if(sortBy==='rating') return Number(b.rating||0)-Number(a.rating||0)
+      if(sortBy==='name') return String(a.name||'').localeCompare(String(b.name||''))
+      const akm = typeof a.distanceKm==='number' ? a.distanceKm : 999
+      const bkm = typeof b.distanceKm==='number' ? b.distanceKm : 999
+      if(akm!==bkm) return akm-bkm
+      return Number(b.rating||0)-Number(a.rating||0)
+    })
   return(
     <div className="search-shell">
-      <div className="search-hero">
-        <div className="wrap">
-          <div className="search-hero-card">
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-              <div style={{minWidth:0}}>
-                <div className="search-kicker search-tools-kicker" style={{marginBottom:6}}>Search tools</div>
-                <div style={{fontSize:18,fontWeight:900,color:'var(--nv)',letterSpacing:'-.4px'}}>
-                  {query.trim() ? `Showing results for "${query}"` : 'Browse nearby products'}
-                </div>
-                <div className="search-tools-copy" style={{fontSize:13,color:'var(--mu)',marginTop:4,lineHeight:1.6}}>
-                  Use the top search bar for products or shop names. Quick chips and image search stay here.
-                </div>
-              </div>
-              <div className="search-tools-actions" style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {query.trim()&&(
-                  <button className="search-chip" onClick={()=>{setQuery('');doSearch('')}}>
-                    Clear search
-                  </button>
-                )}
-                <button className="search-chip" onClick={()=>fileRef.current?.click()} style={{display:'inline-flex',alignItems:'center',gap:6}}>
-                  <Ic.Camera width={14} height={14}/> Search by image
-                </button>
-              </div>
-            </div>
-            <div className="search-chip-row search-chip-row-compact">
-              {['shirt','kurta','saree','jeans','dress','jacket'].map(s=>(
-                <button key={s} className="search-chip" onClick={()=>{setQuery(s);doSearch(s)}}>{s}</button>
-              ))}
-            </div>
-            <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const file=e.target.files?.[0]; if(file) doImageSearch(file); e.target.value=''}}/>
+      <div style={{position:'sticky',top:0,zIndex:220,background:'linear-gradient(180deg,#dff1ff 0%,rgba(223,241,255,.92) 72%,rgba(223,241,255,.72) 100%)',padding:'10px 0 8px',backdropFilter:'blur(12px)'}}>
+      <div className="wrap">
+        <div className="search-panel" style={{padding:10}}>
+          <div className="search-input-shell" style={{marginTop:0,borderRadius:14,boxShadow:'var(--sh0)',border:'1px solid var(--br)'}}>
+            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search shop name" style={{padding:'12px 14px',fontSize:14}}/>
+            <button type="button" aria-label="Search shops" style={{height:44,padding:'0 16px'}}><Ic.Search width={17} height={17} stroke="#fff"/></button>
           </div>
+          {normalizedQuery&&(
+            <button className="search-chip" onClick={()=>setQuery('')} style={{marginTop:10}}>
+              Clear search
+            </button>
+          )}
         </div>
       </div>
-      <div className="filterbar">
+      </div>
+      <div className="filterbar" style={{position:'static'}}>
         <div className="filterbar-inner">
-          {[
-            {val:sortBy,setter:setSortBy,opts:[{v:'relevance',l:'Relevance'},{v:'price_asc',l:'Price Low to High'},{v:'price_desc',l:'Price High to Low'},{v:'rating',l:'Top Rated'}],ph:'Sort'},
-            {val:category,setter:setCategory,opts:[{v:'',l:'All Categories'},...CATS.filter(c=>c.id!=='All').map(c=>({v:c.id,l:c.id}))],ph:'Category'},
-            {val:priceMax,setter:setPriceMax,opts:[{v:'',l:'Max Price'},{v:'500',l:'Under Rs 500'},{v:'1000',l:'Under Rs 1,000'},{v:'2000',l:'Under Rs 2,000'},{v:'5000',l:'Under Rs 5,000'}],ph:'Price'},
-            {val:minRating,setter:setMinRating,opts:[{v:'',l:'Any Rating'},{v:'4',l:'4+'},{v:'3',l:'3+'}],ph:'Rating'},
-          ].map(({val,setter,opts,ph})=>(
-            <select key={ph} value={val} onChange={e=>setter(e.target.value)} className="fselect">
-              {opts.map(({v,l})=><option key={v} value={v}>{l}</option>)}
-            </select>
-          ))}
-          {searched&&<span className="res-count">{results.length || similar.length} result{(results.length || similar.length)!==1?'s':''}</span>}
+          <select value={sortBy} onChange={e=>setSortBy(e.target.value)} className="fselect">
+            <option value="distance">Nearest shops</option>
+            <option value="rating">Top rated</option>
+            <option value="name">A to Z</option>
+          </select>
+          <select value={category} onChange={e=>setCategory(e.target.value)} className="fselect">
+            <option value="">All shop categories</option>
+            {CATS.filter(c=>c.id!=='All').map(c=><option key={c.id} value={c.id}>{c.id}</option>)}
+          </select>
+          <span className="res-count">{filteredShops.length} shop{filteredShops.length!==1?'s':''}</span>
         </div>
       </div>
       <div className="wrap search-body">
-        {imageSearchMeta && (
-          <div className="search-panel" style={{marginBottom:18}}>
-            <div style={{display:'grid',gridTemplateColumns:'92px minmax(0,1fr)',gap:16,alignItems:'center'}}>
-              <div style={{width:92,height:92,borderRadius:22,overflow:'hidden',background:'#f8fafc',border:'1px solid rgba(148,163,184,.22)'}}>
-                <img src={imageSearchMeta.queryImageUrl || imagePreview} alt="query" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
-              </div>
-              <div>
-                <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
-                  <span className="search-kicker" style={{margin:0}}>Visual Search</span>
-                  <span style={{padding:'5px 10px',borderRadius:999,background:imageSearchMeta.fallbackMode?'#fff7ed':'#ecfeff',color:imageSearchMeta.fallbackMode?'#c2410c':'#0f766e',fontSize:11,fontWeight:800}}>
-                    {imageSearchMeta.fallbackMode ? 'Fast fallback index' : 'CLIP embeddings'}
-                  </span>
-                </div>
-                <div style={{fontSize:18,fontWeight:900,letterSpacing:'-.03em',color:'#0f172a'}}>Visually similar products from nearby shops</div>
-                <div style={{fontSize:13,color:'var(--mu)',lineHeight:1.7,marginTop:5}}>
-                  Upload an image and the app compares it against stored catalog embeddings to find the closest product matches.
-                </div>
-              </div>
-            </div>
+        {loading ? <div className="hscroll"><div className="hs-inner">{[1,2,3,4].map(i=><div key={i} className="skel" style={{width:206,height:210,borderRadius:16}}/>)}</div></div>
+        : filteredShops.length===0 ? <div className="search-empty">
+            <div className="search-empty-title">{normalizedQuery ? `No shop found for "${normalizedQuery}"` : 'We are not here yet'}</div>
+            <div className="search-empty-copy">{normalizedQuery ? 'Try another shop name or clear the search to see all nearby shops.' : 'No shops are live in this location right now. We will reach your area soon.'}</div>
           </div>
-        )}
-        {loading ? <div className="pgrid">{[1,2,3,4,5,6].map(i=><SkeletonCard key={i}/>)}</div>
-        : !searched ? <div className="search-panel">
-            <div className="search-section-head">
-              <strong>Popular searches</strong>
-              <span>Trending categories customers search most</span>
-            </div>
-            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-              {['Kurta','Saree','Jeans','Dress','T-Shirt','Footwear','Kids','Jacket'].map(s=>(
-                <span key={s} onClick={()=>{setQuery(s);doSearch(s)}} className="fpill" style={{cursor:'pointer',fontSize:12,fontWeight:700}}>{s}</span>
-              ))}
-            </div>
-          </div>
-        : results.length===0 ? <div style={{display:'grid',gap:18}}>
-            <div className="search-empty">
-              <div className="search-empty-title">No exact result for "{query}"</div>
-              <div className="search-empty-copy">DOTT is showing the closest nearby products instead, based on product name, shop name, category, and local availability.</div>
-            </div>
-            {similar.length>0&&<div className="search-panel">
-              <div className="search-section-head">
-                <strong>Similar products from nearby shops</strong>
-                <span>Ranked using product name, shop name, category, and distance</span>
+        : <div className="search-panel" style={{padding:0,overflow:'hidden'}}>
+              <div className="search-section-head" style={{padding:'16px 16px 0',marginBottom:0}}>
+                <strong>{normalizedQuery ? 'Matching shops' : 'All nearby shops'}</strong>
+                <span>{filteredShops.length} shop{filteredShops.length!==1?'s':''}</span>
               </div>
-              <div className="pgrid">
-                {similar.map((p,i)=>(
-                  <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                    wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.03}/>
+              <div style={{display:'grid'}}>
+                {filteredShops.map(shop=>(
+                  <button key={`name-${shop.id}`} onClick={()=>onShopOpen(shop)} style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:12,alignItems:'center',padding:'15px 16px',margin:'8px 12px',background:'#fff',border:'1px solid var(--br)',borderRadius:14,boxShadow:'0 6px 16px rgba(15,23,42,.04)',textAlign:'left',cursor:'pointer',fontFamily:'var(--fn)',opacity:isShopOrderable(shop)?1:0.8}}>
+                    <span style={{minWidth:0}}>
+                      <strong style={{display:'block',fontSize:15,fontWeight:900,color:'var(--nv)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{shop.name}</strong>
+                      <span style={{display:'block',fontSize:12,color:'var(--mu)',marginTop:4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{shop.category || 'Shop'}{!isShopOrderable(shop) ? ' | Closed' : ''}</span>
+                    </span>
+                    <span style={{display:'grid',gap:4,justifyItems:'end',fontSize:12,color:'var(--mu)',fontWeight:800,whiteSpace:'nowrap'}}>
+                      <span>{typeof shop.distanceKm==='number'?`${shop.distanceKm.toFixed(1)} km`:'Nearby'}</span>
+                      <span style={{color:'#f59e0b'}}>{Number(shop.rating||0).toFixed(1)} ★</span>
+                    </span>
+                  </button>
                 ))}
               </div>
-            </div>}
-          </div>
-        : <div className="search-panel">
-            <div className="search-section-head">
-              <strong>{query.trim() ? 'Search results' : 'Products near you'}</strong>
-              <span>{query.trim() ? 'Matching products ready for quick delivery' : 'All nearby products sorted for your current location'}</span>
-            </div>
-            <div className="pgrid">
-              {results.map((p,i)=>(
-                <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                  wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.03}/>
-              ))}
-            </div>
           </div>}
       </div>
     </div>
@@ -4983,59 +5927,102 @@ function ReferralPage({user}){
     </div>
   )
   if(loading)return<div className="wrap" style={{paddingTop:40}}><Spin/></div>
+  const rewardValue = Math.floor((data?.points||0)/10)
+  const shareReferral = ()=>{
+    if(navigator.share){
+      navigator.share({title:'Join DOTT',text:`Use my DOTT code ${data?.code || ''} and get reward points.`,url:data?.shareLink}).catch(()=>{})
+    }else{
+      copy()
+    }
+  }
   return(
-    <div className="wrap" style={{paddingTop:24,paddingBottom:48,maxWidth:680}}>
-      <div className="ref-card">
-        <div style={{position:'relative',zIndex:1}}>
-          <div style={{fontWeight:900,fontSize:22,letterSpacing:"-.5px",marginBottom:7}}>Refer & Earn</div>
-          <div style={{fontWeight:900,fontSize:22,marginBottom:5,letterSpacing:'-.5px'}}>Refer & Earn</div>
-          <div style={{opacity:.8,fontSize:14,marginBottom:15,lineHeight:1.6}}>Share your code | Friend joins | You earn 50 pts | They earn 25 pts<br/>100 pts = Rs 10 off</div>
-          <div className="ref-code" onClick={copy}>{data?.code||'...'}</div>
-          <div style={{display:'flex',gap:10}}>
-            <button className="btn btn-or" style={{position:"relative",overflow:"hidden",flex:1,justifyContent:'center'}} onClick={copy}>Copy Code</button>
-            <button onClick={()=>navigator.share?.({title:'Join DOTT!',text:`Use my code ${data?.code}!`,url:data?.shareLink})}
-              style={{flex:1,padding:'10px',background:'rgba(255,255,255,.12)',border:'1px solid rgba(255,255,255,.2)',borderRadius:'var(--r8)',color:'#fff',fontFamily:'var(--fn)',fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7,fontSize:14}}>Share</button>
+    <div style={{minHeight:'100vh',background:'linear-gradient(180deg,#eaf6ff 0%,#f8fafc 34%,#f8fafc 100%)',paddingBottom:82}}>
+      <div className="wrap" style={{paddingTop:18,maxWidth:760}}>
+        <div style={{position:'relative',overflow:'hidden',borderRadius:24,padding:'22px 18px',background:'linear-gradient(135deg,#0f172a 0%,#1d4ed8 56%,#38bdf8 100%)',color:'#fff',boxShadow:'0 18px 46px rgba(29,78,216,.24)',marginBottom:14}}>
+          <div style={{position:'absolute',inset:0,backgroundImage:'radial-gradient(rgba(255,255,255,.22) 1px, transparent 1px)',backgroundSize:'22px 22px',opacity:.45}}/>
+          <div style={{position:'relative',zIndex:1}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:14,marginBottom:18}}>
+              <div style={{minWidth:0}}>
+                <div style={{display:'inline-flex',alignItems:'center',gap:7,padding:'6px 10px',borderRadius:999,background:'rgba(255,255,255,.16)',border:'1px solid rgba(255,255,255,.18)',fontSize:11,fontWeight:900,textTransform:'uppercase',letterSpacing:'.4px'}}>Rewards</div>
+                <div style={{fontSize:28,fontWeight:900,letterSpacing:'-.8px',marginTop:10,lineHeight:1.05}}>Refer & Earn</div>
+                <div style={{fontSize:13,lineHeight:1.6,opacity:.86,marginTop:8,maxWidth:420}}>Share your code. Your friend gets 25 points, and you get 50 points after they join.</div>
+              </div>
+              <div style={{width:62,height:62,borderRadius:20,background:'rgba(255,255,255,.16)',border:'1px solid rgba(255,255,255,.22)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                <Ic.Gift width={30} height={30} stroke="#fff"/>
+              </div>
+            </div>
+
+            <div style={{background:'rgba(255,255,255,.96)',color:'var(--nv)',borderRadius:20,padding:14,boxShadow:'0 14px 34px rgba(15,23,42,.18)'}}>
+              <div style={{fontSize:11,fontWeight:900,color:'var(--mu)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:8}}>Your invite code</div>
+              <button onClick={copy} style={{width:'100%',border:'1px dashed rgba(29,78,216,.35)',background:'linear-gradient(180deg,#f8fbff,#eef6ff)',borderRadius:16,padding:'15px 12px',fontSize:26,fontWeight:900,letterSpacing:'2px',color:'#1d4ed8',cursor:'pointer',fontFamily:'var(--fn)'}}>{data?.code||'...'}</button>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginTop:12}}>
+                <button className="btn btn-or" style={{justifyContent:'center'}} onClick={copy}>Copy Code</button>
+                <button className="btn btn-nv" style={{justifyContent:'center'}} onClick={shareReferral}>Share</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:11,marginBottom:18}}>
-        {[{val:data?.points||0,lbl:'Points'},{val:data?.usedCount||0,lbl:'Friends'},{val:'Rs '+Math.floor((data?.points||0)/10),lbl:'Value'}].map(({val,lbl})=>(
-          <div key={lbl} style={{background:'#fff',borderRadius:'var(--r12)',border:'1px solid var(--br)',padding:15,textAlign:'center',boxShadow:'var(--sh0)'}}>
-            <div style={{height:8}}/>
-            <div style={{fontWeight:900,fontSize:22,color:'var(--or)'}}>{val}</div>
-            <div style={{fontSize:11,color:'var(--mu)',fontWeight:700,marginTop:2}}>{lbl}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{background:'#fff',borderRadius:'var(--r16)',border:'1px solid var(--br)',padding:19,marginBottom:18}}>
-        <div style={{fontWeight:800,fontSize:15,marginBottom:3}}>Have a friend's code?</div>
-        <div style={{fontSize:13,color:'var(--mu)',marginBottom:12}}>Apply to earn 25 bonus points</div>
-        <div style={{display:'flex',gap:9}}>
-          <input className="inp" placeholder="Enter referral code..." value={refInput} onChange={e=>setRefInput(e.target.value.toUpperCase())} style={{flex:1}}/>
-          <button className="btn btn-or" style={{position:"relative",overflow:"hidden"}} onClick={apply} disabled={applying}>{applying?'...':'Apply'}</button>
-        </div>
-      </div>
-
-      <div style={{background:'linear-gradient(135deg,#064e3b,#047857)',borderRadius:'var(--r16)',padding:22,color:'#fff'}}>
-        <div style={{fontWeight:900,fontSize:18,marginBottom:5}}> Become a Reseller</div>
-        <div style={{opacity:.85,fontSize:14,marginBottom:14}}>Share products | Earn 10% per sale | Zero investment</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:9}}>
-          {[{title:'Share Products',desc:'Pick from our catalogue'},{title:'Earn 10%',desc:'Per sale via your link'}].map(({icon,title,desc})=>(
-            <div key={title} style={{background:'rgba(255,255,255,.1)',borderRadius:'var(--r8)',padding:'11px 13px',border:'1px solid rgba(255,255,255,.15)'}}>
-              <div style={{height:4}}/>
-              <div style={{fontWeight:800,fontSize:13,marginBottom:1}}>{title}</div>
-              <div style={{fontSize:11,opacity:.8}}>{desc}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10,marginBottom:14}}>
+          {[{val:data?.points||0,lbl:'Points earned',tone:'#1d4ed8'},{val:data?.usedCount||0,lbl:'Friends joined',tone:'#0f766e'},{val:`Rs ${rewardValue}`,lbl:'Reward value',tone:'#ea580c'}].map(({val,lbl,tone})=>(
+            <div key={lbl} style={{background:'#fff',borderRadius:18,border:'1px solid var(--br)',padding:'14px 10px',textAlign:'center',boxShadow:'0 8px 22px rgba(15,23,42,.05)'}}>
+              <div style={{fontWeight:900,fontSize:21,color:tone,letterSpacing:'-.4px'}}>{val}</div>
+              <div style={{fontSize:10,color:'var(--mu)',fontWeight:800,marginTop:4,lineHeight:1.25}}>{lbl}</div>
             </div>
           ))}
+        </div>
+
+        <div style={{background:'#fff',borderRadius:20,border:'1px solid var(--br)',padding:16,boxShadow:'0 8px 22px rgba(15,23,42,.05)',marginBottom:14}}>
+          <div style={{fontSize:17,fontWeight:900,color:'var(--nv)',marginBottom:12}}>How it works</div>
+          <div style={{display:'grid',gap:10}}>
+            {[
+              ['1','Share your code','Send your invite code to friends.'],
+              ['2','Friend joins DOTT','They register and get 25 reward points.'],
+              ['3','You earn points','You get 50 points after a successful join.'],
+            ].map(([num,title,copyText])=>(
+              <div key={num} style={{display:'grid',gridTemplateColumns:'34px minmax(0,1fr)',gap:11,alignItems:'center',padding:'10px 0',borderTop:num==='1'?'none':'1px solid var(--br2)'}}>
+                <div style={{width:34,height:34,borderRadius:12,background:'#eaf6ff',color:'#1d6fb8',fontWeight:900,display:'flex',alignItems:'center',justifyContent:'center'}}>{num}</div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:900,color:'var(--nv)'}}>{title}</div>
+                  <div style={{fontSize:12,color:'var(--mu)',lineHeight:1.45,marginTop:2}}>{copyText}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{background:'#fff',borderRadius:20,border:'1px solid var(--br)',padding:16,boxShadow:'0 8px 22px rgba(15,23,42,.05)',marginBottom:14}}>
+          <div style={{fontWeight:900,fontSize:17,marginBottom:4,color:'var(--nv)'}}>Have a friend's code?</div>
+          <div style={{fontSize:13,color:'var(--mu)',marginBottom:12,lineHeight:1.55}}>Apply it once and earn 25 bonus points.</div>
+          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto',gap:9}}>
+            <input className="inp" placeholder="Enter code" value={refInput} onChange={e=>setRefInput(e.target.value.toUpperCase())} style={{height:44,borderRadius:12}}/>
+            <button className="btn btn-or" style={{height:44,justifyContent:'center'}} onClick={apply} disabled={applying}>{applying?'Applying':'Apply'}</button>
+          </div>
+        </div>
+
+        <div style={{background:'linear-gradient(135deg,#064e3b,#047857)',borderRadius:22,padding:18,color:'#fff',boxShadow:'0 14px 34px rgba(4,120,87,.18)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+            <div style={{width:46,height:46,borderRadius:15,background:'rgba(255,255,255,.14)',border:'1px solid rgba(255,255,255,.16)',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic.Share width={22} height={22} stroke="#fff"/></div>
+            <div>
+              <div style={{fontWeight:900,fontSize:18}}>Become a Reseller</div>
+              <div style={{opacity:.84,fontSize:13,marginTop:2}}>Share products and earn on each sale.</div>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:9}}>
+            {[{title:'Share Products',desc:'Pick from the catalogue'},{title:'Earn 10%',desc:'Per sale via your link'}].map(({title,desc})=>(
+              <div key={title} style={{background:'rgba(255,255,255,.1)',borderRadius:14,padding:'12px 13px',border:'1px solid rgba(255,255,255,.15)'}}>
+                <div style={{fontWeight:900,fontSize:13,marginBottom:3}}>{title}</div>
+                <div style={{fontSize:11,opacity:.8,lineHeight:1.4}}>{desc}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-// â”€â”€â”€ Account Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Account Page ----------------------------------------
 function AccountPage({user,onSignOut,onOpenAuth,onNavigate}){
   const[points,setPoints]=useState(null)
   const[orders,setOrders]=useState([])
@@ -5203,8 +6190,8 @@ function AccountPage({user,onSignOut,onOpenAuth,onNavigate}){
   )
 }
 
-// â”€â”€â”€ Home Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductClick,wishlistIds,onWishlist,onSearchPage,recentlyViewed=[],onLocationInsightsChange}){
+// --- Home Page ----------------------------------------
+function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductClick,wishlistIds,onWishlist,onSearchPage,onProductSearch,recentlyViewed=[],onLocationInsightsChange}){
   const[shops,setShops]=useState([])
   const[products,setProducts]=useState([])
   const[loading,setLoading]=useState(true)
@@ -5266,7 +6253,8 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
     })
   },[shops,products,userLoc,radius,onLocationInsightsChange])
 
-  const filtered=cat==='All'?products:products.filter(p=>p.category===cat)
+  const filtered=products.filter(p=>productMatchesCategory(p, cat))
+  const categoryMode = cat !== 'All'
   const newArrivals=products.filter(p=>!p.avgRating||p.avgRating===0).slice(0,10)
   const topRated=[...products].sort((a,b)=>(b.avgRating||0)-(a.avgRating||0)).filter(p=>p.avgRating>0).slice(0,10)
   const nearbyRecommended=[...products]
@@ -5280,181 +6268,213 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
   const locationBasedShops=[...shops]
     .filter(s=>typeof s.distanceKm==='number')
     .slice(0,6)
+  const collectionMatches = (product, terms=[]) => {
+    const haystack = normalizeSearchText([
+      product?.name,
+      product?.category,
+      product?.brand,
+      Array.isArray(product?.tags) ? product.tags.join(' ') : product?.tags,
+      product?.description
+    ].filter(Boolean).join(' '))
+    return terms.some(term=>haystack.includes(normalizeSearchText(term)))
+  }
+  const featuredCollections=[
+    { title:'New Arrivals', query:'new arrivals', items:newArrivals.filter(p=>p.imageUrl).slice(0,4) },
+    { title:'Top Rated', query:'top rated', items:topRated.filter(p=>p.imageUrl).slice(0,4) },
+    { title:'Ethnic Wear', query:'ethnic wear', items:products.filter(p=>p.imageUrl&&collectionMatches(p,['saree','kurta','kurti','lehenga','ethnic','traditional'])).slice(0,4) },
+    { title:'Footwear', query:'footwear', items:products.filter(p=>p.imageUrl&&collectionMatches(p,['footwear','shoe','shoes','sandal','sandals','slipper','slippers','chappal','boot','boots','sneaker','sneakers'])).slice(0,4) },
+  ].filter(c=>c.items.length>0)
+  const pickUniqueProducts = (source=[], used=new Set(), limit=8) => {
+    const picked = []
+    ;(Array.isArray(source) ? source : []).forEach(item=>{
+      if(!item?.id || used.has(item.id) || picked.length >= limit) return
+      used.add(item.id)
+      picked.push(item)
+    })
+    return picked
+  }
+  const usedRailProductIds = new Set()
+  const recentRail = pickUniqueProducts(recentlyViewed || [], usedRailProductIds, 8)
+  const newArrivalRail = pickUniqueProducts(newArrivals, usedRailProductIds, 10)
+  const topRatedRail = pickUniqueProducts(topRated, usedRailProductIds, 10)
+  const nearbyRail = pickUniqueProducts(nearbyRecommended, usedRailProductIds, 8)
+  const closestShopRail = pickUniqueProducts(closestShopProducts, usedRailProductIds, 8)
+  const spotlightRail = pickUniqueProducts([
+    ...newArrivals,
+    ...topRated,
+    ...nearbyRecommended,
+    ...products
+  ], new Set(), 12)
+  const HomeSection=({title,sub='',kicker,children,action,onAction,tone='#1d6fb8',compact=false})=>(
+    <LazySection minHeight={compact?190:250}>
+      <div style={{margin:'14px 0',borderRadius:22,background:'linear-gradient(180deg,#ffffff,#f8fbff)',border:'1px solid rgba(207,230,251,.9)',boxShadow:'0 10px 28px rgba(56,73,89,.07)',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,padding:'12px 16px 8px'}}>
+          <div style={{minWidth:0}}>
+            {kicker&&<div style={{display:'inline-flex',alignItems:'center',padding:'4px 9px',borderRadius:999,background:'#eaf6ff',color:tone,fontSize:9,fontWeight:900,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:6}}>{kicker}</div>}
+            <div style={{fontSize:19,fontWeight:900,color:'var(--nv)',letterSpacing:'-.5px',lineHeight:1.08}}>{title}</div>
+            {sub&&<div style={{fontSize:12,color:'var(--mu)',lineHeight:1.35,marginTop:4}}>{sub}</div>}
+          </div>
+          {action&&<button onClick={onAction} style={{border:'1px solid #d7ebff',background:'#fff',color:tone,borderRadius:999,padding:'8px 12px',fontSize:12,fontWeight:900,cursor:'pointer',whiteSpace:'nowrap',boxShadow:'var(--sh0)'}}>{action}</button>}
+        </div>
+        <div style={{padding:'0 0 14px'}}>{children}</div>
+      </div>
+    </LazySection>
+  )
+  const ProductRail=({items,prefix='item',skeletons=5})=>{
+    const displayItems = items
+    return (
+    <div className="hscroll" style={{paddingTop:2}}>
+      <div className="hs-inner">
+        {loading?[...Array(skeletons)].map((_,i)=><SkeletonCard key={`${prefix}-sk-${i}`}/>)
+          :displayItems.map((p,i)=>(
+            <ProdCard key={`${prefix}-${p.id}-${i}`} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
+              wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.04}/>
+          ))}
+      </div>
+    </div>
+  )}
+  const featuredProductsForShop = (shop) => products
+    .filter(p=>p.shopId===shop?.id || (shop?.name && (p.shopName || '').toLowerCase() === shop.name.toLowerCase()))
+    .slice(0,4)
+  const ShopRail=({items,prefix='shop',skeletons=4})=>{
+    const displayItems = items
+    return (
+      <div className="hscroll">
+        <div className="hs-inner">
+          {loading?[...Array(skeletons)].map((_,i)=><div key={`${prefix}-sk-${i}`} className="skel" style={{width:214,height:226,borderRadius:18}}/>)
+            :displayItems.map((s,i)=><ShopCard key={`${prefix}-${s.id || s.name}-${i}`} shop={s} featuredProducts={featuredProductsForShop(s)} onClick={onShopOpen}/>)}
+        </div>
+      </div>
+    )
+  }
 
   return(
     <div>
-      <BannerCarousel onCtaClick={onSearchPage}/>
+      <BannerCarousel onCtaClick={onProductSearch||onSearchPage}/>
 
       {/* Category bar */}
       <div className="catbar">
         <div className="catbar-inner">
           {CATS.map(c=>(
-            <div key={c.id} className={`cat-btn${cat===c.id?' on':''}`} onClick={()=>setCat(c.id)}>
-              <span>{c.id}</span>
-            </div>
+            <button key={c.id} type="button" className={`cat-btn${cat===c.id?' on':''}`} onClick={()=>setCat(c.id)}>
+              <span className="cat-copy">
+                <span className="cat-label">{c.id}</span>
+              </span>
+            </button>
           ))}
         </div>
       </div>
 
       <div className="wrap">
-        {/* Nearby Shops */}
-        {(loading||shops.length>0)&&(
-          <div className="sec-wrap">
-            <div className="sec-hd">
-              <div><div className="sec-title">Shops Near You</div><div className="sec-sub">{shops.length} stores available</div></div>
-            </div>
-            <div className="hscroll">
-              <div className="hs-inner">
-                {loading?[1,2,3,4].map(i=><div key={i} className="skel" style={{width:260,height:200,borderRadius:'var(--r16)'}}/>)
-                  :shops.slice(0,6).map(s=><ShopCard key={s.id} shop={s} onClick={onShopOpen}/>)}
-              </div>
-            </div>
-          </div>
+        {/* Clothes first */}
+        {!categoryMode&&(loading||spotlightRail.length>0)&&(
+          <HomeSection title="Fresh styles" kicker="Trending" tone="#1d6fb8" action="Browse" onAction={onProductSearch||onSearchPage}>
+            <ProductRail items={spotlightRail} prefix="spotlight" skeletons={6}/>
+          </HomeSection>
         )}
 
-        {!loading&&locationBasedShops.length>0&&(
+        {!categoryMode&&(loading||newArrivalRail.length>0)&&(
+          <HomeSection title="New clothes" kicker="Fresh" tone="#ea580c" action="Browse" onAction={onProductSearch||onSearchPage}>
+            <ProductRail items={newArrivalRail} prefix="new"/>
+          </HomeSection>
+        )}
+
+        {!categoryMode&&topRatedRail.length>0&&(
+          <HomeSection title="Customer favorites" kicker="Top rated" tone="#1d4ed8">
+            <ProductRail items={topRatedRail} prefix="rated"/>
+          </HomeSection>
+        )}
+
+        {/* Nearby Shops */}
+        {!categoryMode&&(loading||shops.length>0)&&(
+          <HomeSection title="Stores" kicker="Nearby" action="View shops" onAction={()=>{onSearchPage&&onSearchPage()}}>
+            <ShopRail items={shops.slice(0,6)} prefix="nearby-shop"/>
+          </HomeSection>
+        )}
+
+        {!categoryMode&&!loading&&shops.length===0&&(
           <LazySection minHeight={220}>
-            <div className="sec-wrap">
-              <div className="sec-hd">
-                <div>
-                  <div className="sec-title">Recommendations Based On Your Location</div>
-                  <div className="sec-sub">Closest verified shops and products around your saved area</div>
-                </div>
+            <div style={{margin:'14px 0',borderRadius:22,background:'linear-gradient(180deg,#ffffff,#f8fbff)',border:'1px solid rgba(207,230,251,.9)',boxShadow:'0 10px 28px rgba(56,73,89,.07)',padding:'22px 18px',textAlign:'center'}}>
+              <div style={{width:60,height:60,borderRadius:18,background:'#eef6ff',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+                <Ic.Map width={28} height={28} stroke="#4aa8ff"/>
               </div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {locationBasedShops.map(s=><ShopCard key={`loc-${s.id}`} shop={s} onClick={onShopOpen}/>)}
-                </div>
+              <div style={{fontSize:22,fontWeight:900,color:'var(--nv)',letterSpacing:'-.5px'}}>We are not here yet</div>
+              <div style={{fontSize:13,color:'var(--mu)',lineHeight:1.6,maxWidth:320,margin:'8px auto 0'}}>
+                No shops are live in this delivery area right now. We will reach your location soon.
               </div>
             </div>
           </LazySection>
+        )}
+
+        {!categoryMode&&!loading&&locationBasedShops.length>0&&(
+          <HomeSection title="Popular" kicker="Stores" tone="#0f766e" action="See all" onAction={()=>{onSearchPage&&onSearchPage()}}>
+              <ShopRail items={locationBasedShops} prefix="popular-shop"/>
+          </HomeSection>
         )}
 
         {/* Deal boxes */}
-        {!loading&&shops.length>=2&&(
+        {!categoryMode&&!loading&&featuredCollections.length>0&&(
           <LazySection minHeight={240}>
             <div className="sec-wrap">
-              <div className="sec-hd"><div className="sec-title">Today's Deals</div></div>
+              <div className="sec-hd"><div className="sec-title">Featured Collections</div></div>
               <div className="deal-grid">
-                {[{title:'New Arrivals',s:0},{title:'Top Rated',s:1},{title:'Ethnic Wear',s:shops.findIndex(s=>s.category?.toLowerCase().includes('fashion'))},{title:'Footwear',s:shops.length-1}].filter(d=>shops[d.s]).map((d,di)=>(
-                  <div key={di} className="deal-card" onClick={()=>onShopOpen(shops[d.s])}>
-                    <div className="deal-title">{d.title}</div>
-                    <div className="deal-imgs">
-                      {products.filter(p=>p.shopId===shops[d.s].id&&p.imageUrl).slice(0,4).map((p,pi)=>(
-                        <img key={pi} src={p.imageUrl} alt={p.name} onError={e=>e.target.style.display='none'}/>
-                      ))}
+                {featuredCollections.map((d,di)=>{
+                  const imgs = d.items
+                  return (
+                  <div key={d.title} className={`deal-card${imgs.length?'':' empty'}`} onClick={()=>onProductSearch ? onProductSearch(d.query) : onSearchPage&&onSearchPage()}>
+                    {imgs.length ? (
+                      <div className="deal-imgs">
+                        {imgs.map((p,pi)=>(
+                          <img key={pi} src={p.imageUrl} alt={p.name} onError={e=>e.target.style.display='none'}/>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="deal-empty-art"/>
+                    )}
+                    <div className="deal-overlay"/>
+                    <div className="deal-copy">
+                      <div className="deal-title">{d.title}</div>
+                      <div className="deal-cta">Shop Now</div>
                     </div>
-                    <div className="deal-cta">Shop Now</div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </LazySection>
-        )}
-
-        {/* New Arrivals */}
-        {(loading||newArrivals.length>0)&&(
-          <LazySection minHeight={260}>
-            <div className="sec-wrap">
-              <div className="sec-hd"><div><div className="sec-title">New Arrivals</div><div className="sec-sub">Fresh styles just added</div></div></div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {loading?[1,2,3,4,5].map(i=><SkeletonCard key={i}/>)
-                    :newArrivals.map((p,i)=>(
-                      <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                        wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.05}/>
-                    ))}
-                </div>
+                )})}
               </div>
             </div>
           </LazySection>
         )}
 
         {/* Recently Viewed */}
-        {recentlyViewed&&recentlyViewed.length>0&&(
-          <LazySection minHeight={240}>
-            <div className="sec-wrap">
-              <div className="sec-hd"><div><div className="sec-title">Recently Viewed</div><div className="sec-sub">Your browsing history</div></div></div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {recentlyViewed.map((p,i)=>(
-                    <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                      wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.03}/>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </LazySection>
+        {!categoryMode&&recentRail.length>0&&(
+          <HomeSection title="Recent" kicker="Viewed" tone="#7c3aed" compact>
+            <ProductRail items={recentRail} prefix="recent" skeletons={4}/>
+          </HomeSection>
         )}
 
-        {/* Top Rated */}
-        {topRated.length>0&&(
-          <LazySection minHeight={240}>
-            <div className="sec-wrap">
-              <div className="sec-hd"><div><div className="sec-title">Top Rated</div><div className="sec-sub">Loved by customers</div></div></div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {topRated.map((p,i)=>(
-                    <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                      wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.05}/>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </LazySection>
+        {!categoryMode&&!loading&&nearbyRail.length>0&&(
+          <HomeSection title="Nearby" kicker="Quick" tone="#0ea5e9">
+            <ProductRail items={nearbyRail} prefix="near"/>
+          </HomeSection>
         )}
 
-        {!loading&&nearbyRecommended.length>0&&(
-          <LazySection minHeight={240}>
-            <div className="sec-wrap">
-              <div className="sec-hd">
-                <div>
-                  <div className="sec-title">Products Recommended Near You</div>
-                  <div className="sec-sub">Sorted using your location and the nearest active shops</div>
-                </div>
-              </div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {nearbyRecommended.map((p,i)=>(
-                    <ProdCard key={`near-${p.id}`} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                      wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.03}/>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </LazySection>
-        )}
-
-        {!loading&&closestShop&&closestShopProducts.length>0&&(
-          <LazySection minHeight={240}>
-            <div className="sec-wrap">
-              <div className="sec-hd">
-                <div>
-                  <div className="sec-title">Closest Shop Picks</div>
-                  <div className="sec-sub">{closestShop.name}{typeof closestShop.distanceKm==='number'?` | ${closestShop.distanceKm.toFixed(1)} km away`:''}</div>
-                </div>
-              </div>
-              <div className="hscroll">
-                <div className="hs-inner">
-                  {closestShopProducts.map((p,i)=>(
-                    <ProdCard key={`closest-${p.id}`} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
-                      wishlisted={wishlistIds.includes(p.id)} onWishlist={onWishlist} delay={i*0.03}/>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </LazySection>
+        {!categoryMode&&!loading&&closestShop&&closestShopRail.length>0&&(
+          <HomeSection title="Highlights" kicker={closestShop.name} tone="#2563eb" action="Open shop" onAction={()=>onShopOpen(closestShop)}>
+            <ProductRail items={closestShopRail} prefix="closest"/>
+          </HomeSection>
         )}
 
         {/* All products */}
         <div className="sec-wrap">
           <div className="sec-hd">
-            <div><div className="sec-title">{cat==='All'?'All Products':cat}</div><div className="sec-sub">{filtered.length} items</div></div>
+            <div>
+              <div className="sec-title">{cat==='All'?'All Products':`${cat} Products`}</div>
+              <div className="sec-sub">{categoryMode?'Only related products are shown here':`${filtered.length} items`}</div>
+            </div>
+            {categoryMode&&<button className="btn btn-out" style={{minHeight:38,padding:'0 14px'}} onClick={()=>setCat('All')}>Clear</button>}
           </div>
           {loading
             ?<div className="pgrid">{[1,2,3,4,5,6,7,8].map(i=><SkeletonCard key={i}/>)}</div>
             :filtered.length===0
-              ?<div className="empty"><div style={{width:60,height:60,borderRadius:16,background:'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 12px'}}><svg width='28' height='28' viewBox='0 0 24 24' fill='none' stroke='#94a3b8' strokeWidth='1.5' strokeLinecap='round'><path d='M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z'/><line x1='3' y1='6' x2='21' y2='6'/><path d='M16 10a4 4 0 01-8 0'/></svg></div><div className="empty-title">No products yet</div><div style={{fontSize:13}}>Vendors are setting up - check back soon!</div></div>
+              ?<div className="empty"><div style={{width:60,height:60,borderRadius:16,background:'#f1f5f9',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 12px'}}><svg width='28' height='28' viewBox='0 0 24 24' fill='none' stroke='#94a3b8' strokeWidth='1.5' strokeLinecap='round'><path d='M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z'/><line x1='3' y1='6' x2='21' y2='6'/><path d='M16 10a4 4 0 01-8 0'/></svg></div><div className="empty-title">{shops.length===0 ? 'We are not here yet' : 'No products yet'}</div><div style={{fontSize:13}}>{shops.length===0 ? 'No shops are live in this location right now. We will reach your area soon.' : 'Vendors are setting up - check back soon!'}</div></div>
               :<div className="pgrid">
                  {filtered.map((p,i)=>(
                    <ProdCard key={p.id} p={p} cart={cart} onCartUpdate={onCartUpdate} onClick={onProductClick}
@@ -5467,7 +6487,7 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
   )
 }
 
-// â”€â”€â”€ Leaflet loader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Leaflet loader ----------------------------------------
 function useLeaflet(){
   useEffect(()=>{
     if(window.L)return
@@ -5476,7 +6496,7 @@ function useLeaflet(){
   },[])
 }
 
-// â”€â”€â”€ MAP LOCATION MODAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- MAP LOCATION MODAL ----------------------------------------
 function MapLocationModal({currentLat,currentLng,radius,onSave,onClose,savedAddresses=[],recentLocations=[],lockSelection=false}){
   const[lat,setLat]=useState(currentLat||17.385)
   const[lng,setLng]=useState(currentLng||78.4867)
@@ -5525,7 +6545,7 @@ function MapLocationModal({currentLat,currentLng,radius,onSave,onClose,savedAddr
             <div style={{fontWeight:900,fontSize:18}}>Set Location</div>
             {lockSelection&&<div style={{fontSize:12,color:'var(--mu)',marginTop:4}}>Choose your delivery area first to see nearby shops and products.</div>}
           </div>
-          {!lockSelection&&<button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:'var(--mu)'}}>✕</button>}
+          {!lockSelection&&<button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:'var(--mu)'}}>x</button>}
         </div>
 
         <MapPicker lat={lat} lng={lng} onPinMove={(la,lo)=>{setLat(la);setLng(lo)}} height={280}/>
@@ -5740,12 +6760,13 @@ function QuickLocationPrompt({savedAddresses=[],recentLocations=[],currentLabel=
   )
 }
 
-// â”€â”€â”€ APP ROOT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- APP ROOT ----------------------------------------
 export default function App(){
-  const SAFE_PAGES = ['home','search','shop','product','orders','wishlist','referral','account','auth']
+  const SAFE_PAGES = ['home','search','productSearch','shop','product','orders','wishlist','referral','account','auth','cart']
+  const useSimpleCheckout = false
   const[user,setUser]=useState(null)
   const[loading,setLoading]=useState(true)
-  // page: home | search | shop | product | orders | wishlist | referral | account
+  // page: home | search | productSearch | shop | product | orders | wishlist | referral | account
   const[page,setPage]=useState('home')
   const[pageData,setPageData]=useState({})
   const[recentlyViewed,setRecentlyViewed]=useState(()=>{
@@ -5776,9 +6797,50 @@ export default function App(){
   const[suggestions,setSuggestions]=useState([])
   const[showSugg,setShowSugg]=useState(false)
   const[showLocMap,setShowLocMap]=useState(false)
-  const[radius,setRadius]=useState(()=>{const saved=Number(localStorage.getItem('dott_radius_km')||10);return getOrderRangeLimit(saved)})
+  const[radius,setRadius]=useState(()=>{
+    try{
+      const saved = Number(localStorage.getItem('dott_radius_km') || 10)
+      return getOrderRangeLimit(saved)
+    }catch{
+      return getOrderRangeLimit(10)
+    }
+  })
 
   useLeaflet()
+
+  useEffect(()=>{
+    if(typeof window==='undefined' || typeof document==='undefined') return
+    let compact = false
+    let ticking = false
+    const setCompactClass = next => {
+      if(compact === next) return
+      compact = next
+      document.querySelectorAll('.topnav').forEach(el=>el.classList.toggle('topnav-compact', next))
+      document.querySelectorAll('.catbar').forEach(el=>el.classList.toggle('compact', next))
+    }
+    const apply = () => {
+      ticking = false
+      if(page !== 'home' || showCart || showCheckout){
+        setCompactClass(false)
+        return
+      }
+      const y = window.scrollY || document.documentElement.scrollTop || 0
+      setCompactClass(compact ? y > 28 : y > 120)
+    }
+    const onScroll = () => {
+      if(ticking) return
+      ticking = true
+      window.requestAnimationFrame(apply)
+    }
+    apply()
+    window.addEventListener('scroll', onScroll, { passive:true })
+    window.addEventListener('resize', onScroll)
+    return()=>{
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+      setCompactClass(false)
+    }
+  },[page,showCart,showCheckout])
 
   useEffect(()=>{
     if(!SAFE_PAGES.includes(page)) setPage('home')
@@ -5897,17 +6959,22 @@ export default function App(){
     }catch(e){}
   }
 
+  const scrollAppTop=useCallback(()=>{
+    if(typeof window==='undefined') return
+    window.requestAnimationFrame(()=>window.scrollTo({top:0,left:0,behavior:'auto'}))
+  },[])
+
   const openProduct=useCallback((p)=>{
-    setPageData({product:p});setPage('product')
+    setPageData({product:p});setPage('product');scrollAppTop()
     setRecentlyViewed(prev=>{
       const safe={id:p.id,name:p.name,price:p.price,mrp:p.mrp,imageUrl:p.imageUrl,images:p.images,shopId:p.shopId,shopName:p.shopName,shopLat:p.shopLat,shopLng:p.shopLng,avgRating:p.avgRating,reviewCount:p.reviewCount,hasSizes:p.hasSizes,isActive:p.isActive,colors:p.colors,category:p.category,sizes:p.sizes,stock:p.stock,brand:p.brand,material:p.material,description:p.description}
       const updated=[safe,...prev.filter(x=>x.id!==p.id)].slice(0,10)
       try{localStorage.setItem('dott_rv',JSON.stringify(updated))}catch(e){console.warn('RV save:',e)}
       return updated
     })
-  },[])
-  const openShop=useCallback((s)=>{setPageData({shop:s});setPage('shop')},[])
-  const goHome=()=>{setPage('home');setPageData({})}
+  },[scrollAppTop])
+  const openShop=useCallback((s)=>{setPageData({shop:s});setPage('shop');scrollAppTop()},[scrollAppTop])
+  const goHome=()=>{setPage('home');setPageData({});scrollAppTop()}
   const signOut=async()=>{try{await api.logout()}catch(e){};clearTokens();setUser(null);setWishlistIds([]);setSavedAddresses([]);setPage('home');showToast('Signed out','info')}
   const openAuthPage=(tab='login',returnTo=page)=>{setShowCart(false);setAuthTab(tab);setAuthReturnTo(returnTo||'home');setPage('auth')}
   const openCheckoutWithItems=useCallback((items)=>{
@@ -5920,21 +6987,33 @@ export default function App(){
     setShowCheckout(true)
   },[])
 
-  const doSearch=useCallback((q)=>{setSearchQuery(q);setShowSugg(false);setPageData({query:q});setPage('search')},[])
+  const imageFileInputRef=useRef(null)
+  const openProductSearchPage=useCallback((query='')=>{
+    setPageData({query})
+    setPage('productSearch')
+    scrollAppTop()
+  },[scrollAppTop])
+  const handleImageSearchFile=useCallback((file)=>{
+    if(!file)return
+    setShowSugg(false)
+    setPageData({query:searchQuery,imageFile:file,autoOpenImageSearch:true})
+    setPage('productSearch')
+    scrollAppTop()
+  },[searchQuery,scrollAppTop])
+  const doSearch=useCallback((q)=>{setSearchQuery(q);setShowSugg(false);openProductSearchPage(q)},[openProductSearchPage])
   const openImageSearch=useCallback(()=>{
     setShowSugg(false)
-    setPageData({query:searchQuery,autoOpenImageSearch:true})
-    setPage('search')
-  },[searchQuery])
+    imageFileInputRef.current?.click()
+  },[])
 
   const safeCart = Array.isArray(cart) ? cart : []
   const cartCount=safeCart.reduce((s,i)=>s+Number(i?.qty||0),0)
-  const activeNavId = showCart ? 'cart' : page
+  const activeNavId = page === 'cart' || showCart ? 'cart' : page
   const deliveryBadgePrimary = locationInsights.nearbyShopCount > 0 ? `${locationInsights.nearbyShopCount}` : 'Set'
   const deliveryBadgeSecondary = locationInsights.nearbyShopCount > 0 ? 'shops nearby' : 'location'
   const NAV_ITEMS=[
     {id:'home',  icon:<Ic.Home   width={22} height={22}/>, label:'Home'},
-    {id:'search',icon:<Ic.Search width={22} height={22}/>, label:'Search'},
+    {id:'search',icon:<Ic.Shop width={22} height={22}/>, label:'Shops'},
     {id:'cart',icon:<Ic.Cart width={22} height={22}/>, label:'Cart'},
     {id:'account',icon:<Ic.User  width={22} height={22}/>, label:'Account'},
   ]
@@ -5953,9 +7032,9 @@ export default function App(){
   return(
     <>
       <style>{CSS}</style>
-
+      <ScreenErrorBoundary checkoutOpen={showCheckout} resetKey={`${page}-${showCheckout ? 'checkout' : 'screen'}-${cart.length}`} onHome={goHome}>
       {/* TOP NAV */}
-      {['home','search'].includes(page)&&!showCart&&<nav className="topnav">
+      {page==='home'&&!showCart&&!showCheckout&&<nav className="topnav">
         <div className="topnav-inner">
           <div className="nav-logo" onClick={goHome}>DOTT</div>
 
@@ -5971,6 +7050,11 @@ export default function App(){
             <button className="search-image-btn" onClick={openImageSearch} title="Search by image">
               <Ic.Camera width={17} height={17}/>
             </button>
+            <input ref={imageFileInputRef} type="file" accept="image/*" hidden onChange={e=>{
+              const file=e.target.files?.[0]
+              if(file) handleImageSearchFile(file)
+              e.target.value=''
+            }}/>
             <button className="search-btn" onClick={()=>doSearch(searchQuery)}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </button>
@@ -6046,22 +7130,27 @@ export default function App(){
 
       {/* MAIN */}
       <main style={{minHeight:'100vh',width:'100%',margin:'0 auto'}} onClick={()=>setShowSugg(false)}>
-        {page==='home'&&(
+        {!showCheckout && page==='home'&&(
           <HomePage user={user} userLoc={userLoc} radius={radius} cart={cart} onCartUpdate={setCart}
             onShopOpen={openShop} onProductClick={openProduct} wishlistIds={wishlistIds} onWishlist={toggleWishlist}
-            onSearchPage={()=>{setPage('search');setPageData({})}} recentlyViewed={recentlyViewed}
+            onSearchPage={()=>{setPage('search');setPageData({})}} onProductSearch={(query='')=>openProductSearchPage(query)} recentlyViewed={recentlyViewed}
             onLocationInsightsChange={setLocationInsights}/>
         )}
-        {page==='search'&&(
+        {!showCheckout && page==='productSearch'&&(
+          <SearchPage initialQuery={pageData.query} imageFile={pageData.imageFile} autoOpenImageSearch={!!pageData.autoOpenImageSearch}
+            cart={cart} onCartUpdate={setCart} onProductClick={openProduct}
+            user={user} wishlistIds={wishlistIds} onWishlist={toggleWishlist} userLoc={userLoc} radius={radius}/>
+        )}
+        {!showCheckout && page==='search'&&(
           <SearchPagePremium initialQuery={pageData.query} cart={cart} onCartUpdate={setCart} onProductClick={openProduct}
             user={user} wishlistIds={wishlistIds} onWishlist={toggleWishlist} userLoc={userLoc} radius={radius}
-            autoOpenImageSearch={!!pageData.autoOpenImageSearch}/>
+            autoOpenImageSearch={!!pageData.autoOpenImageSearch} onShopOpen={openShop}/>
         )}
-        {page==='shop'&&pageData.shop&&(
+        {!showCheckout && page==='shop'&&pageData.shop&&(
           <ShopDetail shop={pageData.shop} cart={cart} onCartUpdate={setCart} onBack={goHome}
             user={user} onProductClick={openProduct} wishlistIds={wishlistIds} onWishlist={toggleWishlist} userLoc={userLoc}/>
         )}
-        {page==='product'&&pageData.product&&(
+        {!showCheckout && page==='product'&&pageData.product&&(
             <ProductDetail product={pageData.product} shop={null} cart={cart} onCartUpdate={setCart}
               onBack={()=>{setPage(pageData.from||'home');pageData.from=undefined}}
               user={user} wishlisted={wishlistIds.includes(pageData.product.id)} onWishlist={toggleWishlist}
@@ -6073,19 +7162,22 @@ export default function App(){
                   return
                 }
                 setPendingCheckoutItem(item)
-                setCart([item])
                 openCheckoutWithItems([item])
               }}/>
         )}
-        {page==='orders'&&<OrdersPage user={user} onBuyAgain={(items,shop)=>{setCart(items);setPage('home');showToast('Items added to cart - go to checkout when ready','success')}}/>}
-        {page==='auth'&&<AuthModal initialTab={authTab} onSuccess={u=>{setUser(u);setPage(authReturnTo||'home');showToast(`Welcome, ${u.name}!`,'success')}} onClose={()=>setPage(authReturnTo||'home')} onExploreTag={q=>{setSearchQuery(q);setPageData({query:q});setPage('search')}}/>}
-        {page==='wishlist'&&<WishlistPage user={user} cart={cart} onCartUpdate={setCart} onProductClick={openProduct} wishlistIds={wishlistIds} onWishlist={toggleWishlist}/>}
-        {page==='referral'&&<ReferralPage user={user}/>}
-        {page==='account'&&<AccountPage user={user} onSignOut={signOut} onOpenAuth={()=>openAuthPage('login','account')} onNavigate={setPage}/>}
+        {!showCheckout && page==='orders'&&<OrdersPage user={user} onBuyAgain={(items,shop)=>{setCart(items);setPage('home');showToast('Items added to cart - go to checkout when ready','success')}}/>}
+        {!showCheckout && page==='cart'&&<CartDrawer cart={cart} onUpdate={setCart} onClose={()=>goHome()} user={user}
+          minOrderShop={0} pageMode
+          onCheckout={()=>{user?openCheckoutWithItems(cart):openAuthPage('login','cart')}}/>}
+        {!showCheckout && page==='auth'&&<AuthModal initialTab={authTab} onSuccess={u=>{setUser(u);setPage(authReturnTo||'home');showToast(`Welcome, ${u.name}!`,'success')}} onClose={()=>setPage(authReturnTo||'home')} onExploreTag={q=>{setSearchQuery(q);setPageData({query:q});setPage('productSearch')}}/>}
+        {!showCheckout && page==='wishlist'&&<WishlistPage user={user} cart={cart} onCartUpdate={setCart} onProductClick={openProduct} wishlistIds={wishlistIds} onWishlist={toggleWishlist}/>}
+        {!showCheckout && page==='referral'&&<ReferralPage user={user}/>}
+        {!showCheckout && page==='account'&&<AccountPage user={user} onSignOut={signOut} onOpenAuth={()=>openAuthPage('login','account')} onNavigate={setPage}/>}
+        {showCheckout && <div style={{minHeight:'100vh'}} />}
       </main>
 
       {/* Bottom nav (mobile) */}
-      {page!=='shop'&&page!=='product'&&<nav style={{display:'none',position:'fixed',bottom:0,left:0,right:0,background:'rgba(255,255,255,.98)',borderTop:'1px solid var(--br)',zIndex:showCart?360:300,padding:'6px max(6px, env(safe-area-inset-left, 0px)) calc(env(safe-area-inset-bottom,0px) + 6px) max(6px, env(safe-area-inset-right, 0px))',minHeight:66,boxShadow:'0 -12px 28px rgba(56,73,89,.08)',backdropFilter:'blur(16px)',transform:'translateZ(0)'}} id="bottom-nav">
+      {page!=='shop'&&page!=='product'&&page!=='auth'&&!showCheckout&&<nav style={{display:'none',position:'fixed',bottom:0,left:0,right:0,background:'rgba(255,255,255,.98)',borderTop:'1px solid var(--br)',zIndex:showCart?360:300,padding:'6px max(6px, env(safe-area-inset-left, 0px)) calc(env(safe-area-inset-bottom,0px) + 6px) max(6px, env(safe-area-inset-right, 0px))',minHeight:66,boxShadow:'0 -12px 28px rgba(56,73,89,.08)',backdropFilter:'blur(16px)',transform:'translateZ(0)'}} id="bottom-nav">
         <div style={{display:'grid',gridTemplateColumns:`repeat(${NAV_ITEMS.length}, minmax(0, 1fr))`,alignItems:'stretch',gap:2,maxWidth:520,margin:'0 auto'}}>
           {NAV_ITEMS.map(n=>(
             <button key={n.id} onClick={()=>{
@@ -6097,7 +7189,7 @@ export default function App(){
               }
               if((n.id==='account')&&!user){openAuthPage('login',n.id);return}
               if(n.id==='cart'&&!user){openAuthPage('login','home');return}
-              if(n.id==='cart'){setShowCart(true);return}
+              if(n.id==='cart'){setShowCart(false);setPage('cart');scrollAppTop();return}
               setPage(n.id)
             }}
               style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,padding:'4px 2px',minWidth:0,width:'100%',cursor:'pointer',color:activeNavId===n.id?'var(--or)':'#5b7994',transition:'.15s',border:'none',background:activeNavId===n.id?'rgba(74,168,255,.08)':'transparent',borderRadius:14}}>
@@ -6109,32 +7201,9 @@ export default function App(){
       </nav>}
 
       {/* Overlays */}
-      {showCart&&<CartDrawer cart={cart} onUpdate={setCart} onClose={()=>setShowCart(false)} user={user}
+      {!showCheckout&&showCart&&<CartDrawer cart={cart} onUpdate={setCart} onClose={()=>setShowCart(false)} user={user}
         minOrderShop={0}
         onCheckout={()=>{setShowCart(false);user?openCheckoutWithItems(cart):openAuthPage('login',page)}}/>}
-
-      {showCheckout&&(
-        <CheckoutErrorBoundary
-          onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
-          renderFallback={()=>(
-            <StableCheckoutModal
-              cart={checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))}
-              user={user}
-              radius={radius}
-              onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
-              onSuccess={data=>{setCart([]);setPendingCheckoutItem(null);setCheckoutItems([]);setShowCheckout(false);setOrderSuccess(data||true);setPage('orders')}}
-            />
-          )}
-        >
-          <CheckoutModal
-            cart={checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))}
-            user={user}
-            radius={radius}
-            onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
-            onSuccess={data=>{setCart([]);setPendingCheckoutItem(null);setCheckoutItems([]);setShowCheckout(false);setOrderSuccess(data||true);setPage('orders')}}
-          />
-        </CheckoutErrorBoundary>
-      )}
 
       {/* Order success */}
       {orderSuccess&&(
@@ -6148,13 +7217,24 @@ export default function App(){
               <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
             <div style={{fontWeight:900,fontSize:26,marginBottom:6,letterSpacing:'-.5px',color:'#0f172a'}}>Order Confirmed!</div>
-            <div style={{color:'#64748b',fontSize:14,marginBottom:18,lineHeight:1.6}}>Your order is placed. Delivery guaranteed within 60 minutes.</div>
+            <div style={{color:'#64748b',fontSize:14,marginBottom:18,lineHeight:1.6}}>{Array.isArray(orderSuccess?.orders) ? `${orderSuccess.orders.length} separate shop orders placed. Vendors and riders will see their own order details.` : 'Your order is placed. Delivery guaranteed within 60 minutes.'}</div>
             <div style={{marginBottom:18}}><DeliveryCountdown placedAt={new Date().toISOString()} /></div>
             {orderSuccess?.total&&(
               <div style={{background:'#f8fafc',borderRadius:'var(--r12)',padding:'13px 16px',marginBottom:18,border:'1px solid var(--br)',textAlign:'left'}}>
-                {[{k:'Items',v:money(orderSuccess.subtotal)},{k:'Base delivery',v:money(orderSuccess.baseDeliveryFee||20)},{k:'Distance fee',v:money(orderSuccess.distanceFee||0)},{k:'Surge fee',v:money(orderSuccess.surgeFee||0)},{k:'Delivery total',v:`${money(orderSuccess.deliveryFee)}${orderSuccess.deliveryKm?` (${orderSuccess.deliveryKm}km)`:''}`},{k:'Platform fee',v:money(orderSuccess.platformFee||PLATFORM_FEE)},{k:'GST',v:money(orderSuccess.gstAmount||0)}].map(({k,v})=>(
+                {[{k:'Items',v:money(orderSuccess.subtotal)},{k:'Delivery total',v:`${money(orderSuccess.deliveryFee)}${orderSuccess.deliveryKm?` (${orderSuccess.deliveryKm}km)`:''}`},{k:'Platform fee',v:money(orderSuccess.platformFee||PLATFORM_FEE)},{k:'GST',v:money(orderSuccess.gstAmount||0)}].map(({k,v})=>(
                   <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13,color:'var(--mu)'}}><span>{k}</span><span style={{fontWeight:700}}>{v}</span></div>
                 ))}
+                {Array.isArray(orderSuccess.orders)&&(
+                  <div style={{display:'grid',gap:6,marginTop:8}}>
+                    {orderSuccess.orders.map(o=>(
+                      <div key={o.id || o.orderCode} style={{padding:'8px 10px',borderRadius:10,background:'#fff',border:'1px solid var(--br)',fontSize:12}}>
+                        <div style={{fontWeight:900,color:'var(--nv)'}}>{o.shopName || o.shop?.name || 'Shop'} | #{o.orderCode}</div>
+                        <div style={{color:'var(--mu)',marginTop:2}}>Items Rs {Number(o.subtotal||0).toLocaleString('en-IN')} + delivery Rs {Number(o.deliveryFee||0).toLocaleString('en-IN')} = Rs {Number(o.total||0).toLocaleString('en-IN')}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!Array.isArray(orderSuccess.orders)&&<div style={{fontSize:11,color:'var(--mu)',marginTop:6}}>Delivery detail: Rs {Number(orderSuccess.baseDeliveryFee||20).toLocaleString('en-IN')} + Rs {Number(orderSuccess.distanceFee||0).toLocaleString('en-IN')} distance.</div>}
                 <div style={{display:'flex',justifyContent:'space-between',fontWeight:900,fontSize:17,marginTop:8,paddingTop:8,borderTop:'1px solid var(--br)'}}><span>Total</span><span style={{color:'var(--or)'}}>{money(orderSuccess.total)}</span></div>
                 {orderSuccess.orderCode&&<div style={{marginTop:5,fontSize:11,color:'var(--mu)',textAlign:'center'}}>Order #{orderSuccess.orderCode}</div>}
               </div>
@@ -6167,7 +7247,7 @@ export default function App(){
         </div>
       )}
 
-      {showLocMap&&(
+      {!showCheckout&&showLocMap&&(
         <MapLocationModal
           currentLat={userLoc?.lat||17.385}
           currentLng={userLoc?.lng||78.4867}
@@ -6184,7 +7264,7 @@ export default function App(){
         />
       )}
 
-      {!showLocMap && !locationReady && (
+      {!showCheckout && !showLocMap && !locationReady && (
         <QuickLocationPrompt
           savedAddresses={savedAddresses}
           recentLocations={recentLocations}
@@ -6200,6 +7280,49 @@ export default function App(){
       )}
 
       <Toasts/>
+      </ScreenErrorBoundary>
+      {showCheckout&&(
+        <CheckoutErrorBoundary
+          resetKey={`${showCheckout ? 'open' : 'closed'}-${useSimpleCheckout ? 'simple' : 'stable'}-${checkoutItems.length}-${cart.length}-${pendingCheckoutItem?.id || ''}`}
+          onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
+          renderFallback={()=>(
+            <MinimalCheckoutFallback
+              cart={checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))}
+              onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
+              onHome={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([]);goHome()}}
+              onPlace={()=>{
+                const retryItems = checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))
+                setShowCheckout(false)
+                window.setTimeout(()=>openCheckoutWithItems(retryItems), 0)
+              }}
+            />
+          )}
+        >
+          {useSimpleCheckout ? (
+            <EmergencyCheckoutModal
+              cart={checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))}
+              user={user}
+              radius={radius}
+              currentLocation={userLoc}
+              currentLocationLabel={locationLabel}
+              onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
+              onSuccess={data=>{setCart([]);setPendingCheckoutItem(null);setCheckoutItems([]);setShowCheckout(false);setOrderSuccess(data||true);setPage('orders')}}
+            />
+          ) : (
+            <StableCheckoutModal
+              cart={checkoutItems.length ? checkoutItems : (cart.length ? cart : (pendingCheckoutItem ? [pendingCheckoutItem] : []))}
+              user={user}
+              radius={radius}
+              currentLocation={userLoc}
+              currentLocationLabel={locationLabel}
+              savedAddressesProp={savedAddresses}
+              recentLocationsProp={recentLocations}
+              onClose={()=>{setShowCheckout(false);setPendingCheckoutItem(null);setCheckoutItems([])}}
+              onSuccess={data=>{setCart([]);setPendingCheckoutItem(null);setCheckoutItems([]);setShowCheckout(false);setOrderSuccess(data||true);setPage('orders')}}
+            />
+          )}
+        </CheckoutErrorBoundary>
+      )}
     </>
   )
 }

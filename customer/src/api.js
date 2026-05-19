@@ -2,6 +2,10 @@ import axios from 'axios'
 
 const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
+const clearAuthTokens = () => {
+  localStorage.removeItem('dott_access')
+  localStorage.removeItem('dott_refresh')
+}
 
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_access')
@@ -18,20 +22,20 @@ ax.interceptors.response.use(r => r, async err => {
         localStorage.setItem('dott_refresh', r.data.refreshToken)
         err.config.headers.Authorization = `Bearer ${r.data.accessToken}`
         return ax(err.config)
-      } catch { localStorage.clear() }
+      } catch { clearAuthTokens() }
     }
   }
   return Promise.reject(err)
 })
 
 export const setTokens = (a, r) => { localStorage.setItem('dott_access', a); localStorage.setItem('dott_refresh', r) }
-export const clearTokens = () => localStorage.clear()
+export const clearTokens = clearAuthTokens
 export const hasToken = () => !!localStorage.getItem('dott_access')
 
 export const api = {
   // Auth
-  sendOtp:        phone => ax.post('/otp/send', { phone }),
-  verifyOtp:      (phone, otp) => ax.post('/otp/verify', { phone, otp }),
+  sendOtp:        email => ax.post('/otp/send', { email }),
+  verifyOtp:      (email, otp, extra = {}) => ax.post('/otp/verify', { email, otp, ...extra }),
   register:       d => ax.post('/auth/register', d),
   login:          d => ax.post('/auth/login', d),
   logout:         () => ax.post('/auth/logout'),
@@ -58,6 +62,11 @@ export const api = {
     fd.append('limit', String(limit))
     return ax.post('/search/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
   },
+  uploadImage:       file => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return ax.post('/upload/image', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
   shareProduct:      id => ax.get(`/products/${id}/share`),
 
   // Orders
@@ -65,6 +74,7 @@ export const api = {
   myOrders:       () => ax.get('/orders/my'),
   cancelOrder:    (id, reason) => ax.put(`/orders/${id}/cancel/v2`, { reason }),
   trackOrder:     id => ax.get(`/orders/${id}/track`),
+  riderLocation:  id => ax.get(`/orders/${id}/rider-location`),
   pollStatus:     id => ax.get(`/orders/${id}/status`),
   getDeliveryFee: (shopLat, shopLng, custLat, custLng, subtotal = 0, isPremium = false, weather = null) =>
     ax.get('/delivery-fee', { params: { shopLat, shopLng, custLat, custLng, subtotal, isPremium, weather } }),

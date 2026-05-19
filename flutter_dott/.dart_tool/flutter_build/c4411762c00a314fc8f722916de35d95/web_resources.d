@@ -1,0 +1,1 @@
+ C:\\Users\\Admin\\Documents\\Code\\manifest.json:  C:\\Users\\Admin\\Documents\\Code\ X\\SAI-01\\flutter_dott\\web\\index.html C:\\Users\\Admin\\Documents\\Code\ X\\SAI-01\\flutter_dott\\web\\manifest.json

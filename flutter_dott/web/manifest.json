@@ -1,0 +1,12 @@
+{
+  "name": "DOTT",
+  "short_name": "DOTT",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#EEF7FF",
+  "theme_color": "#4AA8FF",
+  "description": "DOTT Flutter apps",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "icons": []
+}

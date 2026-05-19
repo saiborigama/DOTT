@@ -53,6 +53,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo PostgreSQL driver is included in backend core dependencies.
+
 if /i "%1"=="--core-only" (
   echo Core backend setup finished.
   echo Run start_backend.bat to launch the API.

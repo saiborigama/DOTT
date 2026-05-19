@@ -63,6 +63,8 @@ class User(Base):
     bank_ifsc      = Column(String, nullable=True)
     bank_name      = Column(String, nullable=True)
     upi_id         = Column(String, nullable=True)   # UPI / PhonePe
+    phonepe_number = Column(String, nullable=True)
+    gpay_number    = Column(String, nullable=True)
     payment_method = Column(String, default="upi")   # "bank" or "upi"
     is_premium     = Column(Boolean, default=False)
     subscription_plan = Column(String, default="standard")
@@ -228,6 +230,7 @@ class Review(Base):
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     rating      = Column(Integer, nullable=False)
     comment     = Column(Text)
+    images      = Column(Text, default="[]")
     created_at  = Column(DateTime, default=utc_now)
     product  = relationship("Product", back_populates="reviews")
     customer = relationship("User", foreign_keys=[customer_id])
@@ -304,6 +307,28 @@ class VerifiedSeller(Base):
     verified_at = Column(DateTime, default=utc_now)
     badge_type  = Column(String, default="verified")  # verified / top_seller / trusted
     shop        = relationship("Shop")
+
+class ShopLocationChangeRequest(Base):
+    __tablename__ = "shop_location_change_requests"
+    id          = Column(Integer, primary_key=True, index=True)
+    shop_id     = Column(Integer, ForeignKey("shops.id"), nullable=False, index=True)
+    owner_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    old_lat     = Column(Float)
+    old_lng     = Column(Float)
+    new_lat     = Column(Float, nullable=False)
+    new_lng     = Column(Float, nullable=False)
+    old_address = Column(Text)
+    new_address = Column(Text)
+    old_city    = Column(String)
+    new_city    = Column(String)
+    status      = Column(String, default="PENDING", index=True)
+    admin_note  = Column(Text, default="")
+    created_at  = Column(DateTime, default=utc_now)
+    reviewed_at = Column(DateTime)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    shop        = relationship("Shop", foreign_keys=[shop_id])
+    owner       = relationship("User", foreign_keys=[owner_id])
+    reviewer    = relationship("User", foreign_keys=[reviewed_by])
 
 class PromoCode(Base):
     __tablename__ = "promo_codes"
@@ -398,3 +423,16 @@ class SettlementPayment(Base):
     invoice           = relationship("SettlementInvoice", foreign_keys=[invoice_id])
     user              = relationship("User", foreign_keys=[user_id])
     shop              = relationship("Shop", foreign_keys=[shop_id])
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    role       = Column(String, nullable=True, index=True)
+    title      = Column(String, nullable=False)
+    body       = Column(Text, nullable=False)
+    category   = Column(String, default="general", index=True)
+    data_json  = Column(Text, default="{}")
+    is_read    = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=utc_now, index=True)
+    user       = relationship("User", foreign_keys=[user_id])

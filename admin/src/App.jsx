@@ -56,6 +56,8 @@ const api = {
     return ax.patch(`/admin/users/${id}/block`, { isBlocked: v })
   },
   shops:          ()     => isAdminDemoMode() ? demoResponse(getDemoAdminDb().shops) : ax.get('/admin/shops'),
+  shopLocationRequests: () => isAdminDemoMode() ? demoResponse([]) : ax.get('/admin/shop-location-requests', { params: { status: 'PENDING' } }),
+  reviewShopLocationRequest: (id, approved, note = '') => isAdminDemoMode() ? demoResponse({ ok: true }) : ax.post(`/admin/shop-location-requests/${id}/review`, { approved, note }),
   suspendShop:    (id,v) => {
     if (isAdminDemoMode()) {
       const db = getDemoAdminDb()
@@ -108,6 +110,24 @@ const api = {
     }
     return ax.put('/admin/commission', d)
   },
+  updatePaymentDetails: d => {
+    if (isAdminDemoMode()) {
+      const db = getDemoAdminDb()
+      db.user = {
+        ...db.user,
+        upiId: d.upiId ?? db.user?.upiId ?? '',
+        phonepeNumber: d.phonepeNumber ?? db.user?.phonepeNumber ?? '',
+        gpayNumber: d.gpayNumber ?? db.user?.gpayNumber ?? '',
+        bankAccount: d.bankAccount ?? db.user?.bankAccount ?? '',
+        bankIfsc: d.bankIfsc ?? db.user?.bankIfsc ?? '',
+        bankName: d.bankName ?? db.user?.bankName ?? '',
+        paymentMethod: d.paymentMethod ?? db.user?.paymentMethod ?? 'upi',
+      }
+      saveDemoAdminDb(db)
+      return demoResponse(db.user)
+    }
+    return ax.put('/auth/payment-details', d)
+  },
   settlements:    p      => isAdminDemoMode() ? demoResponse(getDemoAdminDb().settlements) : ax.get('/admin/settlements', { params: p }),
   payInvoice:     (id,d) => {
     if (isAdminDemoMode()) {
@@ -151,6 +171,15 @@ const api = {
       return demoResponse({ ok: true })
     }
     return ax.post(`/admin/settlements/invoices/${id}/pay`, d || {})
+  },
+  recordRiderCodPayment: (riderId, d) => ax.post(`/admin/riders/${riderId}/cod-settlement/pay`, d || {}),
+  sendFestivalNotification: d => {
+    if (isAdminDemoMode()) return demoResponse({ sent: 2 })
+    return ax.post('/admin/notifications/festival', d)
+  },
+  sendNearbyHighlights: d => {
+    if (isAdminDemoMode()) return demoResponse({ sent: 2, shops: 2, products: 3 })
+    return ax.post('/admin/notifications/nearby-highlights', d)
   },
   exportOrders:   ()     => { if (isAdminDemoMode()) { toast('Demo orders export ready', 'success'); return Promise.resolve() } return downloadCsv('/admin/export/orders', 'dott-orders.csv') },
   exportUsers:    ()     => { if (isAdminDemoMode()) { toast('Demo users export ready', 'success'); return Promise.resolve() } return downloadCsv('/admin/export/users', 'dott-users.csv') },
@@ -337,7 +366,7 @@ const ADMIN_AUTH_IMAGES = [
   'https://images.unsplash.com/photo-1503341455253-b2e723bb3dbb?auto=format&fit=crop&w=900&q=80',
 ]
 
-/* ─── CSS ─────────────────────────────────────────────────── */
+/* --- CSS ---------------------------------------- */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -361,7 +390,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#c4b8ff;border-radius:4px}
 
-/* ── ANIMATIONS ── */
+/* -- ANIMATIONS -- */
 @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes slideIn{from{opacity:0;transform:translateX(28px)}to{opacity:1;transform:translateX(0)}}
@@ -383,10 +412,10 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .scale-in{animation:scaleIn .3s cubic-bezier(.22,1,.36,1) both}
 .skeleton{background:linear-gradient(90deg,#ede9ff 25%,#ddd8ff 50%,#ede9ff 75%);background-size:600px 100%;animation:shimmer 1.6s infinite;border-radius:8px}
 
-/* ── LAYOUT ── */
+/* -- LAYOUT -- */
 .layout{display:flex;min-height:100vh}
 
-/* ── SIDEBAR ── */
+/* -- SIDEBAR -- */
 .sidebar{
   width:256px;background:linear-gradient(180deg,#0f4c81 0%,#1d6fb8 58%,#4aa8ff 100%);
   display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:100;
@@ -415,10 +444,10 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .sb-admin-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);margin-bottom:10px}
 .sb-avatar{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#4aa8ff,#8fd0ff);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff;flex-shrink:0}
 
-/* ── MAIN ── */
+/* -- MAIN -- */
 .main{margin-left:256px;flex:1;display:flex;flex-direction:column;min-height:100vh}
 
-/* ── TOPBAR ── */
+/* -- TOPBAR -- */
 .topbar{
   background:var(--surface);border-bottom:1.5px solid var(--border2);
   padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;
@@ -429,7 +458,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .topbar-right{display:flex;align-items:center;gap:12px}
 .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
 
-/* ── PAGE ── */
+/* -- PAGE -- */
 .page{padding:28px;animation:fadeIn .3s ease}
 .page-header{
   display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
@@ -442,7 +471,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .page-header .btn-ghost{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.35)}
 .page-header .btn-ghost:hover{background:rgba(255,255,255,.24);color:#fff;border-color:rgba(255,255,255,.45)}
 
-/* ── STAT CARDS ── */
+/* -- STAT CARDS -- */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px}
 .stat-card{
   background:var(--surface);border-radius:var(--r);border:1.5px solid var(--border2);
@@ -458,14 +487,14 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .trend-up{background:#dcfce7;color:#15803d}
 .trend-down{background:#fee2e2;color:#b91c1c}
 
-/* ── CARDS ── */
+/* -- CARDS -- */
 .card{background:var(--surface);border-radius:var(--r);border:1.5px solid var(--border2);padding:20px;box-shadow:var(--sh-sm);transition:.22s}
 .card:hover{box-shadow:var(--sh)}
 .card-title{font-family:var(--font);font-weight:800;font-size:15px;margin-bottom:16px;color:var(--text);display:flex;align-items:center;gap:8px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px}
 
-/* ── TABLE ── */
+/* -- TABLE -- */
 .table-wrap{background:var(--surface);border-radius:var(--r);border:1.5px solid var(--border2);overflow:hidden;box-shadow:var(--sh-sm)}
 .table-toolbar{padding:16px 20px;border-bottom:1.5px solid var(--border2);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .table-head{display:grid;padding:12px 20px;background:var(--bg);border-bottom:1.5px solid var(--border2)}
@@ -474,7 +503,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .table-row:last-child{border-bottom:none}
 .table-row:hover{background:var(--bg)}
 
-/* ── FORMS / INPUTS ── */
+/* -- FORMS / INPUTS -- */
 .input{width:100%;padding:10px 14px;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r-sm);color:var(--text);font-family:var(--body);font-size:14px;outline:none;transition:.2s}
 .input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(108,71,255,.1)}
 .input::placeholder{color:#bbb}
@@ -482,7 +511,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .search-wrap{position:relative}
 .search-wrap svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted)}
 
-/* ── BUTTONS ── */
+/* -- BUTTONS -- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 18px;border-radius:10px;border:none;cursor:pointer;font-family:var(--font);font-weight:700;font-size:13px;transition:.22s;position:relative;overflow:hidden;white-space:nowrap}
 .btn:active{transform:scale(.97)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
@@ -497,7 +526,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .btn-sm{padding:6px 12px;font-size:12px;border-radius:8px}
 .btn-icon{width:34px;height:34px;padding:0;border-radius:9px}
 
-/* ── BADGES ── */
+/* -- BADGES -- */
 .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:100px;font-size:11px;font-weight:800;font-family:var(--font);white-space:nowrap}
 .badge-success{background:var(--green-l);color:var(--green-t)}
 .badge-danger{background:var(--red-l);color:var(--red-t)}
@@ -507,13 +536,13 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .badge-orange{background:var(--orange-l);color:var(--orange-t)}
 .badge-gray{background:#f3f4f6;color:#374151}
 
-/* ── TOGGLE ── */
+/* -- TOGGLE -- */
 .toggle{width:42px;height:23px;border-radius:12px;border:none;cursor:pointer;position:relative;transition:.25s;flex-shrink:0}
 .toggle::after{content:'';position:absolute;width:17px;height:17px;border-radius:50%;background:#fff;top:3px;transition:.25s;box-shadow:0 1px 4px rgba(0,0,0,.2)}
 .toggle.on{background:var(--primary)}.toggle.on::after{left:22px}
 .toggle.off{background:#d1d5db}.toggle.off::after{left:3px}
 
-/* ── CHART BAR ── */
+/* -- CHART BAR -- */
 .bar-chart{display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 4px}
 .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}
 .bar-fill{width:100%;background:linear-gradient(180deg,#8ecbff,#4aa8ff);border-radius:6px 6px 0 0;transition:height .6s cubic-bezier(.22,1,.36,1);min-height:4px;position:relative;cursor:pointer}
@@ -523,7 +552,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .bar-label{font-size:10px;color:var(--muted);font-weight:700;text-align:center}
 .bar-val{font-size:10px;font-weight:800;color:var(--primary)}
 
-/* ── AUTH ── */
+/* -- AUTH -- */
 .auth-page{min-height:100vh;display:flex;background:radial-gradient(circle at top left,rgba(255,255,255,.32),transparent 28%),radial-gradient(circle at bottom right,rgba(234,246,255,.24),transparent 30%),linear-gradient(135deg,#8fd0ff 0%,#63b7ff 35%,#4aa8ff 100%);position:relative;overflow:hidden}
 .auth-page::before{content:'';position:absolute;inset:-10%;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.18),transparent 22%),radial-gradient(circle at 80% 30%,rgba(255,255,255,.12),transparent 18%),radial-gradient(circle at 60% 80%,rgba(255,255,255,.12),transparent 20%);animation:authDrift 18s ease-in-out infinite;pointer-events:none}
 .auth-page::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,0) 28%,rgba(18,50,77,.08));pointer-events:none}
@@ -550,12 +579,25 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .auth-mini-stat{padding:12px;border-radius:16px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.24);backdrop-filter:blur(10px);color:#fff;text-align:left}
 .auth-mini-stat strong{display:block;font-family:var(--font);font-size:18px;margin-bottom:3px}
 .auth-mobile-strip{display:none}
+.admin-access-panel{background:linear-gradient(180deg,#f8fbff,#eef7ff);border:1px solid var(--border);border-radius:22px;padding:16px;box-shadow:0 10px 24px rgba(42,116,189,.08)}
+.admin-access-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.admin-access-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:#fff;border:1px solid var(--border);font-size:11px;font-weight:800;color:var(--primary-d);text-transform:uppercase;letter-spacing:.7px}
+.admin-access-icon{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#1d6fb8,#4aa8ff);color:#fff;box-shadow:0 12px 22px rgba(29,111,184,.24);flex-shrink:0}
+.admin-access-title{font-size:15px;font-weight:900;color:var(--text)}
+.admin-access-copy{font-size:12px;color:var(--muted);line-height:1.6;margin-top:5px}
+.admin-access-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+.admin-access-step{background:#fff;border:1px solid var(--border);border-radius:16px;padding:12px 10px}
+.admin-access-step strong{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:10px;background:#eaf6ff;color:var(--primary-d);font-family:var(--font);font-size:12px;margin-bottom:8px}
+.admin-access-step div{font-size:12px;font-weight:800;color:var(--text)}
+.admin-access-step span{display:block;font-size:11px;color:var(--muted);line-height:1.45;margin-top:4px}
+.admin-access-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.admin-access-note{margin-top:12px;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.82);border:1px dashed var(--border);font-size:11px;line-height:1.55;color:var(--muted)}
 
-/* ── MODAL ── */
+/* -- MODAL -- */
 .modal-overlay{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .2s ease;backdrop-filter:blur(4px)}
 .modal{background:var(--surface);border-radius:var(--r-lg);padding:28px;width:100%;max-width:520px;max-height:88vh;overflow-y:auto;animation:scaleIn .25s cubic-bezier(.22,1,.36,1);box-shadow:0 24px 64px rgba(0,0,0,.2)}
 
-/* ── MISC ── */
+/* -- MISC -- */
 .divider{height:1px;background:var(--border2);margin:16px 0}
 .empty{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-icon{font-size:48px;margin-bottom:14px;display:block;animation:float 3s ease-in-out infinite}
@@ -566,14 +608,14 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .toast.info{background:#eff6ff;color:#1d4ed8;border-color:#3b82f6}
 .tag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700}
 
-/* ── ACTIVITY FEED ── */
+/* -- ACTIVITY FEED -- */
 .activity-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border2)}
 .activity-item:last-child{border-bottom:none}
 .activity-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:4px}
 .activity-text{font-size:13px;color:var(--text);line-height:1.5}
 .activity-time{font-size:11px;color:var(--muted);margin-top:2px}
 
-/* ── STATUS MAP ── */
+/* -- STATUS MAP -- */
 .status-pill{padding:4px 12px;border-radius:100px;font-size:11px;font-weight:800;font-family:var(--font)}
 .responsive-grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}
 .responsive-split{display:grid;grid-template-columns:1.25fr 1fr;gap:18px;align-items:start}
@@ -588,7 +630,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 .sett-row:last-child{border-bottom:none}
 .topbar-welcome{font-size:12px;color:var(--muted)}
 
-/* ── RESPONSIVE ── */
+/* -- RESPONSIVE -- */
 @media(max-width:1100px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:900px){
   .layout{display:block}
@@ -602,6 +644,7 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
   .auth-mobile-strip::-webkit-scrollbar{display:none}
   .auth-mobile-card{min-width:120px;height:94px;border-radius:18px;background-size:cover;background-position:center;box-shadow:0 10px 24px rgba(18,50,77,.18);position:relative;overflow:hidden}
   .auth-mobile-card::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(18,50,77,.24))}
+  .admin-access-grid,.admin-access-actions{grid-template-columns:1fr}
   .sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;height:auto;border-right:none;border-top:1px solid rgba(74,168,255,.18);background:rgba(255,255,255,.97);backdrop-filter:blur(18px)}
   .sb-logo,.sb-section-label,.sb-admin-card{display:none}
   .sb-section{padding:10px 12px 0;display:flex;overflow-x:auto;gap:8px}
@@ -644,13 +687,13 @@ html,body{height:100%;background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#
 }
 `
 
-/* ── STATUS COLORS ── */
+/* -- STATUS COLORS -- */
 const SC = { PENDING:'#f59e0b', CONFIRMED:'#3b82f6', PACKING:'#8b5cf6', PICKED_UP:'#06b6d4', OUT_FOR_DELIVERY:'#f97316', DELIVERED:'#22c55e', CANCELLED:'#ef4444' }
 const SL = { PENDING:'Pending', CONFIRMED:'Confirmed', PACKING:'Packing', PICKED_UP:'Picked Up', OUT_FOR_DELIVERY:'Out for Delivery', DELIVERED:'Delivered', CANCELLED:'Cancelled' }
 const RL = { REQUESTED:'Requested', APPROVED:'Approved', REJECTED:'Rejected', PICKED_UP:'Collected', REFUNDED:'Refunded' }
 const RC = { REQUESTED:'#f59e0b', APPROVED:'#22c55e', REJECTED:'#ef4444', PICKED_UP:'#0ea5e9', REFUNDED:'#8b5cf6' }
 
-/* ── ICONS ── */
+/* -- ICONS -- */
 const I = {
   Dashboard: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>,
   Users:     () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
@@ -673,7 +716,7 @@ const I = {
   Nav:       () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>,
 }
 
-/* ── TOAST ── */
+/* -- TOAST -- */
 let _setToasts, _tid = 0
 function toast(msg, type = 'info') {
   if (_setToasts) { const id = ++_tid; _setToasts(t => [...t, { id, msg, type }]); setTimeout(() => _setToasts(t => t.filter(x => x.id !== id)), 3000) }
@@ -683,24 +726,49 @@ function Toasts() {
   return <div className="toast-wrap">{ts.map(t => <div key={t.id} className={`toast ${t.type}`}>{t.msg}</div>)}</div>
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    AUTH PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function AuthPage({ onSuccess }) {
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [showRequest, setShowRequest] = useState(false)
+  const [requestForm, setRequestForm] = useState({ name: '', workEmail: '', phone: '', role: '', note: '' })
   const submit = async () => {
     setErr(''); setLoading(true)
     try {
       const r = await api.login({ email, password: pass })
-      if (r.data.user.role !== 'ADMIN') { setErr('Access denied — Admin only'); setLoading(false); return }
+      if (r.data.user.role !== 'ADMIN') { setErr('Access denied - Admin only'); setLoading(false); return }
       localStorage.setItem('dott_admin_access', r.data.accessToken)
       localStorage.setItem('dott_admin_refresh', r.data.refreshToken)
       onSuccess(r.data.user)
     } catch (e) { setErr(e.response?.data?.detail || 'Invalid credentials') }
     setLoading(false)
+  }
+
+  const updateRequest = (field, value) => {
+    setRequestForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  const submitRequest = () => {
+    if (!requestForm.name.trim() || !requestForm.workEmail.trim() || !requestForm.role.trim()) {
+      toast('Please fill name, work email, and role', 'error')
+      return
+    }
+    const subject = encodeURIComponent(`Admin Access Request - ${requestForm.name.trim()}`)
+    const body = encodeURIComponent(
+      `Admin access request\n\n` +
+      `Name: ${requestForm.name.trim()}\n` +
+      `Work Email: ${requestForm.workEmail.trim()}\n` +
+      `Phone: ${requestForm.phone.trim() || 'Not shared'}\n` +
+      `Role / Team: ${requestForm.role.trim()}\n` +
+      `Note: ${requestForm.note.trim() || 'No note added'}\n`
+    )
+    window.location.href = `mailto:owner@dott.in?subject=${subject}&body=${body}`
+    toast('Access request draft opened in email', 'success')
+    setShowRequest(false)
   }
 
   return (
@@ -762,10 +830,18 @@ function AuthPage({ onSuccess }) {
           <div className="auth-panel">
             <div style={{ marginBottom: 18, position: 'relative', zIndex: 1 }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: '#eaf6ff', color: 'var(--primary-d)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.8px', marginBottom: 12 }}>
-                Animated Access
+                Secure access
               </div>
-              <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 22, color: 'var(--text)' }}>Sign in to Admin</div>
-              <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>Manage orders, shops, riders, users, and settlements.</div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 24, color: 'var(--text)', letterSpacing:'-.5px' }}>Admin control login</div>
+              <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 6, lineHeight:1.55 }}>Use your approved admin credentials to manage orders, shops, riders, users, and settlements.</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginTop:16}}>
+                {['Verify','Monitor','Settle'].map((item,i)=>(
+                  <div key={item} style={{padding:'10px 8px',borderRadius:14,background:'#f7fbff',border:'1px solid var(--border)',textAlign:'center'}}>
+                    <div style={{width:24,height:24,borderRadius:9,background:i===0?'var(--primary)':'#dff1ff',color:i===0?'#fff':'var(--primary-d)',display:'grid',placeItems:'center',fontSize:11,fontWeight:900,margin:'0 auto 6px'}}>{i+1}</div>
+                    <div style={{fontSize:10,fontWeight:900,color:'var(--text)'}}>{item}</div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'relative', zIndex: 1 }}>
@@ -790,6 +866,48 @@ function AuthPage({ onSuccess }) {
                   : <><I.Shield /> Enter Admin Panel</>}
               </button>
 
+              <div className="admin-access-panel">
+                <div className="admin-access-top">
+                  <div>
+                    <div className="admin-access-chip"><I.Shield /> Admin registration</div>
+                    <div className="admin-access-title" style={{ marginTop: 10 }}>Need an admin account?</div>
+                    <div className="admin-access-copy">Admin access is approved by the platform owner. Share your work email, verify your role, and get your dashboard permissions enabled.</div>
+                  </div>
+                  <div className="admin-access-icon"><I.Users /></div>
+                </div>
+
+                <div className="admin-access-grid">
+                  <div className="admin-access-step">
+                    <strong>1</strong>
+                    <div>Share email</div>
+                    <span>Send the email address you want to use for admin login.</span>
+                  </div>
+                  <div className="admin-access-step">
+                    <strong>2</strong>
+                    <div>Get verified</div>
+                    <span>The platform owner checks your role and gives the right access level.</span>
+                  </div>
+                  <div className="admin-access-step">
+                    <strong>3</strong>
+                    <div>Sign in</div>
+                    <span>Use your approved credentials here and enter the control panel.</span>
+                  </div>
+                </div>
+
+                <div className="admin-access-actions">
+                  <button className="btn btn-primary" type="button" onClick={() => setShowRequest(true)}>
+                    <I.Users /> Request Access
+                  </button>
+                  <button className="btn btn-ghost" type="button" onClick={() => { setEmail(''); setPass(''); setErr(''); }}>
+                    <I.Refresh /> Clear Form
+                  </button>
+                </div>
+
+                <div className="admin-access-note">
+                  Only approved platform team members should get admin access. This keeps order data, payouts, shops, riders, and customer records protected.
+                </div>
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div style={{ background: '#f7fbff', border: '1px solid var(--border)', borderRadius: 16, padding: '12px 14px' }}>
                   <div style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px' }}>Live Modules</div>
@@ -804,26 +922,90 @@ function AuthPage({ onSuccess }) {
           </div>
         </div>
       </div>
+
+      {showRequest && (
+        <div className="modal-overlay" onClick={() => setShowRequest(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 540 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 22 }}>Request admin access</div>
+                <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>Share your team details and prepare the approval email in one place.</div>
+              </div>
+              <button onClick={() => setShowRequest(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}>
+                <I.Close />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Full name</label>
+                  <input className="input" placeholder="Your name" value={requestForm.name} onChange={e => updateRequest('name', e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Work email</label>
+                  <input className="input" placeholder="name@company.com" value={requestForm.workEmail} onChange={e => updateRequest('workEmail', e.target.value)} />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Phone</label>
+                  <input className="input" placeholder="Contact number" value={requestForm.phone} onChange={e => updateRequest('phone', e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Role / team</label>
+                  <input className="input" placeholder="Operations, finance, support..." value={requestForm.role} onChange={e => updateRequest('role', e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Reason</label>
+                <textarea
+                  className="input"
+                  rows="4"
+                  placeholder="Tell the owner what access you need."
+                  value={requestForm.note}
+                  onChange={e => updateRequest('note', e.target.value)}
+                  style={{ resize: 'vertical', minHeight: 108 }}
+                />
+              </div>
+
+              <div style={{ background: '#f8fbff', border: '1px solid var(--border)', borderRadius: 16, padding: '12px 14px', color: 'var(--muted)', fontSize: 12, lineHeight: 1.6 }}>
+                After you submit, your email app will open with a ready access request. The platform owner can review and approve it faster.
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 4 }}>
+                <button className="btn btn-ghost" type="button" onClick={() => setShowRequest(false)}>Cancel</button>
+                <button className="btn btn-primary" type="button" onClick={submitRequest}>
+                  <I.Nav /> Continue Request
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-/* ════════════════════════════════════════════════════════════
-   DASHBOARD — LIVE MEMBERS & PLATFORM STATS
-════════════════════════════════════════════════════════════ */
+/* ----------------------------------------
+   DASHBOARD - LIVE MEMBERS & PLATFORM STATS
+---------------------------------------- */
 function Dashboard() {
   const [stats, setStats] = useState(null)
   const [revenue, setRevenue] = useState(null)
   const [users, setUsers] = useState([])
   const [orders, setOrders] = useState([])
+  const [shops, setShops] = useState([])
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState(null)
 
   const load = useCallback(async () => {
     try {
-      const [s, r, o, u] = await Promise.all([api.stats(), api.revenue(), api.orders(), api.users()])
+      const [s, r, o, u, sh] = await Promise.all([api.stats(), api.revenue(), api.orders(), api.users(), api.shops()])
       setStats(s.data); setRevenue(r.data)
-      setOrders(o.data); setUsers(u.data)
+      setOrders(o.data); setUsers(u.data); setShops(sh.data)
       setLastUpdated(new Date())
     } catch (e) {}
     setLoading(false)
@@ -835,6 +1017,8 @@ function Dashboard() {
   const vendors   = users.filter(u => u.role === 'OWNER')
   const customers = users.filter(u => u.role === 'CUSTOMER')
   const online    = riders.filter(u => u.isOnline)
+  const openShops = shops.filter(s => s.isOpen && !s.isSuspended && s.isActive !== false)
+  const closedShops = shops.filter(s => !s.isSuspended && s.isActive !== false && !s.isOpen)
   const maxRev    = revenue?.daily ? Math.max(...revenue.daily.map(d => d.revenue), 1) : 1
 
   const Num = ({ val, color = 'var(--primary)' }) => (
@@ -854,14 +1038,14 @@ function Dashboard() {
   return (
     <div className="page">
 
-      {/* ── LIVE HEADER ── */}
+      {/* -- LIVE HEADER -- */}
       <div style={{ background: 'linear-gradient(135deg,#0f4c81 0%, #1d6fb8 52%, #4aa8ff 100%)', borderRadius: 18, padding: '22px 26px', marginBottom: 24, color: '#fff', position: 'relative', overflow: 'hidden', border: '1px solid rgba(74,168,255,.45)', boxShadow: '0 14px 30px rgba(29,111,184,.24)' }}>
         <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(rgba(255,255,255,.04) 1px,transparent 1px)', backgroundSize: '22px 22px' }} />
         <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
             <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20, letterSpacing: '-.5px' }}>Live Platform Dashboard</div>
               <div style={{ opacity: .9, fontSize: 12, marginTop: 4 }}>
-                {lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading...'} · Auto-refreshes every 15s
+                {lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Loading...'}  -  Auto-refreshes every 15s
               </div>
             </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -873,13 +1057,13 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── TOTAL MEMBERS — BIG HERO NUMBER ── */}
+      {/* -- TOTAL MEMBERS - BIG HERO NUMBER -- */}
       <div style={{ background: '#fff', borderRadius: 16, border: '1.5px solid var(--border)', padding: '24px 28px', marginBottom: 20, display: 'grid', gridTemplateColumns: '1fr auto', gap: 20, alignItems: 'center', boxShadow: 'var(--shadow-sm)' }}>
         <div>
           <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--muted)', letterSpacing: '.5px', textTransform: 'uppercase', marginBottom: 6 }}>Total Members on Platform</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
             <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 56, color: 'var(--primary)', lineHeight: 1, letterSpacing: '-2px' }}>
-              {loading ? '—' : (stats?.users || users.length).toLocaleString('en-IN')}
+              {loading ? '-' : (stats?.users || users.length).toLocaleString('en-IN')}
             </div>
             {stats?.newToday > 0 && (
               <div style={{ background: '#dcfce7', color: '#15803d', fontSize: 12, fontWeight: 800, padding: '4px 12px', borderRadius: 100, border: '1px solid #bbf7d0' }}>
@@ -888,7 +1072,7 @@ function Dashboard() {
             )}
           </div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
-            {stats?.newThisWeek || 0} new members this week · {stats?.blockedUsers || 0} blocked
+            {stats?.newThisWeek || 0} new members this week  -  {stats?.blockedUsers || 0} blocked
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, minWidth: 320 }}>
@@ -898,7 +1082,7 @@ function Dashboard() {
             { label: 'Riders',    count: stats?.riders    ?? riders.length,    color: '#22c55e', pct: (stats?.riders    ?? riders.length)    / total * 100 },
           ].map(({ label, count, color, pct }) => (
             <div key={label} style={{ background: 'var(--bg)', borderRadius: 12, padding: '14px 16px', textAlign: 'center', border: '1px solid var(--border)' }}>
-              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 28, color, lineHeight: 1, marginBottom: 4 }}>{loading ? '—' : count}</div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 28, color, lineHeight: 1, marginBottom: 4 }}>{loading ? '-' : count}</div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>{label}</div>
               <div style={{ height: 3, background: 'var(--border2)', borderRadius: 2, overflow: 'hidden' }}>
                 <div style={{ height: '100%', background: color, borderRadius: 2, width: `${Math.min(pct, 100)}%`, transition: 'width 1s ease' }} />
@@ -908,17 +1092,32 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── 4 KEY STATS ── */}
+      {/* -- 4 KEY STATS -- */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
         {[
           { label: 'Active Orders',  value: stats?.activeOrders  ?? 0, sub: `${stats?.pendingOrders ?? 0} pending`,  color: '#3b82f6', bg: '#eff6ff' },
           { label: 'Today Orders',   value: stats?.todayOrders   ?? 0, sub: `Total: ${stats?.orders ?? 0}`,          color: '#8b5cf6', bg: '#f5f3ff' },
-          { label: 'Today Revenue',  value: `₹${(stats?.todayRevenue ?? 0).toLocaleString('en-IN')}`, sub: `All time: ₹${(stats?.revenue ?? 0).toLocaleString('en-IN')}`, color: '#059669', bg: '#f0fdf4' },
+          { label: 'Today Revenue',  value: `Rs ${(stats?.todayRevenue ?? 0).toLocaleString('en-IN')}`, sub: `All time: Rs ${(stats?.revenue ?? 0).toLocaleString('en-IN')}`, color: '#059669', bg: '#f0fdf4' },
           { label: 'Riders Online',  value: stats?.onlineRiders  ?? online.length, sub: `${stats?.riders ?? riders.length} total riders`, color: '#f97316', bg: '#fff7ed' },
         ].map(({ label, value, sub, color, bg }) => (
           <div key={label} style={{ background: '#fff', borderRadius: 14, border: `1.5px solid ${color}20`, padding: '18px 20px', boxShadow: 'var(--shadow-sm)', borderTop: `3px solid ${color}` }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', letterSpacing: '.4px', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
-            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 28, color, lineHeight: 1, marginBottom: 4 }}>{loading ? '—' : value}</div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 28, color, lineHeight: 1, marginBottom: 4 }}>{loading ? '-' : value}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
+        {[
+          { label: 'Open Shops', value: stats?.openShops ?? openShops.length, sub: `${stats?.closedShops ?? closedShops.length} closed now`, color: '#16a34a' },
+          { label: 'Accepted Orders', value: stats?.acceptedOrders ?? orders.filter(o => o.status === 'ACCEPTED').length, sub: `${stats?.outForDeliveryOrders ?? orders.filter(o => o.status === 'OUT_FOR_DELIVERY').length} out for delivery`, color: '#2563eb' },
+          { label: 'Active Vendors Today', value: stats?.activeVendorsToday ?? 0, sub: `${stats?.vendors ?? vendors.length} total vendors`, color: '#ea580c' },
+          { label: 'Ordering Customers Today', value: stats?.activeCustomersToday ?? 0, sub: `${stats?.customers ?? customers.length} total customers`, color: '#7c3aed' },
+        ].map(({ label, value, sub, color }) => (
+          <div key={label} style={{ background: '#fff', borderRadius: 14, border: `1.5px solid ${color}20`, padding: '18px 20px', boxShadow: 'var(--shadow-sm)', borderTop: `3px solid ${color}` }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', letterSpacing: '.4px', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+            <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 28, color, lineHeight: 1, marginBottom: 4 }}>{loading ? '-' : value}</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>{sub}</div>
           </div>
         ))}
@@ -926,22 +1125,22 @@ function Dashboard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
 
-        {/* ── REVENUE CHART ── */}
+        {/* -- REVENUE CHART -- */}
         <div className="card fade-up" style={{ animationDelay: '.1s' }}>
-          <div className="card-title" style={{ marginBottom: 16 }}>Revenue — Last 7 Days</div>
+          <div className="card-title" style={{ marginBottom: 16 }}>Revenue - Last 7 Days</div>
           {revenue?.daily ? (
             <>
               <div className="bar-chart">
                 {revenue.daily.map((d, i) => (
                   <div key={i} className="bar-col">
-                    <div className="bar-val">₹{d.revenue > 999 ? (d.revenue / 1000).toFixed(1) + 'k' : d.revenue}</div>
+                    <div className="bar-val">Rs {d.revenue > 999 ? (d.revenue / 1000).toFixed(1) + 'k' : d.revenue}</div>
                     <div className="bar-fill" style={{ height: `${Math.max((d.revenue / maxRev) * 100, 4)}%` }} />
                     <div className="bar-label">{d.day}</div>
                   </div>
                 ))}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border2)' }}>
-                {[{ k: 'This Week', v: `₹${revenue.week?.revenue || 0}` }, { k: 'This Month', v: `₹${revenue.month?.revenue || 0}` }, { k: 'All Time', v: `₹${revenue.allTime?.revenue || 0}` }].map(({ k, v }) => (
+                {[{ k: 'This Week', v: `Rs ${revenue.week?.revenue || 0}` }, { k: 'This Month', v: `Rs ${revenue.month?.revenue || 0}` }, { k: 'All Time', v: `Rs ${revenue.allTime?.revenue || 0}` }].map(({ k, v }) => (
                   <div key={k} style={{ textAlign: 'center' }}>
                     <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 15, color: 'var(--primary)' }}>{v}</div>
                     <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700, marginTop: 2, textTransform: 'uppercase', letterSpacing: '.3px' }}>{k}</div>
@@ -952,7 +1151,7 @@ function Dashboard() {
           ) : <div className="skeleton" style={{ height: 160 }} />}
         </div>
 
-        {/* ── RECENT ORDERS ── */}
+        {/* -- RECENT ORDERS -- */}
         <div className="card fade-up" style={{ animationDelay: '.15s' }}>
           <div className="card-title" style={{ marginBottom: 14 }}>Recent Orders</div>
           {orders.slice(0, 6).length === 0
@@ -962,9 +1161,9 @@ function Dashboard() {
                 <div style={{ width: 7, height: 7, borderRadius: '50%', background: SC[o.status] || '#6b7280', flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
-                    #{o.orderCode} — {o.customer?.name}
+                    #{o.orderCode} - {o.customer?.name}
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>{o.shop?.name} · ₹{o.total}</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1 }}>{o.shop?.name}  -  Rs {o.total}</div>
                 </div>
                 <span style={{ background: `${SC[o.status] || '#6b7280'}15`, color: SC[o.status] || '#6b7280', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 100, flexShrink: 0, letterSpacing: '.3px' }}>{SL[o.status]}</span>
               </div>
@@ -972,7 +1171,7 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── MEMBER BREAKDOWN TABLE ── */}
+      {/* -- MEMBER BREAKDOWN TABLE -- */}
       <div className="card fade-up" style={{ animationDelay: '.2s' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
           <div className="card-title" style={{ marginBottom: 0 }}>Member Breakdown</div>
@@ -993,11 +1192,11 @@ function Dashboard() {
                   <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--text)' }}>{role}</div>
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>
                     {blocked > 0 ? `${blocked} blocked` : 'All active'}
-                    {online !== undefined && ` · ${online} online`}
+                    {online !== undefined && `  -  ${online} online`}
                   </div>
                 </div>
               </div>
-              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 32, color, lineHeight: 1 }}>{loading ? '—' : count}</div>
+              <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 32, color, lineHeight: 1 }}>{loading ? '-' : count}</div>
               <div style={{ height: 4, background: 'var(--border2)', borderRadius: 2, marginTop: 10, overflow: 'hidden' }}>
                 <div style={{ height: '100%', background: color, borderRadius: 2, width: `${Math.min((count / (total || 1)) * 100, 100)}%`, transition: 'width 1.2s ease' }} />
               </div>
@@ -1017,7 +1216,7 @@ function Dashboard() {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{u.email} · {u.phone}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{u.email}  -  {u.phone}</div>
             </div>
             <div style={{ flexShrink: 0, textAlign: 'right' }}>
               <div style={{ background: u.role === 'CUSTOMER' ? '#ede9fe' : u.role === 'OWNER' ? '#fff7ed' : '#f0fdf4', color: u.role === 'CUSTOMER' ? '#6c47ff' : u.role === 'OWNER' ? '#f97316' : '#22c55e', fontSize: 9, fontWeight: 800, padding: '3px 9px', borderRadius: 100, letterSpacing: '.4px', marginBottom: 3 }}>
@@ -1035,9 +1234,9 @@ function Dashboard() {
 }
 
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    USERS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function UsersPage() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1087,7 +1286,7 @@ function UsersPage() {
           </div>
           <div className="search-wrap">
             <I.Search />
-            <input className="input search-input" placeholder="Search name, email, phone…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="input search-input" placeholder="Search name, email, phone..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
 
@@ -1111,7 +1310,7 @@ function UsersPage() {
             <div style={{ fontSize: 13, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</div>
             <span className={`badge ${ROLE_COLORS[u.role] || 'badge-gray'}`}>{u.role}</span>
             <span className={`badge ${u.isBlocked ? 'badge-danger' : 'badge-success'}`}>{u.isBlocked ? 'Blocked' : 'Active'}</span>
-            <span style={{ fontSize: 12, color: u.isOnline ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{u.isOnline ? '● Online' : '○ Offline'}</span>
+            <span style={{ fontSize: 12, color: u.isOnline ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{u.isOnline ? ' Online' : ' Offline'}</span>
             <button className={`btn btn-sm ${u.isBlocked ? 'btn-success' : 'btn-danger'}`}
               disabled={actioning === u.id || u.role === 'ADMIN'}
               onClick={() => toggleBlock(u)}>
@@ -1124,17 +1323,26 @@ function UsersPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    SHOPS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function ShopsPage() {
   const [shops, setShops] = useState([])
+  const [locationRequests, setLocationRequests] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [actioning, setActioning] = useState(null)
   const [selected, setSelected] = useState(null)
 
-  const load = async () => { setLoading(true); try { const r = await api.shops(); setShops(r.data) } catch (e) {}; setLoading(false) }
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [shopsRes, reqRes] = await Promise.all([api.shops(), api.shopLocationRequests().catch(() => ({ data: [] }))])
+      setShops(shopsRes.data)
+      setLocationRequests(reqRes.data || [])
+    } catch (e) {}
+    setLoading(false)
+  }
   useEffect(() => { load() }, [])
 
   const toggleSuspend = async (s) => {
@@ -1147,6 +1355,16 @@ function ShopsPage() {
     setActioning(null)
   }
 
+  const reviewLocationRequest = async (req, approved) => {
+    setActioning(`loc-${req.id}`)
+    try {
+      await api.reviewShopLocationRequest(req.id, approved)
+      toast(approved ? 'Location change approved' : 'Location change rejected', approved ? 'success' : 'info')
+      load()
+    } catch (e) { toast('Failed to review location request', 'error') }
+    setActioning(null)
+  }
+
   const filtered = shops.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.category?.toLowerCase().includes(search.toLowerCase()))
 
   return (
@@ -1155,6 +1373,38 @@ function ShopsPage() {
         <div><div className="page-title">Shops</div><div className="page-sub">{shops.length} registered shops</div></div>
         <button className="btn btn-ghost btn-sm" onClick={load}><I.Refresh /> Refresh</button>
       </div>
+
+      {locationRequests.length > 0 && (
+        <div className="table-wrap" style={{ marginBottom: 18 }}>
+          <div className="table-toolbar">
+            <div>
+              <div style={{ fontWeight: 900 }}>Location Approval Requests</div>
+              <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>Vendors can move shop location only after approval</div>
+            </div>
+            <span className="badge badge-warning">{locationRequests.length} Pending</span>
+          </div>
+          {locationRequests.map(req => (
+            <div key={req.id} className="table-row" style={{ gridTemplateColumns: '1.4fr 1fr 1fr 170px' }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>{req.shopName || `Shop #${req.shopId}`}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12 }}>{req.ownerName || 'Vendor'} {req.ownerPhone ? `- ${req.ownerPhone}` : ''}</div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                <strong style={{ color: 'var(--text)' }}>Current</strong><br />
+                {req.oldAddress || '-'}<br />{req.oldLat}, {req.oldLng}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                <strong style={{ color: 'var(--text)' }}>Requested</strong><br />
+                {req.newAddress || '-'}<br />{req.newLat}, {req.newLng}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn btn-success btn-sm" disabled={actioning === `loc-${req.id}`} onClick={() => reviewLocationRequest(req, true)}>Approve</button>
+                <button className="btn btn-danger btn-sm" disabled={actioning === `loc-${req.id}`} onClick={() => reviewLocationRequest(req, false)}>Reject</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="table-wrap">
         <div className="table-toolbar">
@@ -1165,7 +1415,7 @@ function ShopsPage() {
           </div>
           <div className="search-wrap">
             <I.Search />
-            <input className="input search-input" placeholder="Search shops…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="input search-input" placeholder="Search shops..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
 
@@ -1193,7 +1443,7 @@ function ShopsPage() {
             <span style={{ fontWeight: 700, fontSize: 13 }}>⭐ {s.rating?.toFixed(1) || 'New'} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({s.ratingCount})</span></span>
             <span style={{ fontWeight: 700, color: 'var(--primary)' }}>{s.totalOrders}</span>
             <span className={`badge ${s.isSuspended ? 'badge-danger' : 'badge-success'}`}>{s.isSuspended ? 'Suspended' : 'Active'}</span>
-            <span style={{ fontSize: 12, color: s.isOpen ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{s.isOpen ? '● Open' : '○ Closed'}</span>
+            <span style={{ fontSize: 12, color: s.isOpen ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{s.isOpen ? ' Open' : ' Closed'}</span>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn-ghost btn-icon" title="View details" onClick={() => setSelected(s)}><I.Eye /></button>
               <button className={`btn btn-sm ${s.isSuspended ? 'btn-success' : 'btn-danger'}`}
@@ -1215,7 +1465,7 @@ function ShopsPage() {
             </div>
             {selected.imageUrl && <img src={selected.imageUrl} alt="" style={{ width: '100%', height: 180, objectFit: 'cover', borderRadius: 12, marginBottom: 16 }} />}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-              {[{k:'Owner',v:selected.ownerName}, {k:'Category',v:selected.category}, {k:'City',v:selected.city}, {k:'Phone',v:selected.phone || '—'}, {k:'Rating',v:`⭐ ${selected.rating?.toFixed(1) || 'New'} (${selected.ratingCount} reviews)`}, {k:'Total Orders',v:selected.totalOrders}, {k:'Delivery Time',v:`${selected.deliveryTime} min`}, {k:'Min Order',v:`₹${selected.minOrder}`}, {k:'Returns',v:selected.acceptsReturns ? `✅ ${selected.returnDays} days` : '❌ No returns'}].map(({k, v}) => (
+              {[{k:'Owner',v:selected.ownerName}, {k:'Category',v:selected.category}, {k:'City',v:selected.city}, {k:'Phone',v:selected.phone || '-'}, {k:'Rating',v:`⭐ ${selected.rating?.toFixed(1) || 'New'} (${selected.ratingCount} reviews)`}, {k:'Total Orders',v:selected.totalOrders}, {k:'Delivery Time',v:`${selected.deliveryTime} min`}, {k:'Min Order',v:`Rs ${selected.minOrder}`}, {k:'Returns',v:selected.acceptsReturns ? `✅ ${selected.returnDays} days` : '❌ No returns'}].map(({k, v}) => (
                 <div key={k} style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.6px' }}>{k}</div>
                   <div style={{ fontWeight: 700, fontSize: 14, marginTop: 3 }}>{v}</div>
@@ -1230,7 +1480,7 @@ function ShopsPage() {
               <button className={`btn ${selected.isSuspended ? 'btn-success' : 'btn-danger'}`} style={{ flex: 1 }}
                 disabled={actioning === selected.id}
                 onClick={() => { toggleSuspend(selected); setSelected(null) }}>
-                {selected.isSuspended ? '✓ Restore Shop' : '⚠ Suspend Shop'}
+                {selected.isSuspended ? 'OK Restore Shop' : '⚠ Suspend Shop'}
               </button>
             </div>
           </div>
@@ -1240,9 +1490,9 @@ function ShopsPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    ORDERS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function OrdersPage() {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1287,7 +1537,7 @@ function OrdersPage() {
       >
         <div>
           <div className="page-title" style={{ color: '#fff' }}>All Orders</div>
-          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{orders.length} total · Live updates every 15s</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>{orders.length} total  -  Live updates every 15s</div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dcfce7', fontWeight: 700 }}><div className="live-dot" /> Live</div>
@@ -1315,7 +1565,7 @@ function OrdersPage() {
           </div>
           <div className="search-wrap" style={{ maxWidth: 300 }}>
             <I.Search />
-            <input className="input search-input" placeholder="Search order code, customer, shop…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="input search-input" placeholder="Search order code, customer, shop..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
 
@@ -1338,12 +1588,12 @@ function OrdersPage() {
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>{o.customer?.phone}</div>
             </div>
             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.shop?.name}</div>
-            <span style={{ fontFamily: 'var(--font)', fontWeight: 800, color: 'var(--primary)' }}>₹{o.total}</span>
+            <span style={{ fontFamily: 'var(--font)', fontWeight: 800, color: 'var(--primary)' }}>Rs {o.total}</span>
             <div style={{display:'flex',flexDirection:'column',gap:4}}>
               <span className="status-pill" style={{ background: `${SC[o.status]}18`, color: SC[o.status] }}>{SL[o.status]}</span>
               {o.status === 'DELIVERED' && <span className="status-pill" style={{ background: o.isDelayed ? 'rgba(239,68,68,.12)' : 'rgba(34,197,94,.12)', color: o.isDelayed ? '#ef4444' : '#22c55e' }}>{o.isDelayed ? 'Late' : 'On time'}</span>}
             </div>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{o.placedAt ? new Date(o.placedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{o.placedAt ? new Date(o.placedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-'}</span>
           </div>
         ))}
       </div>
@@ -1360,10 +1610,10 @@ function OrdersPage() {
               <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}><I.Close /></button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-              {[{k:'Customer',v:selected.customer?.name}, {k:'Phone',v:selected.customer?.phone}, {k:'Shop',v:selected.shop?.name}, {k:'Payment',v:selected.paymentMethod?.toUpperCase()}, {k:'Subtotal',v:`₹${selected.subtotal}`}, {k:'Delivery Fee',v:`₹${selected.deliveryFee}`}, {k:'Total',v:`₹${selected.total}`}, {k:'Rider',v:selected.rider?.name || 'Not assigned'}].map(({k, v}) => (
+              {[{k:'Customer',v:selected.customer?.name}, {k:'Phone',v:selected.customer?.phone}, {k:'Shop',v:selected.shop?.name}, {k:'Payment',v:selected.paymentMethod?.toUpperCase()}, {k:'COD Amount',v:(selected.paymentMethod || '').toLowerCase() === 'cod' ? `Rs ${Number(selected.codDueAmount || selected.total || 0).toLocaleString('en-IN')}` : 'Not COD'}, {k:'COD Status',v:(selected.paymentMethod || '').toLowerCase() === 'cod' ? (selected.codCollected ? 'Collected by rider' : 'Not collected yet') : 'Prepaid'}, {k:'Subtotal',v:`Rs ${selected.subtotal}`}, {k:`Delivery Total${selected.deliveryKm ? ` (${selected.deliveryKm} km)` : ''}`,v:`Rs ${Number(selected.deliveryFee || 0).toLocaleString('en-IN')}`}, {k:'Platform Fee',v:`Rs ${Number(selected.platformFee || 0).toLocaleString('en-IN')}`}, {k:'GST',v:`Rs ${Number(selected.gstAmount || 0).toLocaleString('en-IN')}`}, {k:'Total',v:`Rs ${selected.total}`}, {k:'Rider',v:selected.rider?.name || 'Not assigned'}].map(({k, v}) => (
                 <div key={k} style={{ padding: '10px 14px', background: 'var(--bg)', borderRadius: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase' }}>{k}</div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginTop: 3 }}>{v || '—'}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginTop: 3 }}>{v || '-'}</div>
                 </div>
               ))}
             </div>
@@ -1371,8 +1621,8 @@ function OrdersPage() {
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Items</div>
               {selected.items?.map((item, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg)', borderRadius: 8, marginBottom: 4, fontSize: 13 }}>
-                  <span style={{ fontWeight: 600 }}>{item.name}{item.size ? ` (${item.size})` : ''} ×{item.qty}</span>
-                  <span style={{ fontWeight: 800, color: 'var(--primary)' }}>₹{item.price * item.qty}</span>
+                  <span style={{ fontWeight: 600 }}>{item.name}{item.size ? ` (${item.size})` : ''} x{item.qty}</span>
+                  <span style={{ fontWeight: 800, color: 'var(--primary)' }}>Rs {item.price * item.qty}</span>
                 </div>
               ))}
             </div>
@@ -1384,9 +1634,9 @@ function OrdersPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    RIDERS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function RidersPage() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1408,7 +1658,7 @@ function RidersPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div><div className="page-title">Riders</div><div className="page-sub">{users.length} total · {online.length} online now</div></div>
+        <div><div className="page-title">Riders</div><div className="page-sub">{users.length} total  -  {online.length} online now</div></div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--green)', fontWeight: 700 }}><div className="live-dot" /> Live</div>
           <button className="btn btn-ghost btn-sm" onClick={load}><I.Refresh /></button>
@@ -1446,7 +1696,7 @@ function RidersPage() {
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 1 }}>{u.phone || u.email}</div>
                     {u.lat && <div style={{ fontSize: 11, color: 'var(--green)', marginTop: 2 }}>📍 {u.lat?.toFixed(3)}, {u.lng?.toFixed(3)}</div>}
                   </div>
-                  <span className="badge badge-success">● Online</span>
+                  <span className="badge badge-success"> Online</span>
                 </div>
                 {!u.isBlocked && (
                   <button className="btn btn-danger btn-sm" style={{ width: '100%', marginTop: 10 }} disabled={actioning === u.id} onClick={() => toggleBlock(u)}>
@@ -1480,8 +1730,8 @@ function RidersPage() {
             </div>
             <div><div style={{ fontSize: 13 }}>{u.email}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.phone}</div></div>
             <span className={`badge ${u.isBlocked ? 'badge-danger' : 'badge-success'}`}>{u.isBlocked ? 'Blocked' : 'Active'}</span>
-            <span style={{ fontSize: 12, color: u.isOnline ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{u.isOnline ? '● Online' : '○ Offline'}</span>
-            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{u.lat ? `${u.lat?.toFixed(2)}…` : 'Unknown'}</span>
+            <span style={{ fontSize: 12, color: u.isOnline ? 'var(--green)' : 'var(--muted)', fontWeight: 700 }}>{u.isOnline ? ' Online' : ' Offline'}</span>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{u.lat ? `${u.lat?.toFixed(2)}...` : 'Unknown'}</span>
             <button className={`btn btn-sm ${u.isBlocked ? 'btn-success' : 'btn-danger'}`}
               disabled={actioning === u.id} onClick={() => toggleBlock(u)}>
               {actioning === u.id ? '...' : u.isBlocked ? 'Unblock' : 'Block'}
@@ -1493,9 +1743,9 @@ function RidersPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    REVENUE PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function RevenuePage() {
   const [revenue, setRevenue] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -1505,7 +1755,7 @@ function RevenuePage() {
   const maxRev = revenue?.daily ? Math.max(...revenue.daily.map(d => d.revenue), 1) : 1
 
   const PERIODS = [
-    { label: 'Today', key: 'today', icon: '☀️', color: '#6c47ff' },
+    { label: 'Today', key: 'today', icon: '☀', color: '#6c47ff' },
     { label: 'This Week', key: 'week', icon: '📅', color: '#3b82f6' },
     { label: 'This Month', key: 'month', icon: '🗓', color: '#f97316' },
     { label: 'All Time', key: 'allTime', icon: '🏆', color: '#22c55e' },
@@ -1522,7 +1772,7 @@ function RevenuePage() {
             <span className="stat-icon">{p.icon}</span>
             {loading
               ? <div className="skeleton" style={{ height: 30, width: 80, marginBottom: 8 }} />
-              : <div className="stat-val" style={{ color: p.color }}>₹{revenue?.[p.key]?.revenue?.toLocaleString('en-IN') || 0}</div>}
+              : <div className="stat-val" style={{ color: p.color }}>Rs {revenue?.[p.key]?.revenue?.toLocaleString('en-IN') || 0}</div>}
             <div className="stat-label">{p.label}</div>
             <div className="stat-sub">
               <span style={{ fontWeight: 800 }}>{revenue?.[p.key]?.orders || 0}</span> orders
@@ -1533,16 +1783,16 @@ function RevenuePage() {
 
       {/* Chart */}
       <div className="card fade-up" style={{ animationDelay: '.32s', marginBottom: 20 }}>
-        <div className="card-title">📊 Daily Revenue — Last 7 Days</div>
+        <div className="card-title">📊 Daily Revenue - Last 7 Days</div>
         {revenue?.daily ? (
           <>
             <div className="bar-chart" style={{ height: 180 }}>
               {revenue.daily.map((d, i) => (
                 <div key={i} className="bar-col">
                   <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--primary)', marginBottom: 4 }}>
-                    {d.revenue > 999 ? `₹${(d.revenue / 1000).toFixed(1)}k` : `₹${d.revenue}`}
+                    {d.revenue > 999 ? `Rs ${(d.revenue / 1000).toFixed(1)}k` : `Rs ${d.revenue}`}
                   </div>
-                  <div className="bar-fill" data-tip={`${d.date}: ₹${d.revenue} · ${d.orders} orders`}
+                  <div className="bar-fill" data-tip={`${d.date}: Rs ${d.revenue}  -  ${d.orders} orders`}
                     style={{ height: `${Math.max((d.revenue / maxRev) * 100, 3)}%` }} />
                   <div className="bar-label">{d.day}</div>
                   <div style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 600 }}>{d.orders} orders</div>
@@ -1550,7 +1800,7 @@ function RevenuePage() {
               ))}
             </div>
             <div style={{ marginTop: 16, padding: '12px 0', borderTop: '1px solid var(--border2)', display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-              {[{k:'Best day this week',v:`₹${Math.max(...(revenue.daily?.map(d => d.revenue) || [0]))}`}, {k:'Avg daily orders',v:`${Math.round((revenue.week?.orders || 0) / 7)}`}, {k:'Avg order value',v:`₹${revenue.allTime?.orders ? Math.round((revenue.allTime?.revenue || 0) / revenue.allTime.orders) : 0}`}].map(({k, v}) => (
+              {[{k:'Best day this week',v:`Rs ${Math.max(...(revenue.daily?.map(d => d.revenue) || [0]))}`}, {k:'Avg daily orders',v:`${Math.round((revenue.week?.orders || 0) / 7)}`}, {k:'Avg order value',v:`Rs ${revenue.allTime?.orders ? Math.round((revenue.allTime?.revenue || 0) / revenue.allTime.orders) : 0}`}].map(({k, v}) => (
                 <div key={k}>
                   <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>{k}</div>
                   <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--primary)', marginTop: 2 }}>{v}</div>
@@ -1566,9 +1816,9 @@ function RevenuePage() {
         <div className="card fade-up" style={{ animationDelay: '.4s' }}>
           <div className="card-title">💰 Platform Summary</div>
           {[
-            {k:'Gross Revenue (All Time)',v:`₹${revenue?.allTime?.revenue?.toLocaleString('en-IN') || 0}`},
-            {k:'Rider Commissions (8%)',v:`₹${Math.round((revenue?.allTime?.revenue || 0) * 0.08).toLocaleString('en-IN')}`},
-            {k:'Net Platform Revenue',v:`₹${Math.round((revenue?.allTime?.revenue || 0) * 0.92).toLocaleString('en-IN')}`},
+            {k:'Gross Revenue (All Time)',v:`Rs ${revenue?.allTime?.revenue?.toLocaleString('en-IN') || 0}`},
+            {k:'Rider Commissions (8%)',v:`Rs ${Math.round((revenue?.allTime?.revenue || 0) * 0.08).toLocaleString('en-IN')}`},
+            {k:'Net Platform Revenue',v:`Rs ${Math.round((revenue?.allTime?.revenue || 0) * 0.92).toLocaleString('en-IN')}`},
             {k:'Total Delivered Orders',v:`${revenue?.allTime?.orders || 0} orders`},
           ].map(({k, v}) => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 0', borderBottom: '1px solid var(--border2)', fontSize: 14 }}>
@@ -1586,7 +1836,7 @@ function RevenuePage() {
             <div key={label} style={{ marginBottom: 18 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
                 <span style={{ color: 'var(--muted)' }}>{label}</span>
-                <span style={{ fontWeight: 800 }}>{typeof current === 'number' && current > 999 ? `₹${(current / 1000).toFixed(1)}k` : current}</span>
+                <span style={{ fontWeight: 800 }}>{typeof current === 'number' && current > 999 ? `Rs ${(current / 1000).toFixed(1)}k` : current}</span>
               </div>
               <div style={{ height: 8, background: 'var(--border2)', borderRadius: 4, overflow: 'hidden' }}>
                 <div style={{ height: '100%', background: 'linear-gradient(90deg,#6c47ff,#a78bfa)', borderRadius: 4, width: `${Math.min((current / (total || 1)) * 100, 100)}%`, transition: 'width .8s ease' }} />
@@ -1599,9 +1849,9 @@ function RevenuePage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    RETURNS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function ReturnsPage() {
   const [returns, setReturns] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1656,12 +1906,12 @@ function ReturnsPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    APP ROOT
-════════════════════════════════════════════════════════════ */
-/* ════════════════════════════════════════════════════════════
+---------------------------------------- */
+/* ----------------------------------------
    VERIFY SHOPS PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function VerifyPage() {
   const [shops, setShops] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1677,7 +1927,7 @@ function VerifyPage() {
     setActioning(shop.id)
     try {
       await api.verifyShop(shop.id, badge)
-      toast(`${shop.name} — ${badge} badge granted ✓`, 'success')
+      toast(`${shop.name} - ${badge} badge granted OK`, 'success')
       load()
     } catch(e) { toast('Failed', 'error') }
     setActioning(null)
@@ -1705,11 +1955,11 @@ function VerifyPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <span style={{ fontWeight: 800, fontSize: 15 }}>{s.name}</span>
                 {s.isVerified && (
-                  <span style={{ background: '#dbeafe', color: '#1d4ed8', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 100 }}>✓ Verified</span>
+                  <span style={{ background: '#dbeafe', color: '#1d4ed8', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 100 }}>OK Verified</span>
                 )}
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                {s.category} · {s.owner} · {s.totalOrders} orders · ⭐ {s.rating?.toFixed(1) || 'New'} ({s.ratingCount} reviews)
+                {s.category}  -  {s.owner}  -  {s.totalOrders} orders  -  ⭐ {s.rating?.toFixed(1) || 'New'} ({s.ratingCount} reviews)
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
@@ -1718,7 +1968,7 @@ function VerifyPage() {
                   <button className="btn btn-sm" style={{ background: '#dbeafe', color: '#1d4ed8', border: 'none' }}
                     disabled={actioning === s.id}
                     onClick={() => verify(s, 'verified')}>
-                    {actioning === s.id ? '…' : '✓ Verify'}
+                    {actioning === s.id ? '...' : 'OK Verify'}
                   </button>
                   <button className="btn btn-sm" style={{ background: '#fef9c3', color: '#92400e', border: 'none' }}
                     disabled={actioning === s.id}
@@ -1737,9 +1987,9 @@ function VerifyPage() {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    PROMO CODES PAGE
-════════════════════════════════════════════════════════════ */
+---------------------------------------- */
 function PromoPage() {
   const [promos, setPromos] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1759,7 +2009,7 @@ function PromoPage() {
     setCreating(true)
     try {
       await api.createPromo(form)
-      toast(`Promo code ${form.code} created ✓`, 'success')
+      toast(`Promo code ${form.code} created OK`, 'success')
       setShowCreate(false)
       setForm({ code: '', discountType: 'percent', discountValue: 10, minOrder: 0, maxUses: 100 })
       load()
@@ -1784,11 +2034,11 @@ function PromoPage() {
       <div className="page-header">
         <div>
           <div className="page-title">Promo Codes</div>
-          <div className="page-sub">{promos.length} codes · {promos.filter(p => p.isActive).length} active</div>
+          <div className="page-sub">{promos.length} codes  -  {promos.filter(p => p.isActive).length} active</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(!showCreate)}>
-            {showCreate ? '✕ Cancel' : '+ Create Code'}
+            {showCreate ? 'x Cancel' : '+ Create Code'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={load}><I.Refresh /></button>
         </div>
@@ -1807,16 +2057,16 @@ function PromoPage() {
               <label className="label">Discount Type</label>
               <select className="input" value={form.discountType} onChange={sf('discountType')}>
                 <option value="percent">Percentage (%)</option>
-                <option value="flat">Flat Amount (₹)</option>
+                <option value="flat">Flat Amount (Rs )</option>
               </select>
             </div>
             <div>
               <label className="label">Discount Value</label>
               <input className="input" type="number" min="1" value={form.discountValue} onChange={sf('discountValue')}
-                placeholder={form.discountType === 'percent' ? 'e.g. 15 for 15%' : 'e.g. 50 for ₹50'} />
+                placeholder={form.discountType === 'percent' ? 'e.g. 15 for 15%' : 'e.g. 50 for Rs 50'} />
             </div>
             <div>
-              <label className="label">Min. Order (₹)</label>
+              <label className="label">Min. Order (Rs )</label>
               <input className="input" type="number" min="0" value={form.minOrder} onChange={sf('minOrder')} />
             </div>
             <div>
@@ -1825,7 +2075,7 @@ function PromoPage() {
             </div>
           </div>
           <button className="btn btn-primary" onClick={createPromo} disabled={creating}>
-            {creating ? 'Creating…' : '✓ Create Promo Code'}
+            {creating ? 'Creating...' : 'OK Create Promo Code'}
           </button>
         </div>
       )}
@@ -1850,9 +2100,9 @@ function PromoPage() {
           <div key={p.id} className="table-row" style={{ gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr 1fr 80px' }}>
             <span style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 14, letterSpacing: 1, color: 'var(--primary)' }}>{p.code}</span>
             <span style={{ fontWeight: 700, color: p.discountType === 'percent' ? '#16a34a' : '#f97316' }}>
-              {p.discountType === 'percent' ? `${p.discountValue}% off` : `₹${p.discountValue} off`}
+              {p.discountType === 'percent' ? `${p.discountValue}% off` : `Rs ${p.discountValue} off`}
             </span>
-            <span style={{ fontSize: 13, color: 'var(--muted)' }}>₹{p.minOrder}</span>
+            <span style={{ fontSize: 13, color: 'var(--muted)' }}>Rs {p.minOrder}</span>
             <span style={{ fontSize: 13 }}>
               <span style={{ fontWeight: 700 }}>{p.usedCount}</span>
               <span style={{ color: 'var(--muted)' }}> / {p.maxUses}</span>
@@ -1864,10 +2114,168 @@ function PromoPage() {
             <button className={`btn btn-sm ${p.isActive ? 'btn-ghost' : 'btn-success'}`}
               disabled={toggling === p.id}
               onClick={() => toggle(p)}>
-              {toggling === p.id ? '…' : p.isActive ? 'Disable' : 'Enable'}
+              {toggling === p.id ? '...' : p.isActive ? 'Disable' : 'Enable'}
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/* ----------------------------------------
+   CUSTOMER NOTIFICATIONS PAGE
+---------------------------------------- */
+function NotificationsPage() {
+  const [broadcast, setBroadcast] = useState({
+    title: 'Festival offers are live',
+    body: 'Fresh styles, new shops, and limited-time deals are waiting near you.',
+    category: 'festival',
+    role: 'CUSTOMER',
+  })
+  const [nearby, setNearby] = useState({
+    title: 'Near you now',
+    body: 'Top shops and popular new arrivals are available near your area.',
+    lat: '',
+    lng: '',
+    radiusKm: 10,
+    limit: 3,
+  })
+  const [sending, setSending] = useState('')
+
+  const sb = k => e => setBroadcast(f => ({ ...f, [k]: e.target.value }))
+  const sn = k => e => setNearby(f => ({ ...f, [k]: e.target.value }))
+
+  const sendBroadcast = async () => {
+    if (!broadcast.title.trim() || !broadcast.body.trim()) return toast('Enter title and message', 'error')
+    setSending('broadcast')
+    try {
+      const r = await api.sendFestivalNotification({
+        ...broadcast,
+        data: { type: broadcast.category || 'announcement' },
+      })
+      toast(`Notification sent to ${r.data.sent || 0} customer${r.data.sent === 1 ? '' : 's'}`, 'success')
+    } catch (e) {
+      toast(e.response?.data?.detail || 'Notification failed', 'error')
+    }
+    setSending('')
+  }
+
+  const sendNearby = async () => {
+    const lat = Number(nearby.lat)
+    const lng = Number(nearby.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return toast('Enter customer area latitude and longitude', 'error')
+    setSending('nearby')
+    try {
+      const r = await api.sendNearbyHighlights({
+        title: nearby.title,
+        body: nearby.body,
+        lat,
+        lng,
+        radiusKm: Number(nearby.radiusKm || 10),
+        limit: Number(nearby.limit || 3),
+        includeTopRated: true,
+        includeTopSelling: true,
+        includeOpenShops: true,
+      })
+      toast(`Nearby push sent to ${r.data.sent || 0}; shops ${r.data.shops || 0}, products ${r.data.products || 0}`, 'success')
+    } catch (e) {
+      toast(e.response?.data?.detail || 'Nearby notification failed', 'error')
+    }
+    setSending('')
+  }
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Customer Notifications</div>
+          <div className="page-sub">Send festival alerts, timed offers, nearby shops, and new-arrival highlights</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 18 }}>
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--primary)', marginBottom: 6 }}>Festival / Timed Push</div>
+          <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, marginBottom: 18 }}>Use this for festival sale, reminder, payday sale, weekend offer, or any message that should go to customers.</div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div>
+              <label className="label">Title</label>
+              <input className="input" value={broadcast.title} onChange={sb('title')} placeholder="Festival offers are live" />
+            </div>
+            <div>
+              <label className="label">Message</label>
+              <textarea className="input" rows="4" value={broadcast.body} onChange={sb('body')} placeholder="Tell customers what is new" />
+            </div>
+            <div>
+              <label className="label">Category</label>
+              <select className="input" value={broadcast.category} onChange={sb('category')}>
+                <option value="festival">Festival</option>
+                <option value="timed_offer">Timed offer</option>
+                <option value="new_arrival">New arrivals</option>
+                <option value="announcement">Announcement</option>
+              </select>
+            </div>
+            <button className="btn btn-primary" onClick={sendBroadcast} disabled={sending === 'broadcast'}>
+              {sending === 'broadcast' ? 'Sending...' : 'Send To Customers'}
+            </button>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 18, color: 'var(--primary)', marginBottom: 6 }}>Nearby Highlights</div>
+          <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, marginBottom: 18 }}>Pick an area center. The backend finds customers nearby and includes top shops and popular products.</div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div>
+              <label className="label">Title</label>
+              <input className="input" value={nearby.title} onChange={sn('title')} />
+            </div>
+            <div>
+              <label className="label">Message</label>
+              <textarea className="input" rows="3" value={nearby.body} onChange={sn('body')} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label className="label">Latitude</label>
+                <input className="input" value={nearby.lat} onChange={sn('lat')} placeholder="17.3850" />
+              </div>
+              <div>
+                <label className="label">Longitude</label>
+                <input className="input" value={nearby.lng} onChange={sn('lng')} placeholder="78.4867" />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label className="label">Radius Km</label>
+                <input className="input" type="number" min="1" max="10" value={nearby.radiusKm} onChange={sn('radiusKm')} />
+              </div>
+              <div>
+                <label className="label">Items</label>
+                <input className="input" type="number" min="1" max="6" value={nearby.limit} onChange={sn('limit')} />
+              </div>
+            </div>
+            <button className="btn btn-primary" onClick={sendNearby} disabled={sending === 'nearby'}>
+              {sending === 'nearby' ? 'Sending...' : 'Send Nearby Push'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 20, marginTop: 18 }}>
+        <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 16, color: 'var(--navy)', marginBottom: 10 }}>Automatic notifications already active</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }}>
+          {[
+            ['New shop nearby', 'Sent when a vendor creates a shop with location.'],
+            ['New arrival nearby', 'Sent when a vendor adds a product near customer area.'],
+            ['Order updates', 'Sent during order status, delivery, and OTP flow.'],
+            ['Manual campaigns', 'Use this page for festival and timed announcements.'],
+          ].map(([title, copy]) => (
+            <div key={title} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: '#f8fbff' }}>
+              <div style={{ fontWeight: 900, color: 'var(--primary)', marginBottom: 5 }}>{title}</div>
+              <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.5 }}>{copy}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -1877,6 +2285,9 @@ function SettlementFilters({ filters, setFilters, onApply, loading }) {
   const quick = [
     { id: 'daily', label: 'Daily' },
     { id: 'last2days', label: 'Last 2 Days' },
+    { id: 'weekly', label: '7 Days' },
+    { id: 'monthly', label: '30 Days' },
+    { id: 'all', label: 'All Time' },
     { id: 'custom', label: 'Custom Range' },
   ]
   return (
@@ -1907,7 +2318,7 @@ function SettlementFilters({ filters, setFilters, onApply, loading }) {
         <input className="input" type="date" value={filters.startDate} onChange={e => setFilters(f => ({ ...f, startDate: e.target.value }))} style={{ width: 160 }} disabled={filters.rangeKey !== 'custom'} />
         <input className="input" type="date" value={filters.endDate} onChange={e => setFilters(f => ({ ...f, endDate: e.target.value }))} style={{ width: 160 }} disabled={filters.rangeKey !== 'custom'} />
         <button className="btn btn-primary" onClick={() => onApply(filters)} disabled={loading || (filters.rangeKey === 'custom' && (!filters.startDate || !filters.endDate))}>
-          {loading ? 'Loading…' : 'Apply'}
+          {loading ? 'Loading...' : 'Apply'}
         </button>
       </div>
     </div>
@@ -1936,6 +2347,9 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   const [payContext, setPayContext] = useState(null)
   const [payMethod, setPayMethod] = useState('phonepe')
   const [paymentReference, setPaymentReference] = useState('')
+  const [paymentLaunched, setPaymentLaunched] = useState(false)
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false)
+  const money = value => `Rs ${Number(value || 0).toLocaleString('en-IN')}`
 
   const load = useCallback(async (active = filters) => {
     setLoading(true)
@@ -1971,7 +2385,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     setPaying(invoiceId)
     try {
       await api.payInvoice(invoiceId, payload)
-      toast('Marked as paid ✓', 'success')
+      toast('Marked as paid OK', 'success')
       await load(filters)
     } catch (e) {
       toast('Payment update failed', 'error')
@@ -1983,8 +2397,11 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   const vendorInvoices = data?.vendors || []
   const riderInvoices = data?.riders || []
   const history = data?.paymentHistory || []
+  const openInvoices = [...(data?.vendorInvoices || []), ...(data?.riderInvoices || [])].filter(i => Number(i.pendingAmount || 0) > 0)
   const ownerUsers = users.filter(u => u.role === 'OWNER')
   const riderUsers = users.filter(u => u.role === 'RIDER')
+  const paymentHistory = [...history].sort((a, b) => new Date(b.paymentDate || 0).getTime() - new Date(a.paymentDate || 0).getTime())
+  const sameId = (a, b) => String(a ?? '') === String(b ?? '')
   const itemMerchandiseTotal = order => {
     const items = Array.isArray(order?.items) ? order.items : []
     const fromItems = items.reduce((sum, item) => sum + (Number(item?.price || 0) * Number(item?.qty || 1)), 0)
@@ -2049,7 +2466,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     return acc
   }, {}))
   const riderRows = (riderUsers.length ? riderUsers.map(rider => {
-    const inv = riderInvoices.find(r => r.riderId === rider.id || r.riderName === rider.name)
+    const inv = riderInvoices.find(r => sameId(r.riderId, rider.id) || r.riderName === rider.name)
     return inv ? {
       ...inv,
       riderId: inv.riderId || rider.id,
@@ -2060,6 +2477,18 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       totalEarnings: Number(inv.totalEarnings || 0),
       paidAmount: Number(inv.paidAmount || 0),
       pendingAmount: Number(inv.pendingAmount || 0),
+      codCollected: Number(inv.codCollected || inv.codSummary?.totalCollected || 0),
+      codSettled: Number(inv.codSettled || inv.codSummary?.settledAmount || 0),
+      codPending: Number(inv.codPending || inv.codSummary?.pendingAmount || 0),
+      codOrders: Number(inv.codOrders || inv.codSummary?.totalCodOrders || 0),
+      codProductValue: Number(inv.codProductValue || inv.codSummary?.breakdown?.productValue || 0),
+      codDeliveryFee: Number(inv.codDeliveryFee || inv.codSummary?.breakdown?.deliveryFee || 0),
+      codPlatformFee: Number(inv.codPlatformFee || inv.codSummary?.breakdown?.platformFee || 0),
+      codGstAmount: Number(inv.codGstAmount || inv.codSummary?.breakdown?.gstAmount || 0),
+      codOtherAdjustments: Number(inv.codOtherAdjustments || inv.codSummary?.breakdown?.otherAdjustments || 0),
+      codSummary: inv.codSummary || null,
+      netAdminPayable: Number(inv.netAdminPayable ?? Math.max(Number(inv.pendingAmount || 0) - Number(inv.codPending || inv.codSummary?.pendingAmount || 0), 0)),
+      netRiderOwes: Number(inv.netRiderOwes ?? Math.max(Number(inv.codPending || inv.codSummary?.pendingAmount || 0) - Number(inv.pendingAmount || 0), 0)),
       invoiceIds: Array.isArray(inv.invoiceIds) ? inv.invoiceIds : [inv.latestInvoiceId || inv.id].filter(Boolean),
     } : {
       riderId: rider.id,
@@ -2069,34 +2498,78 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       totalEarnings: 0,
       paidAmount: 0,
       pendingAmount: 0,
+      codCollected: 0,
+      codSettled: 0,
+      codPending: 0,
+      codOrders: 0,
+      codProductValue: 0,
+      codDeliveryFee: 0,
+      codPlatformFee: 0,
+      codGstAmount: 0,
+      codOtherAdjustments: 0,
+      codSummary: null,
+      netAdminPayable: 0,
+      netRiderOwes: 0,
       status: 'NO_INVOICE',
       latestInvoiceId: null,
     }
   }) : riderInvoices)
+  const codBreakdown = data?.riderCod?.breakdown || {
+    productValue: riderRows.reduce((s, r) => s + Number(r.codProductValue || 0), 0),
+    deliveryFee: riderRows.reduce((s, r) => s + Number(r.codDeliveryFee || 0), 0),
+    platformFee: riderRows.reduce((s, r) => s + Number(r.codPlatformFee || 0), 0),
+    gstAmount: riderRows.reduce((s, r) => s + Number(r.codGstAmount || 0), 0),
+    otherAdjustments: riderRows.reduce((s, r) => s + Number(r.codOtherAdjustments || 0), 0),
+  }
+  const codPendingTotal = Number(data?.riderCod?.pendingAmount ?? riderRows.reduce((s, v) => s + (v.codPending || 0), 0))
+  const codFormulaParts = [
+    ['Products', codBreakdown.productValue],
+    ['Delivery', codBreakdown.deliveryFee],
+    ['Platform', codBreakdown.platformFee],
+    ['GST', codBreakdown.gstAmount],
+    ['Other', codBreakdown.otherAdjustments],
+  ].filter(([, value]) => Math.abs(Number(value || 0)) >= 0.01)
+  const codFormulaText = codFormulaParts.length
+    ? codFormulaParts.map(([label, value]) => `${label} ${money(value)}`).join(' + ')
+    : 'No collected COD cash pending'
+  const payableVendorRows = vendorRows.filter(v => Number(v.pendingAmount || 0) > 0 && ((v.invoiceIds || []).length || v.latestInvoiceId))
+  const payableRiderRows = riderRows.filter(r => Number(r.pendingAmount || 0) > 0 && ((r.invoiceIds || []).length || r.latestInvoiceId))
   const vendorRowKey = row => row?.shopId ? `shop::${row.shopId}` : `vendor::${row?.vendorId || row?.vendorName || 'Vendor'}`
   const selectedVendorInvoice = selectedVendor ? vendorRows.find(v => vendorRowKey(v) === selectedVendor) : null
-  const selectedVendorUser = selectedVendorInvoice ? users.find(u => u.id === selectedVendorInvoice.vendorId) : null
+  const selectedVendorUser = selectedVendorInvoice ? users.find(u => sameId(u.id, selectedVendorInvoice.vendorId)) : null
   const selectedVendorShop = selectedVendor
-    ? shops.find(s => s.id === selectedVendorInvoice?.shopId || s.ownerId === selectedVendorInvoice?.vendorId)
+    ? shops.find(s => sameId(s.id, selectedVendorInvoice?.shopId) || sameId(s.ownerId, selectedVendorInvoice?.vendorId))
     : null
   const selectedVendorOrders = selectedVendor
     ? orders.filter(o => {
         const orderShopId = o.shop?.id || o.shopId || null
         const orderVendorId = o.vendor?.id || o.vendorId || o.ownerId || null
         return (
-          (selectedVendorInvoice?.shopId && orderShopId === selectedVendorInvoice.shopId) ||
-          orderVendorId === selectedVendorInvoice?.vendorId
+          (selectedVendorInvoice?.shopId && sameId(orderShopId, selectedVendorInvoice.shopId)) ||
+          sameId(orderVendorId, selectedVendorInvoice?.vendorId)
         )
       })
     : []
-  const last2DaysStart = Date.now() - (2 * 24 * 60 * 60 * 1000)
+  const fallbackStartMs = Date.now() - (2 * 24 * 60 * 60 * 1000)
+  const filterStartMs = filters.startDate ? new Date(`${filters.startDate}T00:00:00`).getTime() : fallbackStartMs
+  const filterEndMs = filters.endDate ? new Date(`${filters.endDate}T23:59:59.999`).getTime() : Date.now()
+  const inSelectedSettlementRange = stamp => {
+    if (!stamp) return false
+    const time = new Date(stamp).getTime()
+    return Number.isFinite(time) && time >= filterStartMs && time <= filterEndMs
+  }
   const selectedVendorDelivered2Days = selectedVendorOrders.filter(o => {
     if (o.status !== 'DELIVERED') return false
     const stamp = o.deliveredAt || o.updatedAt || o.createdAt || o.placedAt
-    if (!stamp) return false
-    return new Date(stamp).getTime() >= last2DaysStart
+    return inSelectedSettlementRange(stamp)
   })
   const selectedVendorGenerated2Days = selectedVendorDelivered2Days.reduce((sum, o) => sum + itemMerchandiseTotal(o), 0)
+  const selectedVendorChargeBreakdown = selectedVendorDelivered2Days.reduce((acc, o) => ({
+    deliveryFee: acc.deliveryFee + Number(o.deliveryFee || 0),
+    platformFee: acc.platformFee + Number(o.platformFee || 0),
+    gstAmount: acc.gstAmount + Number(o.gstAmount || 0),
+    totalCollected: acc.totalCollected + Number(o.total || 0),
+  }), { deliveryFee: 0, platformFee: 0, gstAmount: 0, totalCollected: 0 })
   const selectedVendorPayable2Days = selectedVendorGenerated2Days
   const selectedVendorProducts = selectedVendorDelivered2Days.reduce((acc, o) => {
     const items = Array.isArray(o.items) ? o.items : []
@@ -2110,22 +2583,26 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     return acc
   }, {})
   const selectedVendorProductList = Object.values(selectedVendorProducts).sort((a, b) => b.revenue - a.revenue)
-  const selectedRiderInvoice = selectedRider ? riderRows.find(r => r.riderId === selectedRider) : null
-  const selectedRiderUser = selectedRider ? users.find(u => u.id === selectedRider || u.name === selectedRiderInvoice?.riderName) : null
+  const selectedRiderInvoice = selectedRider ? riderRows.find(r => sameId(r.riderId, selectedRider)) : null
+  const selectedRiderUser = selectedRider ? users.find(u => sameId(u.id, selectedRider) || u.name === selectedRiderInvoice?.riderName) : null
+  const selectedRiderCod = selectedRiderInvoice?.codSummary || {}
+  const selectedRiderCompanyAccount = selectedRiderCod.companyAccount || data?.companyAccount || {}
   const selectedRiderOrders = selectedRider
     ? orders.filter(o => {
+        const riderId = o.rider?.id || o.riderId || o.assignedRiderId || null
         const riderName = o.rider?.name || o.riderName || ''
-        return riderName === selectedRiderInvoice?.riderName
+        return sameId(riderId, selectedRider) || (!riderId && riderName === selectedRiderInvoice?.riderName)
       })
     : []
   const selectedRiderDelivered2Days = selectedRiderOrders.filter(o => {
-    if (!['DELIVERED', 'OUT_FOR_DELIVERY', 'PICKED_UP'].includes(o.status)) return false
+    if (o.status !== 'DELIVERED') return false
     const stamp = o.deliveredAt || o.updatedAt || o.createdAt || o.placedAt
-    if (!stamp) return false
-    return new Date(stamp).getTime() >= last2DaysStart
+    return inSelectedSettlementRange(stamp)
   })
   const selectedRiderGenerated2Days = selectedRiderDelivered2Days.reduce((sum, o) => sum + Number(o.deliveryFee || 0), 0)
   const selectedRiderPayable2Days = selectedRiderGenerated2Days
+  const selectedRiderCodOrders = Array.isArray(selectedRiderCod.recentCodOrders) ? selectedRiderCod.recentCodOrders : []
+  const selectedRiderCodPayments = Array.isArray(selectedRiderCod.paymentHistory) ? selectedRiderCod.paymentHistory : []
 
   useEffect(() => {
     if (!selectedVendor && vendorRows.length) setSelectedVendor(vendorRowKey(vendorRows[0]))
@@ -2136,6 +2613,22 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     const digits = String(phone || '').replace(/\D/g, '')
     return digits ? `${digits}@upi` : ''
   }
+
+  const paymentProfileFor = (user, fallback = {}) => {
+    const method = (user?.paymentMethod || fallback.paymentMethod || 'upi').toLowerCase()
+    return {
+      method,
+      upiId: (user?.upiId || fallback.upiId || '').trim(),
+      phonepeNumber: (user?.phonepeNumber || fallback.phonepeNumber || '').trim(),
+      gpayNumber: (user?.gpayNumber || fallback.gpayNumber || '').trim(),
+      bankAccount: (user?.bankAccount || fallback.bankAccount || '').trim(),
+      bankIfsc: (user?.bankIfsc || fallback.bankIfsc || '').trim(),
+      bankName: (user?.bankName || fallback.bankName || '').trim(),
+      fallbackUpi: toUpiFromPhone(fallback.phone || user?.phone || ''),
+    }
+  }
+
+  const primaryUpiFor = profile => profile.upiId || (profile.method === 'upi' ? profile.fallbackUpi : '')
 
   const openPaymentLink = (app, upiId, amount, note) => {
     const pa = encodeURIComponent(upiId || '')
@@ -2172,35 +2665,98 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   }
 
   const openPayMethodModal = (context) => {
-    if (!context?.invoiceId || Number(context.amount || 0) <= 0) {
+    if ((!context?.invoiceId && !context?.invoiceIds?.length && context?.mode !== 'rider_cod') || Number(context.amount || 0) <= 0) {
       toast('No pending amount for payout', 'error')
       return
     }
-    setPayMethod('phonepe')
+    setPayMethod(context?.upiId ? 'phonepe' : 'bank')
     setPaymentReference('')
+    setPaymentLaunched(false)
+    setPaymentConfirmed(false)
     setPayContext(context)
   }
 
+  const openBatchPayoutModal = (entityType) => {
+    const rows = entityType === 'vendor' ? payableVendorRows : payableRiderRows
+    if (!rows.length) {
+      toast(`No pending ${entityType} payouts`, 'error')
+      return
+    }
+    const invoiceIds = rows.flatMap(row => row.invoiceIds?.length ? row.invoiceIds : [row.latestInvoiceId]).filter(Boolean)
+    const totalAmount = rows.reduce((sum, row) => sum + Number(row.pendingAmount || 0), 0)
+    openPayMethodModal({
+      mode: `batch_${entityType}`,
+      invoiceId: invoiceIds[0],
+      invoiceIds,
+      amount: totalAmount,
+      payeeName: `All pending ${entityType} payouts`,
+      upiId: '',
+      payment: null,
+      entityLabel: entityType === 'vendor' ? 'Vendor Batch' : 'Rider Batch',
+      note: `${entityType === 'vendor' ? 'Vendor' : 'Rider'} bulk settlement`,
+    })
+  }
+
+  const paymentUpiForMethod = (context, method) => {
+    if (!context) return ''
+    if (method === 'phonepe') return context.payment?.upiId || context.upiId || ''
+    if (method === 'gpay') return context.payment?.upiId || context.upiId || ''
+    return context.upiId || context.payment?.upiId || ''
+  }
+
+  const launchSelectedPayment = () => {
+    const targetUpi = paymentUpiForMethod(payContext, payMethod)
+    if (payMethod === 'bank') {
+      setPaymentLaunched(true)
+      return
+    }
+    if (!targetUpi) {
+      toast('UPI ID not available for this payout', 'error')
+      return
+    }
+    openPaymentLink(payMethod, targetUpi, payContext?.amount, payContext?.note)
+    setPaymentLaunched(true)
+  }
+
   const confirmPayout = async () => {
-    if (!payContext?.invoiceId && !payContext?.invoiceIds?.length) return
+    if (!payContext?.invoiceId && !payContext?.invoiceIds?.length && payContext?.mode !== 'rider_cod') return
     const reference = paymentReference.trim()
     if (!reference) {
       toast('Enter UTR / payment reference before marking paid', 'error')
       return
     }
-    const invoiceIds = payContext.invoiceIds?.length ? payContext.invoiceIds : [payContext.invoiceId]
-    openPaymentLink(payMethod, payContext.upiId, payContext.amount, payContext.note)
-    setPaying(payContext.invoiceId || invoiceIds[0])
+    if (payMethod !== 'bank' && !paymentLaunched) {
+      toast('Open the payment app first', 'error')
+      return
+    }
+    if (!paymentConfirmed) {
+      toast('Confirm that the payment is completed', 'error')
+      return
+    }
+    const invoiceIds = payContext.invoiceIds?.length ? payContext.invoiceIds : [payContext.invoiceId].filter(Boolean)
+    setPaying(payContext.invoiceId || invoiceIds[0] || payContext.riderId)
     try {
-      await Promise.all(invoiceIds.map(id => api.payInvoice(id, {
-        method: payMethod,
-        paymentReference: reference,
-        note: `${payContext.note || 'Settlement payout'} · ${payMethod.toUpperCase()} · Ref ${reference}`,
-      })))
-      toast('Payout recorded and locked', 'success')
+      if (payContext.mode === 'rider_cod') {
+        await api.recordRiderCodPayment(payContext.riderId, {
+          amount: Number(payContext.amount || 0),
+          method: payMethod,
+          paymentReference: reference,
+          note: `${payContext.note || 'Rider COD deposit'}  -  ${payMethod.toUpperCase()}  -  Ref ${reference}`,
+        })
+        toast('Rider COD payment recorded', 'success')
+      } else {
+        await Promise.all(invoiceIds.map(id => api.payInvoice(id, {
+          method: payMethod,
+          paymentReference: reference,
+          note: `${payContext.note || 'Settlement payout'}  -  ${payMethod.toUpperCase()}  -  Ref ${reference}`,
+        })))
+        toast('Payout recorded and locked', 'success')
+      }
       await load(filters)
       setPayContext(null)
       setPaymentReference('')
+      setPaymentLaunched(false)
+      setPaymentConfirmed(false)
     } catch (e) {
       toast('Payment update failed', 'error')
     } finally {
@@ -2208,10 +2764,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     }
   }
   const cards = [
-    { label: 'Vendor Due', value: `₹${vendorRows.reduce((s, v) => s + (v.pendingAmount || 0), 0).toLocaleString('en-IN')}`, tone: '#6c47ff' },
-    { label: 'Rider Due', value: `₹${riderRows.reduce((s, v) => s + (v.pendingAmount || 0), 0).toLocaleString('en-IN')}`, tone: '#0ea5e9' },
+    { label: 'Vendor Payout Due', value: money(vendorRows.reduce((s, v) => s + (v.pendingAmount || 0), 0)), note: 'Product value payable to vendors', tone: '#6c47ff' },
+    { label: 'Rider Payout Due', value: money(riderRows.reduce((s, v) => s + (v.pendingAmount || 0), 0)), note: 'Rider delivery earnings payable', tone: '#0ea5e9' },
+    { label: 'COD Cash To Company', value: money(codPendingTotal), note: codFormulaText, tone: '#dc2626' },
     { label: 'Payments Logged', value: history.length, tone: '#16a34a' },
-    { label: 'Invoices', value: (data?.vendorInvoices?.length || 0) + (data?.riderInvoices?.length || 0), tone: '#f59e0b' },
   ]
 
   return (
@@ -2229,14 +2785,14 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       >
         <div>
           <div className="page-title" style={{ color: '#fff' }}>Invoices & Settlements</div>
-          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>2-day payouts with direct vendor/rider payment actions</div>
+          <div className="page-sub" style={{ color: 'rgba(255,255,255,.86)' }}>Filtered payouts with direct vendor/rider payment actions</div>
         </div>
       </div>
 
       <SettlementFilters filters={filters} setFilters={setFilters} onApply={load} loading={loading} />
 
       {loading && !data ? (
-        <div className="empty" style={{ padding: '40px 0' }}><div>Loading settlements…</div></div>
+        <div className="empty" style={{ padding: '40px 0' }}><div>Loading settlements...</div></div>
       ) : (
         <>
           <div className="card" style={{ padding: 10, marginBottom: 12 }}>
@@ -2277,6 +2833,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               <div key={card.label} className="card">
                 <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700, marginBottom: 8 }}>{card.label}</div>
                 <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 24, color: card.tone }}>{card.value}</div>
+                {card.note && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.35 }}>{card.note}</div>}
               </div>
             ))}
           </div>
@@ -2286,7 +2843,16 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               {focusType === 'vendor' && (
                 <>
                   <div className="card">
-                    <div className="card-title" style={{ marginBottom: 14 }}>Vendor Settlements</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+                      <div className="card-title" style={{ marginBottom: 0 }}>Vendor Settlements</div>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={!payableVendorRows.length}
+                        onClick={() => openBatchPayoutModal('vendor')}
+                      >
+                        Pay All Pending Vendors
+                      </button>
+                    </div>
                     {vendorRows.length === 0 ? <div className="empty"><div>No vendors available</div></div> : (
                       <div className="sett-table">
                         <div className="sett-head">
@@ -2296,10 +2862,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           <div key={vendorRowKey(v)} className="sett-row">
                             <span><div style={{ fontWeight: 800 }}>{v.vendorName}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{v.shopName}</div></span>
                             <span>{v.totalOrders}</span>
-                            <span>₹{v.totalSales.toLocaleString('en-IN')}</span>
-                            <span>0% · ₹0</span>
-                            <span>₹{v.netPayable.toLocaleString('en-IN')}</span>
-                            <span style={{ color: v.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>₹{v.pendingAmount.toLocaleString('en-IN')}</span>
+                            <span>Rs {v.totalSales.toLocaleString('en-IN')}</span>
+                            <span>0%  -  Rs 0</span>
+                            <span>Rs {v.netPayable.toLocaleString('en-IN')}</span>
+                            <span style={{ color: v.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>Rs {v.pendingAmount.toLocaleString('en-IN')}</span>
                             <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                               <button className="btn btn-ghost btn-sm" onClick={() => openVendorDetails(v)}>
                                 Details
@@ -2308,17 +2874,17 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                                 className="btn btn-primary btn-sm"
                                 disabled={!v.latestInvoiceId || v.pendingAmount <= 0 || (v.latestInvoiceId && paying === v.latestInvoiceId)}
                                 onClick={() => {
-                                  const vUser = users.find(u => u.id === v.vendorId)
-                                  const vShop = shops.find(s => s.id === v.shopId || s.ownerId === v.vendorId)
-                                  const upiId = (vUser?.paymentMethod || '').toLowerCase() === 'upi'
-                                    ? (vUser?.upiId || '')
-                                    : toUpiFromPhone(vShop?.phone || vUser?.phone)
+                                  const vUser = users.find(u => sameId(u.id, v.vendorId))
+                                  const vShop = shops.find(s => sameId(s.id, v.shopId) || sameId(s.ownerId, v.vendorId))
+                                  const payment = paymentProfileFor(vUser, { phone: vShop?.phone })
                                   openPayMethodModal({
                                     invoiceId: v.latestInvoiceId,
                                     invoiceIds: v.invoiceIds || [v.latestInvoiceId],
                                     amount: Number(v.pendingAmount || 0),
                                     payeeName: v.vendorName,
-                                    upiId,
+                                    upiId: primaryUpiFor(payment),
+                                    payment,
+                                    entityLabel: 'Vendor',
                                     note: `${v.vendorName} settlement`,
                                   })
                                 }}
@@ -2336,18 +2902,23 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                     <div className="card" style={{ padding: 14 }} ref={detailPanelRef}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
                         <div>
-                          <div className="card-title" style={{ marginBottom: 4 }}>Vendor Settlement Details (2 Days)</div>
-                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedVendorInvoice.vendorName} · {selectedVendorInvoice.shopName}</div>
+                          <div className="card-title" style={{ marginBottom: 4 }}>Vendor Settlement Details</div>
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedVendorInvoice.vendorName}  -  {selectedVendorInvoice.shopName}</div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPayMethodModal({
-                            invoiceId: selectedVendorInvoice.latestInvoiceId,
-                            invoiceIds: selectedVendorInvoice.invoiceIds || [selectedVendorInvoice.latestInvoiceId],
-                            amount: Number(selectedVendorInvoice.pendingAmount || 0),
-                            payeeName: selectedVendorInvoice.vendorName,
-                            upiId: (selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? selectedVendorUser?.upiId : toUpiFromPhone(selectedVendorShop?.phone),
-                            note: `${selectedVendorInvoice.vendorName} settlement`,
-                          })}>Pay / Mark Paid</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => {
+                            const payment = paymentProfileFor(selectedVendorUser, { phone: selectedVendorShop?.phone })
+                            openPayMethodModal({
+                              invoiceId: selectedVendorInvoice.latestInvoiceId,
+                              invoiceIds: selectedVendorInvoice.invoiceIds || [selectedVendorInvoice.latestInvoiceId],
+                              amount: Number(selectedVendorInvoice.pendingAmount || 0),
+                              payeeName: selectedVendorInvoice.vendorName,
+                              upiId: primaryUpiFor(payment),
+                              payment,
+                              entityLabel: 'Vendor',
+                              note: `${selectedVendorInvoice.vendorName} settlement`,
+                            })
+                          }}>Pay / Mark Paid</button>
                         </div>
                       </div>
 
@@ -2372,7 +2943,9 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                       {vendorDetailTab === 'overview' && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Product Value</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Number(selectedVendorInvoice.productValue || selectedVendorGenerated2Days).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{selectedVendorInvoice.totalOrders || selectedVendorDelivered2Days.length} orders</div></div>
-                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Delivery Collected</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedVendorInvoice.deliveryCollected || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Delivery Collected</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedVendorInvoice.deliveryCollected || 0).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Customer charge, not vendor payout</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Platform Fee</div><div style={{ fontSize: 20, fontWeight: 900, color: '#334155' }}>Rs {Number(selectedVendorChargeBreakdown.platformFee || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>GST</div><div style={{ fontSize: 20, fontWeight: 900, color: '#334155' }}>Rs {Number(selectedVendorChargeBreakdown.gstAmount || 0).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Rider Earning</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f59e0b' }}>Rs {Number(selectedVendorInvoice.riderEarning || 0).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Vendor Payout</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Number(selectedVendorInvoice.netPayable || selectedVendorPayable2Days).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Only product value is paid to vendor</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedVendorInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
@@ -2387,7 +2960,11 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                               <div><strong>Name:</strong> {selectedVendorShop?.name || selectedVendorInvoice.shopName}</div>
                               <div><strong>Location:</strong> {selectedVendorShop?.address || selectedVendorShop?.city || 'Not available'}</div>
                               <div><strong>Contact:</strong> {selectedVendorShop?.phone || 'Not available'}</div>
-                              <div><strong>UPI:</strong> {(selectedVendorUser?.paymentMethod || '').toLowerCase() === 'upi' ? (selectedVendorUser?.upiId || 'Not added') : (toUpiFromPhone(selectedVendorShop?.phone) || 'Not added')}</div>
+                              <div><strong>UPI:</strong> {paymentProfileFor(selectedVendorUser, { phone: selectedVendorShop?.phone }).upiId || 'Not added'}</div>
+                              <div><strong>PhonePe:</strong> {paymentProfileFor(selectedVendorUser, { phone: selectedVendorShop?.phone }).phonepeNumber || 'Not added'}</div>
+                              <div><strong>GPay:</strong> {paymentProfileFor(selectedVendorUser, { phone: selectedVendorShop?.phone }).gpayNumber || 'Not added'}</div>
+                              <div><strong>Bank:</strong> {selectedVendorUser?.bankName || '-'} {selectedVendorUser?.bankAccount ? ` / ${selectedVendorUser.bankAccount}` : ''}</div>
+                              <div><strong>IFSC:</strong> {selectedVendorUser?.bankIfsc || '-'}</div>
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2402,10 +2979,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           {selectedVendorProductList.slice(0, showAllVendorProducts ? 20 : 6).map((p, idx) => (
                             <div key={`${p.name}-${p.size}-${idx}`} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', fontSize: 12 }}>
                               <div style={{ fontWeight: 800 }}>{p.name}{p.size ? ` (${p.size})` : ''}</div>
-                              <div style={{ color: 'var(--muted)', marginTop: 4 }}>Qty {p.qty} · Revenue Rs {Math.round(p.revenue).toLocaleString('en-IN')} · Orders {p.orders}</div>
+                              <div style={{ color: 'var(--muted)', marginTop: 4 }}>Qty {p.qty}  -  Revenue Rs {Math.round(p.revenue).toLocaleString('en-IN')}  -  Orders {p.orders}</div>
                             </div>
                           ))}
-                          {selectedVendorProductList.length === 0 && <div className="empty"><div>No product data for last 2-day delivered orders</div></div>}
+                          {selectedVendorProductList.length === 0 && <div className="empty"><div>No product data for delivered orders in this period</div></div>}
                           {selectedVendorProductList.length > 6 && (
                             <button className="btn btn-ghost btn-sm" onClick={() => setShowAllVendorProducts(prev => !prev)}>
                               {showAllVendorProducts ? 'Show Less' : `Show All (${selectedVendorProductList.length})`}
@@ -2423,10 +3000,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                             return (
                               <div key={oid} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · Product value Rs {Number(itemMerchandiseTotal(o) || 0).toLocaleString('en-IN')}</div>
+                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id}  -  Product value Rs {Number(itemMerchandiseTotal(o) || 0).toLocaleString('en-IN')}</div>
                                   <button className="btn btn-ghost btn-sm" onClick={() => setExpandedVendorOrderId(prev => prev === oid ? null : oid)}>{showProducts ? 'Hide Products' : 'Product Details'}</button>
                                 </div>
-                                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>{(o.customer?.name || o.customerName || 'Customer')} · {(o.deliveryAddress || o.address || 'No address')}</div>
+                                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>{(o.customer?.name || o.customerName || 'Customer')}  -  {(o.deliveryAddress || o.address || 'No address')}</div>
                                 {showProducts && (
                                   <div style={{ marginTop: 8, borderTop: '1px solid var(--border2)', paddingTop: 8, fontSize: 12 }}>
                                     {items.length === 0 ? 'No product details for this order.' : items.map((it, idx) => (
@@ -2440,7 +3017,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                               </div>
                             )
                           })}
-                          {selectedVendorDelivered2Days.length === 0 && <div className="empty"><div>No delivered orders in last 2 days</div></div>}
+                          {selectedVendorDelivered2Days.length === 0 && <div className="empty"><div>No delivered orders in this period</div></div>}
                         </div>
                       )}
                     </div>
@@ -2451,39 +3028,70 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               {focusType === 'rider' && (
                 <>
                   <div className="card">
-                    <div className="card-title" style={{ marginBottom: 14 }}>Rider Settlements</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+                      <div className="card-title" style={{ marginBottom: 0 }}>Rider Settlements</div>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={!payableRiderRows.length}
+                        onClick={() => openBatchPayoutModal('rider')}
+                      >
+                        Pay All Pending Riders
+                      </button>
+                    </div>
                     {riderRows.length === 0 ? <div className="empty"><div>No riders available</div></div> : (
                       <div className="sett-table">
-                        <div className="sett-head">
-                          <span className="th">Rider</span><span className="th">Deliveries</span><span className="th">Per Delivery</span><span className="th">Earnings</span><span className="th">Paid</span><span className="th">Pending</span><span className="th">Action</span>
+                        <div className="sett-head" style={{ gridTemplateColumns: '1.25fr .65fr .85fr .85fr .85fr .85fr .95fr 1.1fr' }}>
+                          <span className="th">Rider</span><span className="th">Deliveries</span><span className="th">Earnings</span><span className="th">Paid</span><span className="th">Payout Due</span><span className="th">COD Cash</span><span className="th">Net</span><span className="th">Action</span>
                         </div>
                         {riderRows.map(r => (
-                          <div key={r.riderId} className="sett-row">
+                          <div key={r.riderId} className="sett-row" style={{ gridTemplateColumns: '1.25fr .65fr .85fr .85fr .85fr .85fr .95fr 1.1fr' }}>
                             <span style={{ fontWeight: 800 }}>{r.riderName}</span>
                             <span>{r.totalDeliveries}</span>
-                            <span>₹{r.earningsPerDelivery.toLocaleString('en-IN')}</span>
-                            <span>₹{r.totalEarnings.toLocaleString('en-IN')}</span>
-                            <span>₹{r.paidAmount.toLocaleString('en-IN')}</span>
-                            <span style={{ color: r.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>₹{r.pendingAmount.toLocaleString('en-IN')}</span>
+                            <span>Rs {r.totalEarnings.toLocaleString('en-IN')}</span>
+                            <span>Rs {r.paidAmount.toLocaleString('en-IN')}</span>
+                            <span style={{ color: r.pendingAmount > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>Rs {r.pendingAmount.toLocaleString('en-IN')}</span>
+                            <span style={{ color: r.codPending > 0 ? '#dc2626' : '#16a34a', fontWeight: 800 }}>Rs {r.codPending.toLocaleString('en-IN')}</span>
+                            <span style={{ fontWeight: 800, color: r.netRiderOwes > 0 ? '#dc2626' : '#16a34a' }}>
+                              {r.netRiderOwes > 0 ? `Owes Rs ${r.netRiderOwes.toLocaleString('en-IN')}` : `Pay Rs ${Number(r.netAdminPayable || r.pendingAmount || 0).toLocaleString('en-IN')}`}
+                            </span>
                             <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                               <button className="btn btn-ghost btn-sm" onClick={() => openRiderDetails(r.riderId)}>Details</button>
                               <button
                                 className="btn btn-primary btn-sm"
                                 disabled={!r.latestInvoiceId || r.pendingAmount <= 0 || (r.latestInvoiceId && paying === r.latestInvoiceId)}
                                 onClick={() => {
-                                  const riderUser = users.find(u => u.id === r.riderId || u.name === r.riderName)
-                                  const upiId = riderUser?.upiId || toUpiFromPhone(riderUser?.phone)
+                                  const riderUser = users.find(u => sameId(u.id, r.riderId) || u.name === r.riderName)
+                                  const payment = paymentProfileFor(riderUser)
                                   openPayMethodModal({
                                     invoiceId: r.latestInvoiceId,
                                     invoiceIds: r.invoiceIds || [r.latestInvoiceId],
                                     amount: Number(r.pendingAmount || 0),
                                     payeeName: r.riderName,
-                                    upiId,
+                                    upiId: primaryUpiFor(payment),
+                                    payment,
+                                    entityLabel: 'Rider',
                                     note: `${r.riderName} payout`,
                                   })
                                 }}
                               >
                                 {(r.latestInvoiceId && paying === r.latestInvoiceId) ? 'Paying...' : r.pendingAmount > 0 ? 'Mark Paid' : 'Paid'}
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                disabled={r.codPending <= 0 || paying === r.riderId}
+                                onClick={() => {
+                                  const company = r.codSummary?.companyAccount || {}
+                                  openPayMethodModal({
+                                    mode: 'rider_cod',
+                                    riderId: r.riderId,
+                                    amount: Number(r.codPending || 0),
+                                    payeeName: `${r.riderName} COD deposit`,
+                                    upiId: company.upiId || '',
+                                    note: `${r.riderName} COD deposit to company`,
+                                  })
+                                }}
+                              >
+                                COD Paid
                               </button>
                             </span>
                           </div>
@@ -2496,7 +3104,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                     <div className="card" ref={detailPanelRef}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
                         <div>
-                          <div className="card-title" style={{ marginBottom: 4 }}>Rider Payment Details (2 Days)</div>
+                          <div className="card-title" style={{ marginBottom: 4 }}>Rider Payment Details</div>
                           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedRiderInvoice.riderName}</div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2505,9 +3113,19 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                             invoiceIds: selectedRiderInvoice.invoiceIds || [selectedRiderInvoice.latestInvoiceId],
                             amount: Number(selectedRiderInvoice.pendingAmount || 0),
                             payeeName: selectedRiderInvoice.riderName,
-                            upiId: selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone),
+                            upiId: primaryUpiFor(paymentProfileFor(selectedRiderUser)),
+                            payment: paymentProfileFor(selectedRiderUser),
+                            entityLabel: 'Rider',
                             note: `${selectedRiderInvoice.riderName} payout`,
                           })}>Pay / Mark Paid</button>
+                          <button className="btn btn-ghost btn-sm" disabled={Number(selectedRiderInvoice.codPending || 0) <= 0} onClick={() => openPayMethodModal({
+                            mode: 'rider_cod',
+                            riderId: selectedRiderInvoice.riderId,
+                            amount: Number(selectedRiderInvoice.codPending || 0),
+                            payeeName: `${selectedRiderInvoice.riderName} COD deposit`,
+                            upiId: selectedRiderCompanyAccount.upiId || '',
+                            note: `${selectedRiderInvoice.riderName} COD deposit to company`,
+                          })}>Record COD Paid</button>
                         </div>
                       </div>
 
@@ -2516,6 +3134,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           ['overview', 'Overview'],
                           ['profile', 'Rider Details'],
                           ['trips', 'Trips'],
+                          ['cod', 'COD'],
                           ['payments', 'Payments'],
                         ].map(([id, label]) => (
                           <button
@@ -2531,11 +3150,13 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
 
                       {riderDetailTab === 'overview' && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
-                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>2-day Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedRiderDelivered2Days.length}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Period Deliveries</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>{selectedRiderDelivered2Days.length}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Generated</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Math.round(selectedRiderGenerated2Days).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Delivery Collected</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedRiderInvoice.deliveryCollected || 0).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pay Rider</div><div style={{ fontSize: 20, fontWeight: 900, color: '#6c47ff' }}>Rs {Math.round(selectedRiderPayable2Days).toLocaleString('en-IN')}</div></div>
                           <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending</div><div style={{ fontSize: 20, fontWeight: 900, color: '#f97316' }}>Rs {Number(selectedRiderInvoice.pendingAmount || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>COD Cash To Company</div><div style={{ fontSize: 20, fontWeight: 900, color: Number(selectedRiderInvoice.codPending || 0) > 0 ? '#dc2626' : '#16a34a' }}>Rs {Number(selectedRiderInvoice.codPending || 0).toLocaleString('en-IN')}</div><div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Collected Rs {Number(selectedRiderInvoice.codCollected || 0).toLocaleString('en-IN')} / paid Rs {Number(selectedRiderInvoice.codSettled || 0).toLocaleString('en-IN')}</div></div>
+                          <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Final Balance</div><div style={{ fontSize: 20, fontWeight: 900, color: Number(selectedRiderInvoice.netRiderOwes || 0) > 0 ? '#dc2626' : '#16a34a' }}>{Number(selectedRiderInvoice.netRiderOwes || 0) > 0 ? `Rider owes Rs ${Number(selectedRiderInvoice.netRiderOwes || 0).toLocaleString('en-IN')}` : `Pay rider Rs ${Number(selectedRiderInvoice.netAdminPayable || selectedRiderInvoice.pendingAmount || 0).toLocaleString('en-IN')}`}</div></div>
                         </div>
                       )}
 
@@ -2545,6 +3166,8 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           <div><strong>Email:</strong> {selectedRiderUser?.email || 'Not available'}</div>
                           <div><strong>Phone:</strong> {selectedRiderUser?.phone || 'Not available'}</div>
                           <div><strong>UPI:</strong> {selectedRiderUser?.upiId || toUpiFromPhone(selectedRiderUser?.phone) || 'Not available'}</div>
+                          <div><strong>PhonePe:</strong> {selectedRiderUser?.phonepeNumber || 'Not added'}</div>
+                          <div><strong>GPay:</strong> {selectedRiderUser?.gpayNumber || 'Not added'}</div>
                           <div style={{ marginTop: 8 }}>
                             <button className="btn btn-ghost btn-sm" onClick={() => onOpenOrders?.()}>View Orders</button>
                           </div>
@@ -2559,10 +3182,10 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                             return (
                               <div key={oid} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id} · {(o.shop?.name || o.shopName || 'Shop')}</div>
+                                  <div style={{ fontSize: 12, fontWeight: 800 }}>#{o.orderCode || o.id}  -  {(o.shop?.name || o.shopName || 'Shop')}</div>
                                   <button className="btn btn-ghost btn-sm" onClick={() => setExpandedRiderOrderId(prev => prev === oid ? null : oid)}>{open ? 'Hide' : 'Details'}</button>
                                 </div>
-                                {open && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{(o.customer?.name || o.customerName || 'Customer')} · Rs {Number(o.deliveryFee || 0).toLocaleString('en-IN')} delivery fee</div>}
+                                {open && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{(o.customer?.name || o.customerName || 'Customer')}  -  Rs {Number(o.deliveryFee || 0).toLocaleString('en-IN')} delivery fee</div>}
                               </div>
                             )
                           })}
@@ -2571,22 +3194,76 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                               {showAllRiderOrders ? 'Show Less' : `Show All (${selectedRiderDelivered2Days.length})`}
                             </button>
                           )}
-                          {selectedRiderDelivered2Days.length === 0 && <div className="empty"><div>No rider deliveries in last 2 days</div></div>}
+                          {selectedRiderDelivered2Days.length === 0 && <div className="empty"><div>No rider deliveries in this period</div></div>}
+                        </div>
+                      )}
+
+                      {riderDetailTab === 'cod' && (
+                        <div style={{ display: 'grid', gap: 10 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 }}>
+                            <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>COD Orders</div><div style={{ fontSize: 20, fontWeight: 900 }}>{Number(selectedRiderInvoice.codOrders || 0)}</div></div>
+                            <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Collected By Rider</div><div style={{ fontSize: 20, fontWeight: 900, color: '#0ea5e9' }}>Rs {Number(selectedRiderInvoice.codCollected || 0).toLocaleString('en-IN')}</div></div>
+                            <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Paid To Company</div><div style={{ fontSize: 20, fontWeight: 900, color: '#16a34a' }}>Rs {Number(selectedRiderInvoice.codSettled || 0).toLocaleString('en-IN')}</div></div>
+                            <div style={{ padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}><div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase' }}>Still Due</div><div style={{ fontSize: 20, fontWeight: 900, color: Number(selectedRiderInvoice.codPending || 0) > 0 ? '#dc2626' : '#16a34a' }}>Rs {Number(selectedRiderInvoice.codPending || 0).toLocaleString('en-IN')}</div></div>
+                          </div>
+                          <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff' }}>
+                            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>COD cash breakdown</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 8, fontSize: 12 }}>
+                              <div><span style={{ color: 'var(--muted)' }}>Products</span><br /><strong>{money(selectedRiderInvoice.codProductValue || selectedRiderInvoice.codSummary?.breakdown?.productValue)}</strong></div>
+                              <div><span style={{ color: 'var(--muted)' }}>Delivery</span><br /><strong>{money(selectedRiderInvoice.codDeliveryFee || selectedRiderInvoice.codSummary?.breakdown?.deliveryFee)}</strong></div>
+                              <div><span style={{ color: 'var(--muted)' }}>Platform fee</span><br /><strong>{money(selectedRiderInvoice.codPlatformFee || selectedRiderInvoice.codSummary?.breakdown?.platformFee)}</strong></div>
+                              <div><span style={{ color: 'var(--muted)' }}>GST</span><br /><strong>{money(selectedRiderInvoice.codGstAmount || selectedRiderInvoice.codSummary?.breakdown?.gstAmount)}</strong></div>
+                              <div><span style={{ color: 'var(--muted)' }}>Other</span><br /><strong>{money(selectedRiderInvoice.codOtherAdjustments || selectedRiderInvoice.codSummary?.breakdown?.otherAdjustments)}</strong></div>
+                            </div>
+                          </div>
+                          <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border2)', background: '#fff', fontSize: 13, lineHeight: 1.6 }}>
+                            <div><strong>Company UPI:</strong> {selectedRiderCompanyAccount.upiId || 'Not configured'}</div>
+                            <div><strong>PhonePe Number:</strong> {selectedRiderCompanyAccount.phonepeNumber || 'Not configured'}</div>
+                            <div><strong>GPay Number:</strong> {selectedRiderCompanyAccount.gpayNumber || 'Not configured'}</div>
+                            <div><strong>Bank:</strong> {selectedRiderCompanyAccount.bankName || '-'} {selectedRiderCompanyAccount.bankAccount ? ` / ${selectedRiderCompanyAccount.bankAccount}` : ''}</div>
+                            <div><strong>IFSC:</strong> {selectedRiderCompanyAccount.bankIfsc || '-'}</div>
+                          </div>
+                          <div>
+                            <button className="btn btn-primary btn-sm" disabled={Number(selectedRiderInvoice.codPending || 0) <= 0 || !selectedRiderCompanyAccount.upiId} onClick={() => openPayMethodModal({
+                              mode: 'rider_cod',
+                              riderId: selectedRiderInvoice.riderId,
+                              amount: Number(selectedRiderInvoice.codPending || 0),
+                              payeeName: `${selectedRiderInvoice.riderName} COD deposit`,
+                              upiId: selectedRiderCompanyAccount.upiId || '',
+                              note: `${selectedRiderInvoice.riderName} COD deposit to company`,
+                            })}>Open PhonePe / Record UTR</button>
+                          </div>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            <div style={{ fontWeight: 800, fontSize: 13 }}>Recent COD Orders</div>
+                            {selectedRiderCodOrders.map(o => (
+                              <div key={o.orderId || o.orderCode} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', display: 'grid', gap: 4, fontSize: 12 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                                  <span><strong>#{o.orderCode || o.orderId}</strong> - {o.customerName || 'Customer'}</span>
+                                  <span style={{ fontWeight: 900 }}>Rs {Number(o.amount || 0).toLocaleString('en-IN')}</span>
+                                </div>
+                                <div style={{ color: 'var(--muted)' }}>
+                                  Products {money(o.productValue)} + Delivery {money(o.deliveryFee)} + Platform {money(o.platformFee)} + GST {money(o.gstAmount)}
+                                  {Math.abs(Number(o.otherAdjustments || 0)) >= 0.01 ? ` + Other ${money(o.otherAdjustments)}` : ''}
+                                </div>
+                              </div>
+                            ))}
+                            {selectedRiderCodOrders.length === 0 && <div className="empty"><div>No COD orders collected by this rider</div></div>}
+                          </div>
                         </div>
                       )}
 
                       {riderDetailTab === 'payments' && (
                         <div style={{ display: 'grid', gap: 8 }}>
-                          {history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName).map(h => (
-                            <div key={h.id} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                          {[...history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName), ...selectedRiderCodPayments.map(p => ({ ...p, entityType: 'rider_cod', userName: selectedRiderInvoice.riderName, paymentMethod: p.method }))].map(h => (
+                            <div key={`${h.entityType}-${h.id}`} style={{ border: '1px solid var(--border2)', borderRadius: 10, padding: 10, background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                               <div style={{ fontSize: 12 }}>
-                                <div style={{ fontWeight: 800 }}>Rs {Number(h.amount || 0).toLocaleString('en-IN')}</div>
+                                <div style={{ fontWeight: 800 }}>Rs {Number(h.amount || 0).toLocaleString('en-IN')} {h.entityType === 'rider_cod' ? 'COD deposit' : 'payout'}</div>
                                 <div style={{ color: 'var(--muted)' }}>{new Date(h.paymentDate).toLocaleString()}</div>
                               </div>
                               <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPayment(h)}>Details</button>
                             </div>
                           ))}
-                          {history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName).length === 0 && <div className="empty"><div>No payment history for this rider yet</div></div>}
+                          {history.filter(h => h.entityType === 'rider' && (h.userName || '') === selectedRiderInvoice.riderName).length === 0 && selectedRiderCodPayments.length === 0 && <div className="empty"><div>No payment history for this rider yet</div></div>}
                         </div>
                       )}
                     </div>
@@ -2599,18 +3276,21 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
             <div className="stack-grid">
               {focusType === 'payments' && (
               <div className="card">
-                <div className="card-title" style={{ marginBottom: 14 }}>Payment History</div>
-                {history.length === 0 ? <div className="empty"><div>No payments recorded yet</div></div> : history.slice(0, 12).map(item => (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+                  <div className="card-title" style={{ marginBottom: 0 }}>Payment History</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700 }}>{paymentHistory.length} records in this range</div>
+                </div>
+                {paymentHistory.length === 0 ? <div className="empty"><div>No payments recorded yet</div></div> : paymentHistory.map(item => (
                   <div key={item.id} style={{ display: 'grid', gap: 4, padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                       <div style={{ fontWeight: 800 }}>{item.userName || item.entityType}</div>
                       <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-                        <div style={{ fontWeight: 900, color: '#16a34a' }}>₹{item.amount.toLocaleString('en-IN')}</div>
+                        <div style={{ fontWeight: 900, color: '#16a34a' }}>Rs {item.amount.toLocaleString('en-IN')}</div>
                         <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPayment(item)}>Details</button>
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.entityType === 'vendor' ? (item.shopName || 'Vendor payout') : 'Rider payout'}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(item.paymentDate).toLocaleString()}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.entityType === 'vendor' ? (item.shopName || 'Vendor payout') : item.entityType === 'rider_cod' ? 'Rider COD deposit to company' : 'Rider payout'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{new Date(item.paymentDate).toLocaleString()}  -  {item.paymentMethod || 'UPI'}  -  Ref {item.paymentReference || '-'}</div>
                   </div>
                 ))}
               </div>
@@ -2619,17 +3299,21 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               {focusType === 'invoices' && (
               <div className="card">
                 <div className="card-title" style={{ marginBottom: 14 }}>Open Invoices</div>
-                {[...(data?.vendorInvoices || []), ...(data?.riderInvoices || [])].filter(i => i.pendingAmount > 0).slice(0, 12).map(invoice => (
+                {openInvoices.slice(0, 12).map(invoice => (
                   <div key={`${invoice.entityType}-${invoice.id}`} style={{ padding: '12px 0', borderBottom: '1px solid var(--border2)', display: 'grid', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                       <span style={{ fontWeight: 800, textTransform: 'capitalize' }}>{invoice.entityType} invoice</span>
                       <span className={`badge ${invoice.status === 'PAID' ? 'badge-success' : invoice.status === 'PARTIAL' ? 'badge-warning' : 'badge-danger'}`}>{invoice.status}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{invoice.totalOrders} orders · {invoice.periodStart?.slice(0, 10)} to {invoice.periodEnd?.slice(0, 10)}</div>
-                    <div style={{ fontSize: 13, fontWeight: 800 }}>Pending ₹{invoice.pendingAmount.toLocaleString('en-IN')}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{invoice.totalOrders} orders  -  {invoice.periodStart?.slice(0, 10)} to {invoice.periodEnd?.slice(0, 10)}</div>
+                    <div style={{ fontSize: 13, fontWeight: 800 }}>Pending Rs {invoice.pendingAmount.toLocaleString('en-IN')}</div>
                   </div>
                 ))}
-                {(!data?.vendorInvoices?.length && !data?.riderInvoices?.length) && <div className="empty"><div>No invoices yet</div></div>}
+                {openInvoices.length === 0 && (
+                  <div className="empty">
+                    <div>{((data?.vendorInvoices || []).length || (data?.riderInvoices || []).length) ? 'All invoices are settled for this period' : 'No invoices yet'}</div>
+                  </div>
+                )}
               </div>
               )}
             </div>
@@ -2643,9 +3327,9 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div>
-                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20 }}>Choose payment app</div>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 900, fontSize: 20 }}>{payContext.mode === 'rider_cod' ? 'Record rider COD payment' : 'Choose payment app'}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 2 }}>
-                  {payContext.payeeName} · Rs {Number(payContext.amount || 0).toLocaleString('en-IN')}
+                  {payContext.payeeName}  -  Rs {Number(payContext.amount || 0).toLocaleString('en-IN')}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => setPayContext(null)}><I.Close /></button>
@@ -2653,6 +3337,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
               <button
                 className={payMethod === 'phonepe' ? 'btn btn-primary' : 'btn btn-ghost'}
+                disabled={!paymentUpiForMethod(payContext, 'phonepe')}
                 onClick={() => setPayMethod('phonepe')}
                 style={{ justifyContent: 'center' }}
               >
@@ -2660,28 +3345,70 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
               </button>
               <button
                 className={payMethod === 'gpay' ? 'btn btn-primary' : 'btn btn-ghost'}
+                disabled={!paymentUpiForMethod(payContext, 'gpay')}
                 onClick={() => setPayMethod('gpay')}
                 style={{ justifyContent: 'center' }}
               >
                 GPay
               </button>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-              UPI: {payContext.upiId || 'Not configured'}
+            <button
+              className={payMethod === 'bank' ? 'btn btn-primary' : 'btn btn-ghost'}
+              onClick={() => setPayMethod('bank')}
+              style={{ width: '100%', justifyContent: 'center', marginBottom: 12 }}
+            >
+              Bank Transfer / Manual UTR
+            </button>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12, display: 'grid', gap: 4 }}>
+              <div style={{ fontWeight: 800, color: 'var(--text)' }}>Amount to pay: Rs {Number(payContext.amount || 0).toLocaleString('en-IN')}</div>
+              <div>{payContext.mode === 'rider_cod' ? 'Company UPI' : `${payContext.entityLabel || 'Payee'} UPI`}: {paymentUpiForMethod(payContext, payMethod) || 'Not configured'}</div>
+              {payContext.payment && (
+                <>
+                  <div>PhonePe Number: {payContext.payment.phonepeNumber || '-'}</div>
+                  <div>GPay Number: {payContext.payment.gpayNumber || '-'}</div>
+                  <div>Bank: {payContext.payment.bankName || '-'} {payContext.payment.bankAccount ? ` / ${payContext.payment.bankAccount}` : ''}</div>
+                  <div>IFSC: {payContext.payment.bankIfsc || '-'}</div>
+                </>
+              )}
+            </div>
+            {payMethod !== 'bank' && !paymentUpiForMethod(payContext, payMethod) && <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 12, fontWeight: 700 }}>No UPI is saved for this account. Use Bank Transfer / Manual UTR, or ask the vendor/rider to add UPI in their payment details.</div>}
+            <div style={{ marginBottom: 12, padding: 12, borderRadius: 12, background: '#f8fbff', border: '1px solid var(--border)', display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase' }}>Safer payment flow</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+                Step 1: open the payment app and complete the transfer. Step 2: only after successful payment, enter the UTR and confirm below. The system will not mark it paid before that.
+              </div>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={payMethod !== 'bank' && !paymentUpiForMethod(payContext, payMethod)}
+                onClick={launchSelectedPayment}
+                style={{ justifyContent: 'center' }}
+              >
+                {payMethod === 'bank' ? 'I paid by bank transfer' : `Open ${payMethod === 'phonepe' ? 'PhonePe' : 'GPay'} Now`}
+              </button>
+              <div style={{ fontSize: 12, fontWeight: 700, color: paymentLaunched ? '#16a34a' : 'var(--muted)' }}>
+                {paymentLaunched ? 'Payment step opened. Now enter the UTR after transfer.' : 'Payment not marked yet.'}
+              </div>
             </div>
             <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase' }}>UTR / payment reference</span>
               <input
                 value={paymentReference}
                 onChange={e => setPaymentReference(e.target.value)}
-                placeholder="Enter UTR after payment"
+                placeholder={payMethod === 'bank' ? 'Enter bank UTR / transaction ID' : 'Enter UTR after PhonePe/GPay payment'}
                 style={{ padding: '11px 12px', border: '1.5px solid var(--border)', borderRadius: 10, fontWeight: 700, outline: 'none' }}
               />
             </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12, padding: 12, borderRadius: 12, border: '1px solid var(--border)', background: '#fff' }}>
+              <input type="checkbox" checked={paymentConfirmed} onChange={e => setPaymentConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
+              <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
+                I confirm that the payment is completed successfully, and this UTR belongs to this transfer.
+              </span>
+            </label>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button className="btn btn-ghost" onClick={() => setPayContext(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmPayout} disabled={!payContext.upiId || Boolean(paying) || !paymentReference.trim()}>
-                {paying ? 'Recording...' : `Pay via ${payMethod === 'phonepe' ? 'PhonePe' : 'GPay'} & Lock`}
+              <button className="btn btn-primary" onClick={confirmPayout} disabled={(payMethod !== 'bank' && !paymentUpiForMethod(payContext, payMethod)) || Boolean(paying) || !paymentReference.trim() || !paymentConfirmed || (payMethod !== 'bank' && !paymentLaunched)}>
+                {paying ? 'Recording...' : 'Mark Paid After Payment'}
               </button>
             </div>
           </div>
@@ -2700,17 +3427,19 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
             </div>
             <div className="info-grid">
               <div><strong>Payment ID:</strong> {selectedPayment.id}</div>
-              <div><strong>Type:</strong> {selectedPayment.entityType?.toUpperCase() || '—'}</div>
-              <div><strong>Name:</strong> {selectedPayment.userName || '—'}</div>
-              <div><strong>Amount:</strong> ₹{Number(selectedPayment.amount || 0).toLocaleString('en-IN')}</div>
-              <div><strong>Date:</strong> {selectedPayment.paymentDate ? new Date(selectedPayment.paymentDate).toLocaleString() : '—'}</div>
-              <div><strong>Shop:</strong> {selectedPayment.shopName || '—'}</div>
+              <div><strong>Type:</strong> {selectedPayment.entityType?.toUpperCase() || '-'}</div>
+              <div><strong>Name:</strong> {selectedPayment.userName || '-'}</div>
+              <div><strong>Amount:</strong> Rs {Number(selectedPayment.amount || 0).toLocaleString('en-IN')}</div>
+              <div><strong>Date:</strong> {selectedPayment.paymentDate ? new Date(selectedPayment.paymentDate).toLocaleString() : '-'}</div>
+              <div><strong>Shop:</strong> {selectedPayment.shopName || '-'}</div>
               <div><strong>Method:</strong> {selectedPayment.paymentMethod || 'UPI'}</div>
-              <div><strong>UTR / Ref:</strong> {selectedPayment.paymentReference || '—'}</div>
-              <div><strong>Invoice:</strong> {selectedPayment.invoiceId || '—'}</div>
+              <div><strong>UTR / Ref:</strong> {selectedPayment.paymentReference || '-'}</div>
+              <div><strong>Invoice:</strong> {selectedPayment.invoiceId || '-'}</div>
+              <div><strong>Status:</strong> {selectedPayment.paymentStatus || 'PAID'}</div>
+              <div><strong>Period:</strong> {selectedPayment.periodStart?.slice(0, 10) || '-'} to {selectedPayment.periodEnd?.slice(0, 10) || '-'}</div>
             </div>
             <div style={{ marginTop: 12, padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: '#f8fbff', fontSize: 12, color: 'var(--muted)' }}>
-              This payment is recorded in settlement history and can be used for admin reconciliation.
+              {selectedPayment.notes || 'This payment is recorded in settlement history and can be used for admin reconciliation.'}
             </div>
           </div>
         </div>
@@ -2719,14 +3448,24 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   )
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ----------------------------------------
    COMMISSION / SETTINGS PAGE
-════════════════════════════════════════════════════════════ */
-function CommissionPage() {
+---------------------------------------- */
+function CommissionPage({ user, onUserUpdate }) {
   const [data, setData] = useState(null)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [paymentSaving, setPaymentSaving] = useState(false)
+  const [paymentForm, setPaymentForm] = useState({
+    paymentMethod: 'upi',
+    upiId: '',
+    phonepeNumber: '',
+    gpayNumber: '',
+    bankAccount: '',
+    bankIfsc: '',
+    bankName: '',
+  })
 
   useEffect(() => {
     api.getCommission().then(r => {
@@ -2734,6 +3473,18 @@ function CommissionPage() {
       setForm(r.data)
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    setPaymentForm({
+      paymentMethod: (user?.paymentMethod || 'upi').toLowerCase(),
+      upiId: user?.upiId || '',
+      phonepeNumber: user?.phonepeNumber || '',
+      gpayNumber: user?.gpayNumber || '',
+      bankAccount: user?.bankAccount || '',
+      bankIfsc: user?.bankIfsc || '',
+      bankName: user?.bankName || '',
+    })
+  }, [user])
 
   const save = async () => {
     setSaving(true)
@@ -2745,12 +3496,34 @@ function CommissionPage() {
         vendor_commission_pct: parseFloat(form.vendor_commission_pct),
       })
       setData(r.data)
-      toast('Settings saved ✓', 'success')
+      toast('Settings saved OK', 'success')
     } catch(e) { toast('Save failed', 'error') }
     setSaving(false)
   }
 
   const sf = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
+  const spf = k => e => setPaymentForm(f => ({ ...f, [k]: e.target.value }))
+
+  const savePaymentDetails = async () => {
+    setPaymentSaving(true)
+    try {
+      const payload = {
+        paymentMethod: paymentForm.paymentMethod,
+        upiId: paymentForm.upiId.trim(),
+        phonepeNumber: paymentForm.phonepeNumber.trim(),
+        gpayNumber: paymentForm.gpayNumber.trim(),
+        bankAccount: paymentForm.bankAccount.trim(),
+        bankIfsc: paymentForm.bankIfsc.trim(),
+        bankName: paymentForm.bankName.trim(),
+      }
+      const r = await api.updatePaymentDetails(payload)
+      onUserUpdate?.(r.data)
+      toast('Company payment details saved', 'success')
+    } catch (e) {
+      toast('Failed to save company payment details', 'error')
+    }
+    setPaymentSaving(false)
+  }
 
   return (
     <div className="page">
@@ -2767,9 +3540,9 @@ function CommissionPage() {
         {data && (
           <div className="responsive-grid-3" style={{ marginBottom: 20 }}>
             {[
-              {key:'platform_fee_flat', label:'Platform Fee (₹ per order)', unit:'₹', desc:'Flat fee charged on every customer order'},
+              {key:'platform_fee_flat', label:'Platform Fee (Rs  per order)', unit:'Rs ', desc:'Flat fee charged on every customer order'},
               {key:'reseller_pct',      label:'Reseller Commission (%)',     unit:'%', desc:'Commission paid to resellers per sale'},
-              {key:'rider_base',        label:'Rider Base Pay (₹)',          unit:'₹', desc:'Minimum pay per delivery regardless of distance'},
+              {key:'rider_base',        label:'Rider Base Pay (Rs )',          unit:'Rs ', desc:'Minimum pay per delivery regardless of distance'},
               {key:'vendor_commission_pct', label:'Vendor Commission (%)', unit:'%', desc:'Commission deducted from vendor sales in each settlement cycle'},
             ].map(({key, label, unit, desc}) => (
               <div key={key} style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
@@ -2785,7 +3558,59 @@ function CommissionPage() {
           </div>
         )}
         <button className="btn btn-primary" onClick={save} disabled={saving || !data}>
-          {saving ? 'Saving…' : '✓ Save Settings'}
+          {saving ? 'Saving...' : 'OK Save Settings'}
+        </button>
+      </div>
+
+      <div className="card" style={{ padding: 24, marginBottom: 20 }}>
+        <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Company Payment Details</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18 }}>These details are shown in rider COD settlement and used as the company payout account for reconciliation.</div>
+        <div className="responsive-grid-2" style={{ marginBottom: 16 }}>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Payout Method</label>
+            <select value={paymentForm.paymentMethod} onChange={spf('paymentMethod')}
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }}>
+              <option value="upi">UPI</option>
+              <option value="phonepe">PhonePe</option>
+              <option value="gpay">GPay</option>
+              <option value="bank">Bank</option>
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>Choose the default admin/company account type.</div>
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>UPI ID</label>
+            <input value={paymentForm.upiId} onChange={spf('upiId')} placeholder="company@upi"
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>Used for PhonePe / GPay / UPI settlement links.</div>
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>PhonePe Number</label>
+            <input value={paymentForm.phonepeNumber} onChange={spf('phonepeNumber')} placeholder="PhonePe number"
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>GPay Number</label>
+            <input value={paymentForm.gpayNumber} onChange={spf('gpayNumber')} placeholder="GPay number"
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Bank Account Number</label>
+            <input value={paymentForm.bankAccount} onChange={spf('bankAccount')} placeholder="Enter account number"
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px' }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Bank IFSC</label>
+            <input value={paymentForm.bankIfsc} onChange={spf('bankIfsc')} placeholder="SBIN0001234"
+              style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+          </div>
+        </div>
+        <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '16px', marginBottom: 16 }}>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Bank Name</label>
+          <input value={paymentForm.bankName} onChange={spf('bankName')} placeholder="State Bank of India"
+            style={{ width: '100%', padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 15, fontWeight: 700, fontFamily: 'var(--font)', outline: 'none', background: '#fff' }} />
+        </div>
+        <button className="btn btn-primary" onClick={savePaymentDetails} disabled={paymentSaving}>
+          {paymentSaving ? 'Saving...' : 'Save Company Payment Details'}
         </button>
       </div>
 
@@ -2799,7 +3624,7 @@ function CommissionPage() {
             { label: 'Export Users CSV', desc: 'All registered customers, vendors and riders', action: api.exportUsers, color: '#dcfce7', textColor: '#15803d' },
           ].map(({ label, desc, action, color, textColor }) => (
             <div key={label} style={{ background: color, borderRadius: 12, padding: '16px 18px', cursor: 'pointer', border: `1px solid ${textColor}20`, transition: '.2s' }}
-              onClick={() => { action(); toast('Download starting…', 'success') }}
+              onClick={() => { action(); toast('Download starting...', 'success') }}
               onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
               onMouseLeave={e => e.currentTarget.style.transform = ''}>
               <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 14, color: textColor, marginBottom: 4 }}>📥 {label}</div>
@@ -2882,6 +3707,7 @@ export default function App() {
     { id: 'revenue',    label: 'Revenue',    Icon: I.Revenue },
     { id: 'returns',    label: 'Returns',    Icon: I.Returns },
     { id: 'promo',      label: 'Promo Codes',Icon: I.Analytics },
+    { id: 'notifications', label: 'Notifications', Icon: I.Bell },
     { id: 'commission', label: 'Settings',   Icon: I.Settings },
   ]
 
@@ -2951,7 +3777,8 @@ export default function App() {
           {page === 'revenue'    && <RevenuePage />}
           {page === 'returns'    && <ReturnsPage />}
           {page === 'promo'      && <PromoPage />}
-          {page === 'commission' && <CommissionPage />}
+          {page === 'notifications' && <NotificationsPage />}
+        {page === 'commission' && <CommissionPage user={user} onUserUpdate={setUser} />}
         </main>
       </div>
 

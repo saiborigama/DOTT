@@ -30,33 +30,24 @@ class Settings(BaseSettings):
         "http://localhost:5173",
     ]
     cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_image_model: str = "gpt-5"
-    image_cleanup_provider: str = "auto"
-    remove_bg_api_key: str = ""
+    gemini_api_key: str = ""
+    google_api_key: str = ""
+    google_generative_ai_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_image_model: str = "gemini-2.5-flash-image"
     firebase_service_account_json: str = ""
-    otp_sms_provider: str = "mock"
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from_number: str = ""
-    twilio_messaging_service_sid: str = ""
-    twilio_default_country_code: str = "+91"
+    otp_email_host: str = ""
+    otp_email_port: int = 587
+    otp_email_user: str = ""
+    otp_email_password: str = ""
+    otp_email_from: str = ""
+    otp_email_from_name: str = "DDOTT Updates"
+    otp_email_use_tls: bool = True
 
     @field_validator("public_base_url")
     @classmethod
     def normalize_public_base_url(cls, value: str) -> str:
         return value.rstrip("/")
-
-    @field_validator("openai_base_url")
-    @classmethod
-    def normalize_openai_base_url(cls, value: str) -> str:
-        return value.rstrip("/")
-
-    @field_validator("otp_sms_provider")
-    @classmethod
-    def normalize_otp_provider(cls, value: str) -> str:
-        return (value or "mock").strip().lower()
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -1,0 +1,15 @@
+version:
+  revision: "00b0c91f06"
+  channel: "stable"
+
+project_type: app
+
+migration:
+  platforms:
+    - platform: web
+      create_revision: "00b0c91f06"
+      base_revision: "00b0c91f06"
+
+  unmanaged_files:
+    - "lib/main.dart"
+    - "ios/Runner.xcodeproj/project.pbxproj"
