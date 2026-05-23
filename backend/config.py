@@ -38,6 +38,22 @@ class Settings(BaseSettings):
     otp_email_from_name: str = "DDOTT Updates"
     otp_email_use_tls: bool = True
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        raw = str(value or "").strip()
+        placeholder_tokens = (
+            "your render postgresql internal database url",
+            "your_password",
+        )
+        if not raw or raw.startswith("<") or any(token in raw.lower() for token in placeholder_tokens):
+            return "sqlite:///./dott.db"
+        if raw.startswith("postgres://"):
+            return "postgresql+psycopg://" + raw[len("postgres://"):]
+        if raw.startswith("postgresql://"):
+            return "postgresql+psycopg://" + raw[len("postgresql://"):]
+        return raw
+
     @field_validator("public_base_url")
     @classmethod
     def normalize_public_base_url(cls, value: str) -> str:
