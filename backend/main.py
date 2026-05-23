@@ -448,7 +448,7 @@ def send_otp_email(to_email: str, otp: str) -> bool:
             smtp.send_message(msg)
         return True
     except Exception:
-        raise HTTPException(502, "Unable to send OTP email. Check backend email settings.")
+        return False
 
 def normalize_configured_api_key(value: str) -> str:
     key = (value or "").strip().strip('"').strip("'")

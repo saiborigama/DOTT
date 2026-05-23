@@ -6202,12 +6202,20 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
     const load=async()=>{
       setLoading(true)
       try{
-        const[sr,pr]=await Promise.all([
+        let[sr,pr]=await Promise.all([
           api.getShops({lat:userLoc?.lat,lng:userLoc?.lng,radius}),
           api.getProducts({lat:userLoc?.lat,lng:userLoc?.lng,radius})
         ])
-        const shopsData=Array.isArray(sr.data)?sr.data:[]
-        const sourceProducts=Array.isArray(pr.data)?pr.data:[]
+        let shopsData=Array.isArray(sr.data)?sr.data:[]
+        let sourceProducts=Array.isArray(pr.data)?pr.data:[]
+        if(sourceProducts.length===0 && userLoc?.lat!=null && userLoc?.lng!=null){
+          const fallback=await api.getProducts()
+          sourceProducts=Array.isArray(fallback.data)?fallback.data:[]
+        }
+        if(shopsData.length===0 && userLoc?.lat!=null && userLoc?.lng!=null){
+          const fallback=await api.getShops()
+          shopsData=Array.isArray(fallback.data)?fallback.data:[]
+        }
         const prods=sourceProducts.map(p=>{
           const linkedShop=shopsData.find(s=>s.id===p.shopId)
           return {
@@ -6227,8 +6235,8 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
           return km <= rangeLimit
         })
         const inRangeProducts = sortedProducts.filter(p=>canOrderProduct(p,userLoc,rangeLimit))
-        setShops(inRangeShops)
-        setProducts(inRangeProducts)
+        setShops(inRangeShops.length ? inRangeShops : sortedShops)
+        setProducts(inRangeProducts.length ? inRangeProducts : sortedProducts)
       }catch(e){
         setShops([])
         setProducts([])

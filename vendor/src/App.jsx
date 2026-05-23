@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const isRenderStaticSite = typeof window !== 'undefined' && /\.onrender\.com$/.test(window.location.hostname)
+const defaultBase = isRenderStaticSite ? 'https://dott-backend.onrender.com/api' : '/api'
+const BASE = (envBase && !(isRenderStaticSite && envBase === '/api') ? envBase : defaultBase).replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_vendor_access')
@@ -141,8 +144,8 @@ function getDemoEarnings(db) {
 }
 
 const api = {
-  sendOtp: phone => isVendorDemoMode() ? demoResponse({ sent: true, phone }) : ax.post('/otp/send', { phone }),
-  verifyOtp: (phone, otp) => isVendorDemoMode() ? demoResponse({ verified: true, phone, otp }) : ax.post('/otp/verify', { phone, otp }),
+  sendOtp: email => isVendorDemoMode() ? demoResponse({ sent: true, email }) : ax.post('/otp/send', { email }),
+  verifyOtp: (email, otp, extra = {}) => isVendorDemoMode() ? demoResponse({ verified: true, email, otp }) : ax.post('/otp/verify', { email, otp, ...extra }),
   uploadImage: file => {
     if (isVendorDemoMode()) return demoResponse({ url: DEMO_IMAGES.shop })
     const fd = new FormData(); fd.append('file', file)
@@ -1876,10 +1879,11 @@ function AuthPage({ onSuccess }) {
     timerRef.current = setInterval(() => setOtpTimer(t => { if(t<=1){clearInterval(timerRef.current);return 0} return t-1 }), 1000)
   }
   const sendOtp = async () => {
-    if (!form.phone || form.phone.replace(/\D/g,'').length !== 10) { setError('Enter a valid 10-digit phone number'); return }
+    if (!form.email || !form.email.includes('@')) { setError('Enter a valid email address'); return }
     setOtpSending(true); setError('')
     try {
-      const r = await api.sendOtp(form.phone.replace(/\D/g,''))
+      const r = await api.sendOtp(form.email.trim().toLowerCase())
+      if (r.data?.devOtp) setError(`Demo OTP: ${r.data.devOtp}`)
       setOtpStep('otp'); startTimer()
     } catch(e) { setError(e.response?.data?.detail || 'Failed to send OTP') }
     setOtpSending(false)

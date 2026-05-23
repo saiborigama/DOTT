@@ -1,6 +1,9 @@
 import axios from 'axios'
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const isRenderStaticSite = typeof window !== 'undefined' && /\.onrender\.com$/.test(window.location.hostname)
+const defaultBase = isRenderStaticSite ? 'https://dott-backend.onrender.com/api' : '/api'
+const BASE = (envBase && !(isRenderStaticSite && envBase === '/api') ? envBase : defaultBase).replace(/\/$/, '')
 const ax = axios.create({ baseURL: BASE })
 const clearAuthTokens = () => {
   localStorage.removeItem('dott_access')
