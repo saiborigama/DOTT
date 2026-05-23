@@ -457,12 +457,31 @@ function toUpiFromPhone(phone = '') {
   return digits ? `${digits}@upi` : ''
 }
 
+function phonePeUpiFromNumber(phone = '') {
+  const value = String(phone || '').trim()
+  if (value.includes('@')) return value
+  return ''
+}
+
+function companyPaymentAddress(company = {}, method = 'upi') {
+  if (method === 'phonepe') {
+    return phonePeUpiFromNumber(company.phonepeNumber) || company.upiId || ''
+  }
+  if (method === 'gpay') {
+    const gpay = String(company.gpayNumber || '').trim()
+    return (gpay.includes('@') ? gpay : toUpiFromPhone(gpay)) || company.upiId || toUpiFromPhone(company.contactPhone)
+  }
+  return company.upiId || toUpiFromPhone(company.contactPhone)
+}
+
 function getDemoCompanyAccount(db) {
   const company = db?.companyAccount || {}
   return {
     companyName: company.companyName || 'DOTT Marketplace',
     contactPhone: company.contactPhone || '9000000000',
     upiId: company.upiId || toUpiFromPhone(company.contactPhone || '9000000000'),
+    phonepeNumber: company.phonepeNumber || company.contactPhone || '9000000000',
+    gpayNumber: company.gpayNumber || '',
     bankAccount: company.bankAccount || '',
     bankIfsc: company.bankIfsc || '',
     bankName: company.bankName || '',
@@ -496,18 +515,21 @@ function getDemoCodSettlement(db) {
   }
 }
 
-function openUpiPaymentLink(app, upiId, amount, note) {
+function openUpiPaymentLink(app, upiId, amount, note, payeeName = 'DOTT Marketplace') {
   const pa = encodeURIComponent(upiId || '')
-  const pn = encodeURIComponent('DOTT Marketplace')
+  const pn = encodeURIComponent(payeeName || 'DOTT Marketplace')
   const am = encodeURIComponent(Number(amount || 0).toFixed(2))
   const cu = encodeURIComponent('INR')
   const tn = encodeURIComponent(note || 'Rider COD settlement')
   if (!pa || Number(amount || 0) <= 0) return false
   const base = `pa=${pa}&pn=${pn}&am=${am}&cu=${cu}&tn=${tn}`
+  const upiUrl = `upi://pay?${base}`
+  const phonePeIntent = `intent://pay?${base}#Intent;scheme=upi;package=com.phonepe.app;end`
+  const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')
   const urls = {
-    phonepe: `phonepe://pay?${base}`,
+    phonepe: isAndroid ? phonePeIntent : upiUrl,
     gpay: `gpay://upi/pay?${base}`,
-    upi: `upi://pay?${base}`,
+    upi: upiUrl,
   }
   const url = urls[app] || urls.upi
   try {
@@ -1228,6 +1250,7 @@ function AuthPage({ onSuccess }) {
   const [otpValue, setOtpValue] = useState('')
   const [otpSending, setOtpSending] = useState(false)
   const [otpTimer, setOtpTimer] = useState(0)
+  const [showPassword, setShowPassword] = useState(false)
   const timerRef = useRef(null)
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
 
@@ -1268,15 +1291,23 @@ function AuthPage({ onSuccess }) {
         r = await api.register({ ...form, role: 'RIDER', otp: otpValue, ...loc })
       }
       if (r.data?.user?.role !== 'RIDER') {
+        const role = String(r.data?.user?.role || 'another app').toLowerCase()
         clearRiderSession()
-        setError('This account is not a rider account. Please sign in with a rider login.')
+        setError(`This login belongs to ${role}. Use an approved rider account, or ask admin to create/change this account as RIDER.`)
         setLoading(false)
         return
       }
       localStorage.setItem('rdr_access', r.data.accessToken)
       localStorage.setItem('rdr_refresh', r.data.refreshToken)
       onSuccess(r.data.user)
-    } catch (e) { setError(e.response?.data?.detail || 'Failed') }
+    } catch (e) {
+      const detail = String(e.response?.data?.detail || '')
+      if (e.response?.status === 401 || detail.toLowerCase().includes('invalid credentials')) {
+        setError('Invalid credentials. Please check your email or phone and password.')
+      } else {
+        setError(detail || 'Failed')
+      }
+    }
     setLoading(false)
   }
 
@@ -1357,7 +1388,29 @@ function AuthPage({ onSuccess }) {
                 <div><label className="label">Phone *</label><input className="input" placeholder="10-digit number" value={form.phone} onChange={set('phone')}/></div>
               </>}
               <div><label className="label">Email</label><input className="input" type="email" placeholder="rider@email.com" value={form.email} onChange={set('email')}/></div>
-              <div><label className="label">Password</label><input className="input" type="password" placeholder="Password" value={form.password} onChange={set('password')} onKeyDown={e=>e.key==='Enter'&&submit()}/></div>
+              <div>
+                <label className="label">Password</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    className="input"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Password"
+                    value={form.password}
+                    onChange={set('password')}
+                    onKeyDown={e=>e.key==='Enter'&&submit()}
+                    style={{ paddingRight: 54 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(v => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', border: 0, background: 'transparent', color: 'var(--muted)', fontWeight: 900, cursor: 'pointer', padding: '8px 6px' }}
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              </div>
               <div className="auth-loc-row" style={{display:'flex',gap:8}}>
                 <div onClick={getLoc} style={{flex:1,display:'flex',alignItems:'center',gap:9,padding:'12px 13px',borderRadius:14,border:`1.5px solid ${loc?'var(--green2)':'var(--border)'}`,background:loc?'rgba(63,185,80,.07)':'var(--surface)',cursor:'pointer',transition:'.2s'}}>
                   <span style={{width:30,height:30,borderRadius:11,background:loc?'rgba(63,185,80,.13)':'#eef7ff',color:loc?'var(--green2)':'#2563eb',display:'grid',placeItems:'center',fontSize:10,fontWeight:900}}>{loc?'Set':'GPS'}</span>
@@ -1510,6 +1563,9 @@ function HomeTab({
   const monthEarn = earnings?.month?.earned || 0
   const pendingCod = Number(codSummary?.pendingAmount || 0)
   const company = codSummary?.companyAccount || {}
+  const selectedCodMethod = codPay?.method || 'upi'
+  const selectedPaymentAddress = companyPaymentAddress(company, selectedCodMethod)
+  const selectedPaymentAmount = Number(codPay?.amount || pendingCod || 0)
   const paymentHistory = Array.isArray(codSummary?.paymentHistory) ? codSummary.paymentHistory : []
   const lastSettlement = paymentHistory[0] || null
 
@@ -1518,17 +1574,17 @@ function HomeTab({
       onShowToast?.('No pending COD amount to settle', 'info')
       return
     }
-    setCodPay({ method, reference: '', launched: false, confirmed: false })
+    setCodPay({ method, amount: pendingCod, reference: '', launched: false, confirmed: false })
   }
 
   const launchCodPayment = () => {
     const method = codPay?.method || 'upi'
-    const upiId = company.upiId || toUpiFromPhone(company.contactPhone)
+    const upiId = companyPaymentAddress(company, method)
     if (!upiId) {
-      onShowToast?.('Company UPI is not configured', 'error')
+      onShowToast?.(`${method === 'phonepe' ? 'Add company UPI ID or PhonePe UPI ID in admin settings' : 'Company UPI is not configured'}`, 'error')
       return
     }
-    const opened = openUpiPaymentLink(method, upiId, pendingCod, `COD settlement by ${user?.name || 'Rider'}`)
+    const opened = openUpiPaymentLink(method, upiId, selectedPaymentAmount, `COD settlement by ${user?.name || 'Rider'}`, company.companyName || 'DOTT Marketplace')
     if (opened) setCodPay(p => p ? { ...p, launched: true } : p)
   }
 
@@ -1550,14 +1606,14 @@ function HomeTab({
     setSettling(method)
     try {
       const r = await api.payCodSettlement({
-        amount: pendingCod,
+        amount: selectedPaymentAmount,
         method,
         paymentReference,
         note: `COD settlement from rider app via ${String(method || 'upi').toUpperCase()}`,
       })
       setCodSummary(r.data?.summary || r.data)
       setCodPay(null)
-      onShowToast?.(`COD settled: Rs ${pendingCod.toFixed(2)}`, 'success')
+      onShowToast?.(`COD settled: Rs ${selectedPaymentAmount.toFixed(2)}`, 'success')
     } catch (e) {
       onShowToast?.(e?.response?.data?.detail || 'COD settlement failed', 'error')
     } finally {
@@ -1631,6 +1687,7 @@ function HomeTab({
           <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 5 }}>Company payout details</div>
           <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text2)' }}>{company.companyName || 'DOTT Marketplace'}</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>UPI: {company.upiId || toUpiFromPhone(company.contactPhone) || 'Not configured'}</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>PhonePe: {company.phonepeNumber || 'Not configured'}</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>Phone: {company.contactPhone || 'Not configured'}</div>
           <div style={{ fontSize: 12, fontWeight: 900, color: pendingCod > 0 ? '#f97316' : '#22c55e', marginTop: 8 }}>You need to pay: {formatRiderMoney(pendingCod)}</div>
         </div>
@@ -1638,7 +1695,7 @@ function HomeTab({
           <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'phonepe'} onClick={() => startCodSettlement('phonepe')}>
             {settling === 'phonepe' ? 'Processing...' : 'Settle via PhonePe'}
           </button>
-          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'gpay'} onClick={() => startCodSettlement('gpay')}>
+          <button className="btn btn-blue btn-compact" disabled={pendingCod <= 0 || settling === 'gpay' || !companyPaymentAddress(company, 'gpay')} onClick={() => startCodSettlement('gpay')}>
             {settling === 'gpay' ? 'Processing...' : 'Settle via GPay'}
           </button>
         </div>
@@ -1649,8 +1706,17 @@ function HomeTab({
             </div>
             <div style={{ padding: 12, borderRadius: 12, background: '#f8fbff', border: '1px solid var(--border)', display: 'grid', gap: 4 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase' }}>Amount to pay</div>
-              <div style={{ fontSize: 20, fontWeight: 900, color: '#f97316', fontFamily: 'var(--font)' }}>{formatRiderMoney(pendingCod)}</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: '#f97316', fontFamily: 'var(--font)' }}>{formatRiderMoney(selectedPaymentAmount)}</div>
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>Pay this amount to {company.companyName || 'DOTT Marketplace'} first. Only after payment is complete, enter the UTR below.</div>
+              <div style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 800 }}>
+                {codPay.method === 'phonepe' ? 'PhonePe UPI' : codPay.method === 'gpay' ? 'GPay' : 'UPI'}: {selectedPaymentAddress || 'Not configured'}
+              </div>
+              {codPay.method === 'phonepe' && company.phonepeNumber && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700 }}>PhonePe number: {company.phonepeNumber}</div>
+              )}
+              {codPay.method === 'phonepe' && !selectedPaymentAddress && (
+                <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 800 }}>Admin must save a valid company UPI ID or PhonePe UPI ID. A mobile number alone cannot prefill a PhonePe UPI payment.</div>
+              )}
             </div>
             <button className="btn btn-blue btn-compact" onClick={launchCodPayment} disabled={Boolean(settling)}>
               {codPay.launched ? 'Open Payment App Again' : `Open ${codPay.method === 'phonepe' ? 'PhonePe' : 'GPay'} Now`}

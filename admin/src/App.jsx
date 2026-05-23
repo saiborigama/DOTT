@@ -734,6 +734,7 @@ function AuthPage({ onSuccess }) {
   const [pass, setPass] = useState('')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [showPass, setShowPass] = useState(false)
   const [showRequest, setShowRequest] = useState(false)
   const [requestForm, setRequestForm] = useState({ name: '', workEmail: '', phone: '', role: '', note: '' })
   const submit = async () => {
@@ -853,9 +854,20 @@ function AuthPage({ onSuccess }) {
               </div>
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.7px', display: 'block', marginBottom: 6 }}>Password</label>
-                <input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
-                  style={{ width: '100%', padding: '12px 16px', background: '#f7fbff', border: '1.5px solid var(--border)', borderRadius: 12, color: 'var(--text)', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
-                  onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+                <div style={{ position: 'relative' }}>
+                  <input type={showPass ? 'text' : 'password'} value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()}
+                    style={{ width: '100%', padding: '12px 52px 12px 16px', background: '#f7fbff', border: '1.5px solid var(--border)', borderRadius: 12, color: 'var(--text)', fontSize: 14, outline: 'none', fontFamily: 'var(--body)' }}
+                    onFocus={e => e.target.style.borderColor = 'var(--primary)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+                  <button
+                    type="button"
+                    onClick={() => setShowPass(v => !v)}
+                    aria-label={showPass ? 'Hide password' : 'Show password'}
+                    title={showPass ? 'Hide password' : 'Show password'}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', width: 32, height: 32, border: 0, borderRadius: 10, background: 'transparent', color: 'var(--primary-d)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+                  >
+                    <span style={{ display: 'inline-flex', width: 18, height: 18 }}><I.Eye /></span>
+                  </button>
+                </div>
               </div>
 
               {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 14px', color: '#dc2626', fontSize: 13, fontWeight: 600 }}>{err}</div>}
@@ -2423,7 +2435,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       totalSales,
       productValue: Number(inv.productValue || totalSales),
       deliveryCollected: Number(inv.deliveryCollected || 0),
-      riderEarning: Number(inv.riderEarning || 0),
+      riderEarning: Math.min(Number(inv.riderEarning || 0), Number(inv.deliveryCollected || 0)),
       commissionPct: 0,
       commissionAmount: 0,
       netPayable: Number(inv.vendorPayout || inv.netPayable || totalSales),
@@ -2441,7 +2453,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
         totalSales: Number(row.totalSales || 0),
         productValue: Number(row.productValue || row.totalSales || 0),
         deliveryCollected: Number(row.deliveryCollected || 0),
-        riderEarning: Number(row.riderEarning || 0),
+        riderEarning: Math.min(Number(row.riderEarning || 0), Number(row.deliveryCollected || 0)),
         netPayable: Number(row.netPayable || row.totalSales || 0),
         paidAmount: Number(row.paidAmount || 0),
         pendingAmount: Number(row.pendingAmount || 0),
@@ -2455,7 +2467,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       totalSales: Number(acc[key].totalSales || 0) + Number(row.totalSales || 0),
       productValue: Number(acc[key].productValue || 0) + Number(row.productValue || row.totalSales || 0),
       deliveryCollected: Number(acc[key].deliveryCollected || 0) + Number(row.deliveryCollected || 0),
-      riderEarning: Number(acc[key].riderEarning || 0) + Number(row.riderEarning || 0),
+      riderEarning: Number(acc[key].riderEarning || 0) + Math.min(Number(row.riderEarning || 0), Number(row.deliveryCollected || 0)),
       netPayable: Number(acc[key].netPayable || 0) + Number(row.netPayable || row.totalSales || 0),
       paidAmount: Number(acc[key].paidAmount || 0) + Number(row.paidAmount || 0),
       pendingAmount: Number(acc[key].pendingAmount || 0) + Number(row.pendingAmount || 0),
@@ -2467,30 +2479,39 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   }, {}))
   const riderRows = (riderUsers.length ? riderUsers.map(rider => {
     const inv = riderInvoices.find(r => sameId(r.riderId, rider.id) || r.riderName === rider.name)
-    return inv ? {
-      ...inv,
-      riderId: inv.riderId || rider.id,
-      riderName: inv.riderName || rider.name,
-      totalDeliveries: Number(inv.totalDeliveries || 0),
-      earningsPerDelivery: Number(inv.earningsPerDelivery || 0),
-      deliveryCollected: Number(inv.deliveryCollected || 0),
-      totalEarnings: Number(inv.totalEarnings || 0),
-      paidAmount: Number(inv.paidAmount || 0),
-      pendingAmount: Number(inv.pendingAmount || 0),
-      codCollected: Number(inv.codCollected || inv.codSummary?.totalCollected || 0),
-      codSettled: Number(inv.codSettled || inv.codSummary?.settledAmount || 0),
-      codPending: Number(inv.codPending || inv.codSummary?.pendingAmount || 0),
-      codOrders: Number(inv.codOrders || inv.codSummary?.totalCodOrders || 0),
-      codProductValue: Number(inv.codProductValue || inv.codSummary?.breakdown?.productValue || 0),
-      codDeliveryFee: Number(inv.codDeliveryFee || inv.codSummary?.breakdown?.deliveryFee || 0),
-      codPlatformFee: Number(inv.codPlatformFee || inv.codSummary?.breakdown?.platformFee || 0),
-      codGstAmount: Number(inv.codGstAmount || inv.codSummary?.breakdown?.gstAmount || 0),
-      codOtherAdjustments: Number(inv.codOtherAdjustments || inv.codSummary?.breakdown?.otherAdjustments || 0),
-      codSummary: inv.codSummary || null,
-      netAdminPayable: Number(inv.netAdminPayable ?? Math.max(Number(inv.pendingAmount || 0) - Number(inv.codPending || inv.codSummary?.pendingAmount || 0), 0)),
-      netRiderOwes: Number(inv.netRiderOwes ?? Math.max(Number(inv.codPending || inv.codSummary?.pendingAmount || 0) - Number(inv.pendingAmount || 0), 0)),
-      invoiceIds: Array.isArray(inv.invoiceIds) ? inv.invoiceIds : [inv.latestInvoiceId || inv.id].filter(Boolean),
-    } : {
+    return inv ? (() => {
+      const deliveryCollected = Number(inv.deliveryCollected || 0)
+      const totalEarnings = Math.min(Number(inv.totalEarnings || 0), deliveryCollected)
+      const paidAmount = Number(inv.paidAmount || 0)
+      const pendingAmount = Math.min(Number(inv.pendingAmount || 0), Math.max(totalEarnings - paidAmount, 0))
+      const codPending = Number(inv.codPending || inv.codSummary?.pendingAmount || 0)
+      const netAdminPayable = Math.max(pendingAmount - codPending, 0)
+      const netRiderOwes = Math.max(codPending - pendingAmount, 0)
+      return {
+        ...inv,
+        riderId: inv.riderId || rider.id,
+        riderName: inv.riderName || rider.name,
+        totalDeliveries: Number(inv.totalDeliveries || 0),
+        earningsPerDelivery: Number(inv.totalDeliveries || 0) ? Number((totalEarnings / Number(inv.totalDeliveries || 0)).toFixed(2)) : 0,
+        deliveryCollected,
+        totalEarnings,
+        paidAmount,
+        pendingAmount,
+        codCollected: Number(inv.codCollected || inv.codSummary?.totalCollected || 0),
+        codSettled: Number(inv.codSettled || inv.codSummary?.settledAmount || 0),
+        codPending,
+        codOrders: Number(inv.codOrders || inv.codSummary?.totalCodOrders || 0),
+        codProductValue: Number(inv.codProductValue || inv.codSummary?.breakdown?.productValue || 0),
+        codDeliveryFee: Number(inv.codDeliveryFee || inv.codSummary?.breakdown?.deliveryFee || 0),
+        codPlatformFee: Number(inv.codPlatformFee || inv.codSummary?.breakdown?.platformFee || 0),
+        codGstAmount: Number(inv.codGstAmount || inv.codSummary?.breakdown?.gstAmount || 0),
+        codOtherAdjustments: Number(inv.codOtherAdjustments || inv.codSummary?.breakdown?.otherAdjustments || 0),
+        codSummary: inv.codSummary || null,
+        netAdminPayable,
+        netRiderOwes,
+        invoiceIds: Array.isArray(inv.invoiceIds) ? inv.invoiceIds : [inv.latestInvoiceId || inv.id].filter(Boolean),
+      }
+    })() : {
       riderId: rider.id,
       riderName: rider.name,
       totalDeliveries: 0,
@@ -2533,7 +2554,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
     ? codFormulaParts.map(([label, value]) => `${label} ${money(value)}`).join(' + ')
     : 'No collected COD cash pending'
   const payableVendorRows = vendorRows.filter(v => Number(v.pendingAmount || 0) > 0 && ((v.invoiceIds || []).length || v.latestInvoiceId))
-  const payableRiderRows = riderRows.filter(r => Number(r.pendingAmount || 0) > 0 && ((r.invoiceIds || []).length || r.latestInvoiceId))
+  const payableRiderRows = riderRows.filter(r => Number(r.netAdminPayable || 0) > 0 && ((r.invoiceIds || []).length || r.latestInvoiceId))
   const vendorRowKey = row => row?.shopId ? `shop::${row.shopId}` : `vendor::${row?.vendorId || row?.vendorName || 'Vendor'}`
   const selectedVendorInvoice = selectedVendor ? vendorRows.find(v => vendorRowKey(v) === selectedVendor) : null
   const selectedVendorUser = selectedVendorInvoice ? users.find(u => sameId(u.id, selectedVendorInvoice.vendorId)) : null
@@ -2683,7 +2704,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
       return
     }
     const invoiceIds = rows.flatMap(row => row.invoiceIds?.length ? row.invoiceIds : [row.latestInvoiceId]).filter(Boolean)
-    const totalAmount = rows.reduce((sum, row) => sum + Number(row.pendingAmount || 0), 0)
+    const totalAmount = rows.reduce((sum, row) => sum + Number(entityType === 'rider' ? row.netAdminPayable || 0 : row.pendingAmount || 0), 0)
     openPayMethodModal({
       mode: `batch_${entityType}`,
       invoiceId: invoiceIds[0],
@@ -2765,7 +2786,7 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
   }
   const cards = [
     { label: 'Vendor Payout Due', value: money(vendorRows.reduce((s, v) => s + (v.pendingAmount || 0), 0)), note: 'Product value payable to vendors', tone: '#6c47ff' },
-    { label: 'Rider Payout Due', value: money(riderRows.reduce((s, v) => s + (v.pendingAmount || 0), 0)), note: 'Rider delivery earnings payable', tone: '#0ea5e9' },
+    { label: 'Rider Payout Due', value: money(riderRows.reduce((s, v) => s + (v.netAdminPayable || 0), 0)), note: 'After adjusting rider COD cash', tone: '#0ea5e9' },
     { label: 'COD Cash To Company', value: money(codPendingTotal), note: codFormulaText, tone: '#dc2626' },
     { label: 'Payments Logged', value: history.length, tone: '#16a34a' },
   ]
@@ -3058,14 +3079,14 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                               <button className="btn btn-ghost btn-sm" onClick={() => openRiderDetails(r.riderId)}>Details</button>
                               <button
                                 className="btn btn-primary btn-sm"
-                                disabled={!r.latestInvoiceId || r.pendingAmount <= 0 || (r.latestInvoiceId && paying === r.latestInvoiceId)}
+                                disabled={!r.latestInvoiceId || r.netAdminPayable <= 0 || (r.latestInvoiceId && paying === r.latestInvoiceId)}
                                 onClick={() => {
                                   const riderUser = users.find(u => sameId(u.id, r.riderId) || u.name === r.riderName)
                                   const payment = paymentProfileFor(riderUser)
                                   openPayMethodModal({
                                     invoiceId: r.latestInvoiceId,
                                     invoiceIds: r.invoiceIds || [r.latestInvoiceId],
-                                    amount: Number(r.pendingAmount || 0),
+                                    amount: Number(r.netAdminPayable || 0),
                                     payeeName: r.riderName,
                                     upiId: primaryUpiFor(payment),
                                     payment,
@@ -3074,24 +3095,24 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                                   })
                                 }}
                               >
-                                {(r.latestInvoiceId && paying === r.latestInvoiceId) ? 'Paying...' : r.pendingAmount > 0 ? 'Mark Paid' : 'Paid'}
+                                {(r.latestInvoiceId && paying === r.latestInvoiceId) ? 'Paying...' : r.netAdminPayable > 0 ? 'Pay Rider' : 'No Payout'}
                               </button>
                               <button
                                 className="btn btn-ghost btn-sm"
-                                disabled={r.codPending <= 0 || paying === r.riderId}
+                                disabled={r.netRiderOwes <= 0 || paying === r.riderId}
                                 onClick={() => {
                                   const company = r.codSummary?.companyAccount || {}
                                   openPayMethodModal({
                                     mode: 'rider_cod',
                                     riderId: r.riderId,
-                                    amount: Number(r.codPending || 0),
+                                    amount: Number(r.netRiderOwes || 0),
                                     payeeName: `${r.riderName} COD deposit`,
                                     upiId: company.upiId || '',
                                     note: `${r.riderName} COD deposit to company`,
                                   })
                                 }}
                               >
-                                COD Paid
+                                Rider Paid Admin
                               </button>
                             </span>
                           </div>
@@ -3108,24 +3129,24 @@ function SettlementPage({ onOpenOrders, onOpenShops }) {
                           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedRiderInvoice.riderName}</div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => openPayMethodModal({
+                          <button className="btn btn-primary btn-sm" disabled={Number(selectedRiderInvoice.netAdminPayable || 0) <= 0} onClick={() => openPayMethodModal({
                             invoiceId: selectedRiderInvoice.latestInvoiceId,
                             invoiceIds: selectedRiderInvoice.invoiceIds || [selectedRiderInvoice.latestInvoiceId],
-                            amount: Number(selectedRiderInvoice.pendingAmount || 0),
+                            amount: Number(selectedRiderInvoice.netAdminPayable || 0),
                             payeeName: selectedRiderInvoice.riderName,
                             upiId: primaryUpiFor(paymentProfileFor(selectedRiderUser)),
                             payment: paymentProfileFor(selectedRiderUser),
                             entityLabel: 'Rider',
                             note: `${selectedRiderInvoice.riderName} payout`,
-                          })}>Pay / Mark Paid</button>
-                          <button className="btn btn-ghost btn-sm" disabled={Number(selectedRiderInvoice.codPending || 0) <= 0} onClick={() => openPayMethodModal({
+                          })}>Pay Rider</button>
+                          <button className="btn btn-ghost btn-sm" disabled={Number(selectedRiderInvoice.netRiderOwes || 0) <= 0} onClick={() => openPayMethodModal({
                             mode: 'rider_cod',
                             riderId: selectedRiderInvoice.riderId,
-                            amount: Number(selectedRiderInvoice.codPending || 0),
+                            amount: Number(selectedRiderInvoice.netRiderOwes || 0),
                             payeeName: `${selectedRiderInvoice.riderName} COD deposit`,
                             upiId: selectedRiderCompanyAccount.upiId || '',
                             note: `${selectedRiderInvoice.riderName} COD deposit to company`,
-                          })}>Record COD Paid</button>
+                          })}>Rider Paid Admin</button>
                         </div>
                       </div>
 

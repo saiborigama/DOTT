@@ -196,13 +196,20 @@ class SettlementRulesTest(unittest.TestCase):
         rider_invoice = self.db.query(m.SettlementInvoice).filter_by(entity_type="rider", user_id=self.rider.id).one()
         self.assertEqual(rider_invoice.total_orders, 3)
         self.assertEqual(rider_invoice.delivery_collected, 87)
-        self.assertEqual(rider_invoice.gross_earnings, 135)
-        self.assertEqual(rider_invoice.pending_amount, 135)
+        self.assertEqual(rider_invoice.gross_earnings, 87)
+        self.assertEqual(rider_invoice.pending_amount, 87)
 
         cod_summary = m.rider_cod_settlement_summary(self.db, self.rider)
         self.assertEqual(cod_summary["totalCollected"], 1182)
         self.assertEqual(cod_summary["pendingAmount"], 1182)
         self.assertEqual(cod_summary["companyAccount"]["upiId"], "dott@upi")
+
+        dashboard = m.admin_settlement_dashboard(self.db, delivered_at - timedelta(days=1), delivered_at + timedelta(days=1))
+        rider_row = dashboard["riders"][0]
+        self.assertEqual(rider_row["pendingAmount"], 87)
+        self.assertEqual(rider_row["codPending"], 1182)
+        self.assertEqual(rider_row["netAdminPayable"], 0)
+        self.assertEqual(rider_row["netRiderOwes"], 1095)
 
         with self.assertRaises(m.HTTPException) as missing_ref:
             m.admin_mark_invoice_paid(vendor_invoice.id, body={"method": "GPAY", "paymentReference": ""}, user=self.admin, db=self.db)
@@ -295,7 +302,33 @@ class SettlementRulesTest(unittest.TestCase):
         self.assertEqual(order.status, m.OrderStatusEnum.DELIVERED)
         self.assertTrue(order.cod_collected)
         self.assertEqual(order.countdown_alert_level, "COMPLETED")
-        self.assertGreater(order.rider_earning, 40)
+        self.assertEqual(order.rider_earning, 20)
+
+    def test_rider_payout_never_exceeds_customer_delivery_fee(self):
+        m = self.main
+        delivered_at = utc_now() - timedelta(hours=1)
+
+        order = self.add_order(
+            "DELIVERY-CAP",
+            status=m.OrderStatusEnum.DELIVERED,
+            payment="upi",
+            product_value=500,
+            delivery_fee=30,
+            rider_earning=42,
+            delivered_at=delivered_at,
+        )
+
+        self.assertEqual(m.cap_rider_earning(order.rider_earning, order.delivery_fee), 30)
+        m.sync_settlement_invoices(self.db)
+        rider_invoice = self.db.query(m.SettlementInvoice).filter_by(entity_type="rider", user_id=self.rider.id).one()
+        self.assertEqual(rider_invoice.delivery_collected, 30)
+        self.assertEqual(rider_invoice.gross_earnings, 30)
+        self.assertEqual(rider_invoice.pending_amount, 30)
+
+        dashboard = m.admin_settlement_dashboard(self.db, delivered_at - timedelta(days=1), delivered_at + timedelta(days=1))
+        rider_row = dashboard["riders"][0]
+        self.assertEqual(rider_row["netAdminPayable"], 30)
+        self.assertEqual(rider_row["netRiderOwes"], 0)
 
 
 if __name__ == "__main__":

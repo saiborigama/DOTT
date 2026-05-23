@@ -225,10 +225,17 @@ def calc_delivery_fee(km: float) -> float:
     extra_km = max(0, math.ceil(km) - 1)
     return round(BASE_DELIVERY_FEE + (extra_km * DISTANCE_FEE_PER_KM), 2)
 
-def calc_rider_earning(km: float) -> float:
+def cap_rider_earning(amount: Optional[float], delivery_fee: Optional[float]) -> float:
+    amount = max(0.0, float(amount or 0.0))
+    delivery_fee = max(0.0, float(delivery_fee or 0.0))
+    return round(min(amount, delivery_fee), 2)
+
+def calc_rider_earning(km: float, delivery_fee: Optional[float] = None) -> float:
     """Rider gets base + per-km rate."""
-    if km <= 0: return 20.0
-    return round(20 + km * 8, 1)   # ₹20 base + ₹8/km
+    earning = 20.0 if km <= 0 else round(20 + km * 8, 1)
+    if delivery_fee is None:
+        return earning
+    return cap_rider_earning(earning, delivery_fee)
 
 def calc_surge_fee(now: Optional[datetime] = None, weather: Optional[str] = None) -> tuple[float, list[str]]:
     now = now or utc_now()
@@ -365,7 +372,10 @@ def finalize_delivery_timing(order: Order):
     order.rider_bonus = 0.0 if is_delayed else RIDER_ON_TIME_BONUS
     order.rider_penalty = RIDER_DELAY_PENALTY if is_delayed else 0.0
     order.countdown_alert_level = "DELAYED" if is_delayed else "COMPLETED"
-    order.rider_earning = round((order.rider_earning or 0.0) + order.rider_bonus - order.rider_penalty, 2)
+    order.rider_earning = cap_rider_earning(
+        (order.rider_earning or 0.0) + order.rider_bonus - order.rider_penalty,
+        order.delivery_fee,
+    )
 
 # ── OTP helpers ────────────────────────────────────────────────────
 def generate_otp() -> str:
@@ -2479,7 +2489,7 @@ def order_dict(o: Order):
         "gstRate":getattr(o, "gst_rate", 0.05),
         "gstAmount":getattr(o, "gst_amount", 0.0),
         "freeDeliveryDiscount":getattr(o, "free_delivery_discount", 0.0),
-        "discount":o.discount,"total":o.total,"riderEarning":o.rider_earning,
+        "discount":o.discount,"total":o.total,"riderEarning":cap_rider_earning(o.rider_earning, o.delivery_fee),
         "tryAndReturnEligible":getattr(o, "try_and_return_eligible", False),
         "returnWindowHours":getattr(o, "return_window_hours", 48),
         "refundAmount":getattr(o, "refund_amount", 0.0),
@@ -3132,7 +3142,7 @@ def place_order(body: OrderCreate, user: User = Depends(get_current_user), db: S
         raise HTTPException(400, f"This shop is outside your local delivery range. NearNow only allows ordering within {allowed_km:g} km.")
     pricing = compute_pricing(subtotal, km, getattr(user, "is_premium", False), body.weather)
     delivery_fee = pricing["deliveryFee"]
-    rider_earn   = calc_rider_earning(km)
+    rider_earn   = calc_rider_earning(km, delivery_fee)
 
     code = f"DT{int(time.time()*1000) % 1000000:06d}"
     order = Order(order_code=code, customer_id=user.id, shop_id=shop.id,
@@ -3840,7 +3850,7 @@ def rider_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[st
         ).all()
         return {
             "trips": len(rows),
-            "earned": round(sum(o.rider_earning for o in rows), 1),
+            "earned": round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 1),
             "totalKm": round(sum(o.delivery_km or 0 for o in rows), 1),
         }
 
@@ -3867,7 +3877,7 @@ def rider_history(user: User = Depends(get_current_user), db: Session = Depends(
     return [{"id":o.id,"orderCode":o.order_code,"shopName":o.shop.name,
              "deliveryAddress":o.delivery_address,"total":o.total,
              "deliveryKm":round(o.delivery_km or 0,1),
-             "earning":round(o.rider_earning,1),
+             "earning":round(cap_rider_earning(o.rider_earning, o.delivery_fee),1),
              "deliveredAt":o.delivered_at.isoformat() if o.delivered_at else None} for o in orders]
 
 @app.get("/api/riders/cod-settlement")
@@ -4136,7 +4146,7 @@ def get_delivery_fee(shopLat: float, shopLng: float, custLat: float, custLng: fl
     if km == 9999: km = 3.0
     km = round(km, 2)
     pricing = compute_pricing(subtotal or 0.0, km, bool(isPremium), weather)
-    pricing["riderEarning"] = calc_rider_earning(km)
+    pricing["riderEarning"] = calc_rider_earning(km, pricing["deliveryFee"])
     return pricing
 
 @app.get("/api/orders/pricing-preview")
@@ -4569,7 +4579,7 @@ def rider_performance(user: User = Depends(get_current_user), db: Session = Depe
     ratings = db.query(RiderRating).filter(RiderRating.rider_id == user.id).all()
     avg_rating = round(sum(r.rating for r in ratings)/len(ratings), 1) if ratings else 0
     rows = db.query(Order).filter(Order.rider_id == user.id, Order.status == OrderStatusEnum.DELIVERED).all()
-    total_earned = sum(o.rider_earning or 0 for o in rows)
+    total_earned = sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows)
     on_time = sum(1 for o in rows if not getattr(o, "is_delayed", False))
     late = sum(1 for o in rows if getattr(o, "is_delayed", False))
     total_bonus = sum(getattr(o, "rider_bonus", 0.0) or 0.0 for o in rows)
@@ -4744,7 +4754,7 @@ def sync_settlement_invoices(db: Session):
         if entity_type == "vendor":
             product_value = round(sum(vendor_settlement_product_value(o) for o in rows), 2)
             delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
-            rider_earning_amount = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            rider_earning_amount = round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 2)
             total_sales = product_value
             commission_pct = float(_commission_rate.get("vendor_commission_pct", 0))
             commission_amount = round(product_value * commission_pct / 100.0, 2)
@@ -4753,7 +4763,7 @@ def sync_settlement_invoices(db: Session):
         else:
             product_value = round(sum(vendor_merchandise_total(o) for o in rows), 2)
             delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
-            rider_earning_amount = round(sum((o.rider_earning or 0.0) for o in rows), 2)
+            rider_earning_amount = round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 2)
             total_sales = delivery_collected
             commission_pct = 0.0
             commission_amount = 0.0
