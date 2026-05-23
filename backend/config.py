@@ -22,13 +22,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     public_base_url: str = "http://localhost:8080"
-    cors_origins: list[str] = [
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://localhost:3004",
-        "http://localhost:5173",
-    ]
+    cors_origins: str = "http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:5173"
     cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     gemini_api_key: str = ""
     google_api_key: str = ""
@@ -49,12 +43,21 @@ class Settings(BaseSettings):
     def normalize_public_base_url(cls, value: str) -> str:
         return value.rstrip("/")
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value):
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+    @property
+    def cors_origin_list(self) -> list[str]:
+        value = self.cors_origins
+        if isinstance(value, list):
+            return value
+        raw = str(value or "").strip()
+        if raw.startswith("["):
+            import json
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     @model_validator(mode="after")
     def validate_production_security(self):
