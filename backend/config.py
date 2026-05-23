@@ -65,7 +65,9 @@ class Settings(BaseSettings):
         local_hosts = ("localhost", "127.0.0.1")
         is_local = any(host in public_url for host in local_hosts)
         if not is_local and self.secret_key == "change-me-before-production":
-            raise ValueError("Set a strong SECRET_KEY in backend/.env before using a non-local public URL.")
+            raise ValueError(
+                "Set a strong SECRET_KEY environment variable before using a non-local PUBLIC_BASE_URL."
+            )
         return self
 
 

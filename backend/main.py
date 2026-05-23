@@ -4173,6 +4173,10 @@ def pricing_preview(shopId: int, subtotal: float, custLat: Optional[float] = Non
 @app.get("/")
 def root(): return {"message":"DOTT API v5.0","docs":"/docs"}
 
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
 # ══════════════════════════════════════════════════════════════════
 # NEW FEATURE IMPORTS & ENDPOINTS (v7)
 # ══════════════════════════════════════════════════════════════════
