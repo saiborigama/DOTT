@@ -15,7 +15,7 @@ services:
       - key: PUBLIC_BASE_URL
         value: https://dott-backend.onrender.com
       - key: CORS_ORIGINS
-        value: http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:5173
+        value: http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:5173,https://dott-customer.onrender.com,https://dott-vendor.onrender.com,https://dott-rider.onrender.com,https://dott-admin.onrender.com
       - key: CORS_ORIGIN_REGEX
         value: ^https://.*\.onrender\.com$
       - key: DOTT_SEED_DEMO

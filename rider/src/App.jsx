@@ -27,7 +27,17 @@ const Ic = {
 }
 
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const isRenderStaticSite = typeof window !== 'undefined' && /\.onrender\.com$/.test(window.location.hostname)
+const defaultBase = isRenderStaticSite ? 'https://dott-backend.onrender.com/api' : '/api'
+function normalizeApiBase(value) {
+  let base = (value || defaultBase).trim().replace(/\/$/, '')
+  if (isRenderStaticSite && base === '/api') base = defaultBase
+  base = base.replace('https://backend.onrender.com', 'https://dott-backend.onrender.com')
+  if (/^https?:\/\/[^/]+\.onrender\.com$/i.test(base)) base = `${base}/api`
+  return base
+}
+const BASE = normalizeApiBase(envBase)
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('rdr_access')
@@ -965,8 +975,8 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
   .card{padding:12px}
   .history-item{align-items:flex-start}
   .auth-side{display:none!important}
-  .auth-main{min-height:100svh!important;padding:20px 12px!important;align-items:center!important;justify-content:center!important}
-  .auth-card{max-width:none!important;padding:22px 16px!important;border-radius:20px!important}
+  .auth-main{min-height:100svh!important;padding:12px!important;align-items:flex-start!important;justify-content:flex-start!important;overflow:auto!important}
+  .auth-card{max-width:none!important;padding:18px 14px!important;border-radius:20px!important}
   .auth-toggle,.auth-loc-row,.mobile-stack{flex-direction:column!important}
   .mobile-stack > *{width:100%}
 }
@@ -986,6 +996,55 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 52%,#f9fcff 100%);colo
   .bottom-nav{padding:8px 0 max(8px,env(safe-area-inset-bottom));}
   .nav-btn{font-size:9px;gap:2px}
   .nav-btn svg{width:20px;height:20px}
+}
+
+/* -- RESPONSIVE FIT GUARDRAILS -- */
+html,body,#root{width:100%;min-height:100%;overflow-x:hidden}
+img,video,canvas,svg{max-width:100%}
+button,input,select,textarea{max-width:100%}
+.content,.card,.map-modal,.otp-modal,.auth-card{min-width:0}
+.content{width:100%;overflow-x:hidden}
+.card,.map-modal,.otp-modal,.auth-card{overflow-wrap:anywhere}
+.btn{min-height:42px;white-space:normal;text-align:center;line-height:1.2}
+.toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center}
+.bottom-nav{max-width:100vw}
+.nav-btn{min-width:0;overflow:hidden}
+.nav-btn svg{flex-shrink:0}
+.nav-pill{right:calc(50% - 22px)}
+
+@media(max-width:640px){
+  body{min-height:100svh}
+  .content{padding:12px 10px calc(96px + env(safe-area-inset-bottom,0px))}
+  .header{position:sticky;top:0}
+  .offline-banner{margin:0 10px 12px}
+  .card{border-radius:14px;padding:14px}
+  .btn{width:auto;min-width:0;padding:11px 12px}
+  .mobile-stack{gap:10px!important}
+  .mobile-stack > *,.auth-loc-row > *{width:100%!important;min-width:0}
+  .auth-main{min-height:100svh!important;max-width:100vw;overflow-y:auto!important}
+  .auth-card{width:100%!important;max-width:440px!important;margin:0 auto;max-height:none}
+  .auth-toggle{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px!important}
+  .auth-toggle button{min-width:0;white-space:normal}
+  .map-overlay,.otp-overlay{align-items:flex-start;overflow-y:auto;padding:12px}
+  .map-modal,.otp-modal{width:100%;max-width:480px;margin:auto 0}
+  .otp-modal{max-height:none}
+  .otp-box-row{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
+  .otp-box{min-width:0}
+  .otp-actions{grid-template-columns:1fr!important}
+  .otp-actions .btn{width:100%}
+  .bottom-nav{left:0;right:0;transform:none;border-radius:20px 20px 0 0}
+  .nav-btn{font-size:9px;letter-spacing:.25px;padding:4px 2px}
+}
+
+@media(max-width:420px){
+  .content{padding:10px 8px calc(90px + env(safe-area-inset-bottom,0px))}
+  .header-meta{width:100%}
+  .card{padding:12px;border-radius:12px}
+  .btn{font-size:12px}
+  .earn-grid,.cod-grid{grid-template-columns:1fr!important}
+  .cod-actions{grid-template-columns:1fr!important}
+  .otp-box-row{gap:4px}
+  .otp-box{font-size:18px;border-radius:10px}
 }
 `
 

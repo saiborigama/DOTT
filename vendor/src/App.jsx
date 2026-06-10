@@ -4,7 +4,14 @@ import axios from 'axios'
 const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const isRenderStaticSite = typeof window !== 'undefined' && /\.onrender\.com$/.test(window.location.hostname)
 const defaultBase = isRenderStaticSite ? 'https://dott-backend.onrender.com/api' : '/api'
-const BASE = (envBase && !(isRenderStaticSite && envBase === '/api') ? envBase : defaultBase).replace(/\/$/, '')
+function normalizeApiBase(value) {
+  let base = (value || defaultBase).trim().replace(/\/$/, '')
+  if (isRenderStaticSite && base === '/api') base = defaultBase
+  base = base.replace('https://backend.onrender.com', 'https://dott-backend.onrender.com')
+  if (/^https?:\/\/[^/]+\.onrender\.com$/i.test(base)) base = `${base}/api`
+  return base
+}
+const BASE = normalizeApiBase(envBase)
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_vendor_access')
@@ -706,10 +713,10 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
 .hub-count-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--primary-light);color:var(--primary-dark);font-size:11px;font-weight:800}
 @media(max-width:980px){
   .layout{display:block}
-  .auth-page{display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .auth-page{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:100svh;overflow:auto}
   .auth-visual,.auth-form-side{width:100%}
   .auth-visual{min-height:220px;padding:28px 20px}
-  .auth-form-side{min-height:100vh;padding:20px 14px 32px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%)}
+  .auth-form-side{min-height:100svh;padding:20px 14px 32px;background:linear-gradient(180deg,#eef7ff 0%,#ffffff 100%);justify-content:flex-start;overflow:visible}
   .auth-card{max-width:none;padding:24px 18px;border-radius:20px}
   .auth-tabs{margin-bottom:18px}
   .auth-location-card{padding:12px 14px}
@@ -777,10 +784,69 @@ body{background:linear-gradient(180deg,#f7fbff 0%,#eef7ff 48%,#f9fcff 100%);colo
   .table-head{display:none}
   .table-row{padding:12px;gap:10px;border-radius:14px;background:var(--surface);margin-bottom:10px;border:1px solid var(--border2)}
   .table-row:last-child{margin-bottom:0}
-  .auth-page{display:flex;align-items:center;justify-content:center}
-  .auth-form-side{min-height:100svh;padding:14px 12px 24px;justify-content:center}
-  .auth-card{padding:22px 16px;border-radius:18px}
+  .auth-page{display:flex;align-items:center;justify-content:flex-start;min-height:100svh;overflow:auto}
+  .auth-form-side{min-height:100svh;padding:12px 10px 18px;justify-content:flex-start;overflow:visible}
+  .auth-card{padding:18px 14px;border-radius:18px}
   .auth-location-card,.auth-tabs{gap:8px}
+}
+
+/* -- RESPONSIVE FIT GUARDRAILS -- */
+html,body,#root{width:100%;min-height:100%;overflow-x:hidden}
+img,video,canvas,svg{max-width:100%}
+button,input,select,textarea{max-width:100%}
+.layout,.main-content,.page,.card,.modal,.auth-page,.auth-card,.table-wrap,.order-card,.prod-card{min-width:0}
+.main-content{width:calc(100% - 240px);max-width:100vw;overflow-x:hidden}
+.page{width:100%;max-width:1180px}
+.card,.stat-card,.order-card,.prod-card,.modal{overflow-wrap:anywhere}
+.btn{min-height:42px;white-space:normal;text-align:center;line-height:1.2}
+.topbar-actions,.page-header-actions,.settings-hero-actions,.vendor-inline-actions,.vendor-sticky-actions{min-width:0}
+.tabs,.status-filter,.sidebar-nav{scrollbar-width:none}
+.tabs::-webkit-scrollbar,.status-filter::-webkit-scrollbar,.sidebar-nav::-webkit-scrollbar{display:none}
+
+@media(max-width:980px){
+  body{min-height:100svh}
+  .main-content{width:100%;max-width:100vw;overflow-x:hidden}
+  .page{padding-bottom:calc(112px + env(safe-area-inset-bottom,0px))}
+  .sidebar{z-index:220}
+  .sidebar-nav{max-width:100vw;overflow-x:auto;overscroll-behavior-x:contain}
+  .nav-item{min-width:70px;max-width:96px;overflow:hidden}
+  .nav-item span:not(.nav-badge){max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .auth-page{height:auto;min-height:100svh;overflow-y:auto;overflow-x:hidden}
+  .auth-form-side{width:100%;min-height:auto;padding-bottom:calc(28px + env(safe-area-inset-bottom,0px));overflow:visible}
+  .auth-form-wrap,.auth-card{width:100%;max-width:480px}
+  .auth-card{margin:0 auto}
+  .auth-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .auth-location-card{align-items:flex-start}
+  .overlay{align-items:flex-start;overflow-y:auto;padding:14px}
+  .modal{max-height:none;margin:auto 0;width:min(560px,100%)}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .table-row{min-width:0}
+}
+
+@media(max-width:560px){
+  .page{padding:14px 10px calc(112px + env(safe-area-inset-bottom,0px))}
+  .card,.stat-card,.order-card{border-radius:14px;padding:14px}
+  .btn{width:auto;min-width:0;padding:11px 12px}
+  .page-header-actions,.settings-hero-actions,.vendor-sticky-actions{display:grid!important;grid-template-columns:1fr;gap:8px;width:100%}
+  .page-header-actions .btn,.settings-hero-actions .btn,.vendor-sticky-actions .btn,.auth-card .btn{width:100%}
+  .auth-form-side{padding:12px 10px calc(20px + env(safe-area-inset-bottom,0px))}
+  .auth-card{padding:18px 14px;border-radius:18px;max-height:none}
+  .auth-tabs{margin-bottom:14px}
+  .auth-tabs button,.auth-tab{min-width:0;white-space:normal}
+  .auth-location-card{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;padding:12px}
+  .grid-2,.grid-3,.vendor-field-grid,.vendor-summary-grid,.settings-grid,.settings-health-grid{grid-template-columns:1fr!important}
+  .prod-grid,.prod-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .prod-card .pc-actions{display:grid;grid-template-columns:1fr;gap:8px}
+  .prod-card .pc-actions .btn{width:100%;font-size:12px}
+  .toast{left:10px;right:10px;top:12px;max-width:none}
+}
+
+@media(max-width:380px){
+  .prod-grid,.prod-grid.compact{grid-template-columns:1fr}
+  .nav-item{min-width:64px;padding:8px 10px}
+  .nav-item svg{width:18px;height:18px}
+  .card,.stat-card,.order-card,.modal{padding:12px;border-radius:12px}
+  .btn{font-size:12px}
 }
 `
 

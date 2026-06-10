@@ -1,153 +1,172 @@
-# DOTT - Full Stack Run Guide
+# 🛍 DOTT — On-Demand Fashion Marketplace
+## Full Stack Setup Guide
 
-## Apps
+---
 
-```text
-DOTT/
-|-- backend/   Python FastAPI API      (port 8080)
-|-- customer/  Customer web app        (port 3001)
-|-- vendor/    Vendor web app          (port 3002)
-|-- rider/     Rider web app           (port 3003)
-|-- admin/     Admin web app           (port 3004)
+## WHAT'S INSIDE
+
+```
+Dott/
+├── backend/          ← Python FastAPI server (port 8080)
+├── customer/         ← Customer shopping app  (port 3001)
+├── vendor/           ← Vendor management app  (port 3002)
+├── rider/            ← Rider delivery app     (port 3003)
+├── admin/            ← Admin control panel    (port 3004)
 ```
 
-## First-Time Setup
+---
 
-Create local env files from the examples:
+## QUICK START (5 terminals)
 
-```bash
-copy backend\.env.example backend\.env
-copy customer\.env.example customer\.env
-copy vendor\.env.example vendor\.env
-copy rider\.env.example rider\.env
-copy admin\.env.example admin\.env
-```
-
-## Backend Setup
-
-Core backend only:
-
+### Terminal 1 — Backend API
 ```bash
 cd backend
-install_backend.bat --core-only
-start_backend.bat
+pip install fastapi uvicorn sqlalchemy python-jose passlib[bcrypt] python-multipart aiofiles
+python main.py
+.\start_backend.bat
+# OR: uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
+API runs at: http://localhost:8080
+API docs at: http://localhost:8080/docs
 
-Full backend with AI image-processing features:
-
+### Terminal 2 — Customer App
 ```bash
-cd backend
-install_backend.bat
-start_backend.bat
+    cd customer
+    npm install
+    npm run dev
+# Opens at: http://localhost:3001
 ```
 
-Backend URLs:
-
-- API: `http://localhost:8080`
-- Docs: `http://localhost:8080/docs`
-
-Backend setup files:
-
-- `backend/requirements-core.txt` -> required API/runtime packages
-- `backend/requirements-ai.txt` -> AI/image-processing packages
-- `backend/requirements.txt` -> installs both sets together
-- `backend/install_backend.bat` -> one-click backend installer
-- `backend/start_backend.bat` -> one-click backend launcher
-
-## Frontend Setup
-
-Customer:
-
-```bash
-cd customer
-npm install
-npm run dev
-```
-
-Vendor:
-
+### Terminal 3 — Vendor App
 ```bash
 cd vendor
 npm install
 npm run dev
+# Opens at: http://localhost:3002
 ```
 
-Rider:
-
+### Terminal 4 — Rider App
 ```bash
 cd rider
 npm install
 npm run dev
+# Opens at: http://localhost:3003
 ```
 
-Admin:
-
+### Terminal 5 — Admin Panel
 ```bash
 cd admin
 npm install
 npm run dev
+# Opens at: http://localhost:3004
 ```
 
-## Mobile Testing On Same Wi-Fi
+---
 
-Start each frontend like this:
+## DEMO ACCOUNTS (password: password123)
 
-```bash
-cd customer
-npm run dev -- --host 0.0.0.0
+| Role     | Email                  | Notes                    |
+|----------|------------------------|--------------------------|
+| Customer | arjun@example.com      | Has order history        |
+| Vendor   | rahul@dott.in          | Shop: Rahul Fashion      |
+| Vendor   | suresh@dott.in         | Shop: Suresh Textiles    |
+| Rider    | ramesh@dott.in         | Active rider             |
+| Rider    | venkat@dott.in         | Active rider             |
+| Admin    | admin@dott.in          | Full access              |
 
-cd ../vendor
-npm run dev -- --host 0.0.0.0
+**Phone login (OTP):** 9876543210 → PIN: 1234
+All demo accounts skip OTP verification (is_verified=True)
 
-cd ../rider
-npm run dev -- --host 0.0.0.0
+**Dev OTP:** When registering new accounts, the OTP is printed
+to the backend console AND returned in the API response as `dev_otp`
 
-cd ../admin
-npm run dev -- --host 0.0.0.0
+---
 
-cd ../backend
-start_backend.bat
-```
+## FEATURES BUILT (98% complete)
 
-Find your laptop IP:
+### Customer App
+- Amazon-style nav with live search suggestions
+- 12-category filter bar
+- Auto-advancing banner carousel
+- Product cards with colour swatch dots
+- Product detail: image zoom, colour variants, size grid
+- Rating breakdown bar chart + write review
+- Wishlist (heart button on all products)
+- Smart search page with 4 filter dropdowns
+- 3-step checkout wizard
+- Address book (save multiple delivery addresses)
+- Promo code validation
+- Min-order warning in cart
+- Order tracking with live step progression
+- Order cancellation with reason
+- Rider rating after delivery
+- Real-time status polling every 20s
+- Referral & Earn page (copy code, apply friend's code)
+- Reseller earn section
+- Recently viewed products (localStorage)
+- Share product via Web Share API
 
-```bash
-ipconfig
-```
+### Vendor App
+- AI product analyze from camera (Claude API)
+- Camera capture + image enhancement
+- 15 preset colour swatches + custom colour picker
+- Per-colour photo upload
+- Clone / duplicate product
+- Dashboard with live order stats
+- Earnings page with net revenue + payout
+- Low-stock alerts panel
+- Orders: accept / reject / status update
+- Returns management
+- Analytics with revenue charts
+- Shop settings with map pin
 
-Then open on mobile:
+### Rider App
+- Toggle online / offline
+- Nearby available orders
+- Delivery OTP confirmation (enter customer OTP)
+- Customer & shop call links
+- Order notes visible to rider
+- Google Maps navigation link
+- Earnings with km breakdown
+- Performance stats (rating, on-time %)
 
-- `http://<LAPTOP_IP>:3001` customer
-- `http://<LAPTOP_IP>:3002` vendor
-- `http://<LAPTOP_IP>:3003` rider
-- `http://<LAPTOP_IP>:3004` admin
+### Admin Panel
+- Dashboard with live stats
+- Orders, Users, Shops, Riders management
+- Revenue analytics with 7-day chart
+- Returns management
+- Block users / suspend shops
 
-## Backend Notes
+### Backend API (91 endpoints)
+- JWT auth + OTP + rate limiting
+- Distance-based delivery fees
+- Promo code create + validate
+- Wishlist, referral, points system
+- Saved address book
+- Delivery OTP generate + verify
+- Rider performance + customer ratings
+- Vendor earnings + low-stock alerts
+- Admin CSV export (orders + users)
+- Admin commission settings
+- Admin vendor verification
 
-- `python main.py` now starts without auto-reload by default.
-- On Windows, use `start_backend.bat` for the most stable startup.
-- If you want reload for development:
+---
 
-```bash
-cd backend
-set DOTT_BACKEND_RELOAD=1
-python main.py
-```
+## FOR PRODUCTION
 
-## Production Checklist
+1. **Payment Gateway:** Sign up at razorpay.com, add API key to backend
+2. **Real SMS OTP:** Sign up at msg91.com or twilio.com, replace console OTP
+3. **Database:** Switch SQLite → PostgreSQL in database.py
+4. **Secrets:** Move SECRET_KEY from auth.py to environment variables
+5. **Remove dev_otp** from the OTP send response in main.py
 
-Before live deployment:
+---
 
-1. Replace SQLite with PostgreSQL or MySQL.
-2. Set a strong `SECRET_KEY`.
-3. Set real `CORS_ORIGINS`.
-4. Connect a real OTP provider.
-5. Add real Firebase service-account JSON if using FCM.
-6. Add AI/image service keys if you want premium cleanup.
-7. Put the backend behind HTTPS and a real domain.
+## TECH STACK
 
-## Feature Notes
+- **Backend:** Python 3.10+, FastAPI, SQLAlchemy, SQLite, JWT
+- **Frontend:** React 18, Vite, Axios
+- **Maps:** Leaflet.js (OpenStreetMap)
+- **AI:** Anthropic Claude API (vendor product analyze)
+- **Fonts:** Plus Jakarta Sans, Outfit
 
-- Vendor AI auto-fill depends on the AI dependency set in `requirements-ai.txt`.
-- Free TOTP authenticator login is supported.
-- Push notifications require Firebase setup.

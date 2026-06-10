@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     public_base_url: str = "http://localhost:8080"
-    cors_origins: str = "http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:5173"
-    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    cors_origins: str = "http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:5173,https://dott-customer.onrender.com,https://dott-vendor.onrender.com,https://dott-rider.onrender.com,https://dott-admin.onrender.com"
+    cors_origin_regex: str = r"^https?://((localhost|127\.0\.0\.1)(:\d+)?|.*\.onrender\.com)$"
     gemini_api_key: str = ""
     google_api_key: str = ""
     google_generative_ai_api_key: str = ""

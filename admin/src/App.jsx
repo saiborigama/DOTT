@@ -1,7 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const isRenderStaticSite = typeof window !== 'undefined' && /\.onrender\.com$/.test(window.location.hostname)
+const defaultBase = isRenderStaticSite ? 'https://dott-backend.onrender.com/api' : '/api'
+function normalizeApiBase(value) {
+  let base = (value || defaultBase).trim().replace(/\/$/, '')
+  if (isRenderStaticSite && base === '/api') base = defaultBase
+  base = base.replace('https://backend.onrender.com', 'https://dott-backend.onrender.com')
+  if (/^https?:\/\/[^/]+\.onrender\.com$/i.test(base)) base = `${base}/api`
+  return base
+}
+const BASE = normalizeApiBase(envBase)
 const ax = axios.create({ baseURL: BASE })
 ax.interceptors.request.use(cfg => {
   const t = localStorage.getItem('dott_admin_access')
