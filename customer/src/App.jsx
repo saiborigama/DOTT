@@ -2136,17 +2136,30 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
 }
 
 @media(max-width:600px){
-  .topnav{position:sticky!important;top:0!important;z-index:500!important;padding:8px 8px 6px!important;background:linear-gradient(180deg,#eaf6ff,#dff1ff)!important;box-shadow:0 12px 28px rgba(35,135,232,.14)!important}
+  .topnav{position:fixed!important;top:0!important;left:0!important;right:0!important;width:100%!important;z-index:700!important;padding:8px 8px 6px!important;background:linear-gradient(180deg,#eaf6ff,#dff1ff)!important;box-shadow:0 12px 28px rgba(35,135,232,.14)!important}
+  .topnav + main{padding-top:102px!important}
   .topnav.topnav-compact .topnav-loc{max-height:none!important;opacity:1!important;margin-top:0!important;padding-bottom:6px!important;transform:none!important;pointer-events:auto!important}
   .topnav-inner{grid-template-columns:auto minmax(0,1fr) auto!important;min-height:58px!important;background:#fff!important;border:1px solid rgba(207,230,251,.95)!important;box-shadow:0 10px 24px rgba(56,73,89,.08)!important}
+  .topnav-loc{margin-top:4px!important;padding:0 8px 4px!important;max-height:32px!important}
+  .topnav-loc-card{min-height:28px!important;padding:4px 10px!important;border-radius:999px!important;justify-content:flex-start!important;gap:6px!important;box-shadow:0 6px 16px rgba(56,73,89,.06)!important;cursor:pointer!important}
+  .topnav-loc-icon{width:18px!important;height:18px!important;border-radius:999px!important;background:#4aa8ff!important}
+  .topnav-loc-icon svg{width:12px!important;height:12px!important}
+  .topnav-loc-copy{display:flex!important;align-items:center!important;gap:5px!important;min-width:0!important}
+  .topnav-loc-copy strong{font-size:10px!important;letter-spacing:0!important;text-transform:none!important;color:#1d6fb8!important;flex-shrink:0!important}
+  .topnav-loc-copy span{font-size:11px!important;margin-top:0!important;max-width:calc(100vw - 122px)!important;color:#4b6478!important}
+  .topnav-loc-points{display:none!important}
   .search-box{display:flex!important;min-height:42px!important;border:1px solid rgba(207,230,251,.95)!important;box-shadow:none!important}
   .search-cat{display:block!important;min-width:58px!important;width:58px!important;padding:0 6px!important;font-size:11px!important}
   .search-inp{font-size:13px!important}
   .nav-acts .nav-act:not(:first-child):not(:last-child){display:none!important}
-  .catbar{position:sticky!important;top:132px!important;z-index:450!important;background:rgba(255,255,255,.96)!important;border-bottom:1px solid rgba(207,230,251,.9)!important;box-shadow:0 12px 26px rgba(35,135,232,.08)!important}
-  .catbar.compact{top:132px!important;max-height:none!important;padding:0!important;border-radius:0!important;max-width:100%!important}
-  .catbar-inner{padding:0 10px!important;gap:6px!important}
-  .cat-btn{min-height:42px!important;padding:9px 12px!important;border-bottom-width:2px!important}
+  .catbar{position:sticky!important;top:102px!important;z-index:450!important;background:rgba(255,255,255,.96)!important;border-bottom:1px solid rgba(207,230,251,.9)!important;box-shadow:0 12px 26px rgba(35,135,232,.08)!important}
+  .catbar.catbar-floating{position:fixed!important;left:0!important;right:0!important;top:102px!important;z-index:650!important;max-width:100%!important;margin:0!important;border-radius:0!important}
+  .catbar.catbar-floating + .wrap{padding-top:38px!important}
+  .catbar.compact{top:102px!important;max-height:none!important;padding:0!important;border-radius:0!important;max-width:100%!important}
+  .catbar-inner{padding:0 10px!important;gap:18px!important}
+  .cat-btn{min-height:34px!important;padding:8px 0 9px!important;border:none!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;color:#5f7184!important}
+  .cat-btn.on{color:#1d6fb8!important;border-color:transparent!important;background:transparent!important;box-shadow:none!important}
+  .cat-btn.on::before{content:'';position:absolute;left:0;right:0;bottom:2px;height:3px;border-radius:999px;background:#2f8fe2}
   .cat-label{font-size:12px!important;font-weight:900!important}
   .banner-wrap{margin-top:10px!important}
 }
@@ -6487,6 +6500,8 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
 
   return(
     <div>
+      <BannerCarousel onCtaClick={onProductSearch||onSearchPage}/>
+
       {/* Category bar */}
       <div className="catbar">
         <div className="catbar-inner">
@@ -6499,8 +6514,6 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
           ))}
         </div>
       </div>
-
-      <BannerCarousel onCtaClick={onProductSearch||onSearchPage}/>
 
       <div className="wrap">
         {/* Clothes first */}
@@ -7005,8 +7018,22 @@ export default function App(){
 
   useEffect(()=>{
     if(typeof window==='undefined' || typeof document==='undefined') return
-    document.querySelectorAll('.topnav').forEach(el=>el.classList.remove('topnav-compact'))
-    document.querySelectorAll('.catbar').forEach(el=>el.classList.remove('compact'))
+    const syncFloatingCategory = () => {
+      const shouldFloat = page === 'home' && !showCart && !showCheckout && (window.scrollY || document.documentElement.scrollTop || 0) > 40
+      document.querySelectorAll('.topnav').forEach(el=>el.classList.remove('topnav-compact'))
+      document.querySelectorAll('.catbar').forEach(el=>{
+        el.classList.remove('compact')
+        el.classList.toggle('catbar-floating', shouldFloat)
+      })
+    }
+    syncFloatingCategory()
+    window.addEventListener('scroll', syncFloatingCategory, { passive:true })
+    window.addEventListener('resize', syncFloatingCategory)
+    return()=>{
+      window.removeEventListener('scroll', syncFloatingCategory)
+      window.removeEventListener('resize', syncFloatingCategory)
+      document.querySelectorAll('.catbar').forEach(el=>el.classList.remove('catbar-floating'))
+    }
   },[page,showCart,showCheckout])
 
   useEffect(()=>{
@@ -7274,7 +7301,7 @@ export default function App(){
           </div>
         </div>
         <div className="topnav-loc">
-          <div className="topnav-loc-card">
+          <div className="topnav-loc-card" onClick={()=>setShowLocMap(true)}>
             <div className="topnav-loc-main">
               <div className="topnav-loc-icon">
                 <Ic.Home width={18} height={18} stroke="#fff"/>
