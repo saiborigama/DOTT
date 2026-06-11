@@ -272,6 +272,14 @@ function formatRiderMoney(value) {
   return `Rs ${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
 }
 
+function riderPayable(order = {}) {
+  const deliveryFee = Number(order.deliveryFee ?? order.deliveryCharge ?? 0)
+  const earning = Number(order.riderEarning ?? order.earning ?? 0)
+  if (deliveryFee <= 0) return Math.max(0, earning)
+  if (earning <= 0) return deliveryFee
+  return Math.min(earning, deliveryFee)
+}
+
 function formatRiderDate(value) {
   if (!value) return 'Not settled yet'
   try {
@@ -406,9 +414,9 @@ function createDemoRiderDb() {
     },
   ]
   const history = [
-    { id: 'hist-1', orderCode: 'NN2301', shopName: 'NearNow Fashion Hub', earning: 84, total: 999, customerName: 'Sai Kumar', customerPhone: '6303142328', deliveryCharge: 40, paymentMethod: 'cod', codDueAmount: 999, deliveredAt: new Date(now - 1000 * 60 * 60 * 20).toISOString() },
-    { id: 'hist-2', orderCode: 'NN2297', shopName: 'Skyline Dresses', earning: 92, total: 1299, customerName: 'Bhavana', customerPhone: '9012345678', deliveryCharge: 55, paymentMethod: 'online', codDueAmount: 0, deliveredAt: new Date(now - 1000 * 60 * 60 * 28).toISOString() },
-    { id: 'hist-3', orderCode: 'NN2289', shopName: 'White Petal Studio', earning: 76, total: 899, customerName: 'Asha', customerPhone: '9123456780', deliveryCharge: 35, paymentMethod: 'cod', codDueAmount: 899, deliveredAt: new Date(now - 1000 * 60 * 60 * 35).toISOString() },
+    { id: 'hist-1', orderCode: 'NN2301', shopName: 'NearNow Fashion Hub', earning: 40, total: 999, customerName: 'Sai Kumar', customerPhone: '6303142328', deliveryCharge: 40, paymentMethod: 'cod', codDueAmount: 999, deliveredAt: new Date(now - 1000 * 60 * 60 * 20).toISOString() },
+    { id: 'hist-2', orderCode: 'NN2297', shopName: 'Skyline Dresses', earning: 55, total: 1299, customerName: 'Bhavana', customerPhone: '9012345678', deliveryCharge: 55, paymentMethod: 'online', codDueAmount: 0, deliveredAt: new Date(now - 1000 * 60 * 60 * 28).toISOString() },
+    { id: 'hist-3', orderCode: 'NN2289', shopName: 'White Petal Studio', earning: 35, total: 899, customerName: 'Asha', customerPhone: '9123456780', deliveryCharge: 35, paymentMethod: 'cod', codDueAmount: 899, deliveredAt: new Date(now - 1000 * 60 * 60 * 35).toISOString() },
   ]
   const codSettlements = [
     { id: `cod-settle-${now - 1000 * 60 * 60 * 12}`, amount: 500, method: 'phonepe', paymentDate: new Date(now - 1000 * 60 * 60 * 12).toISOString(), note: 'COD settlement to DOTT' },
@@ -440,10 +448,10 @@ function saveDemoRiderDb(db) {
 
 function getDemoRiderEarnings(db) {
   const deliveredCount = db.history.length + db.activeOrders.filter(o => o.status === 'DELIVERED').length
-  const deliveredEarned = db.history.reduce((sum, item) => sum + Number(item.earning || 0), 0)
+  const deliveredEarned = db.history.reduce((sum, item) => sum + riderPayable(item), 0)
   const activeEarned = db.activeOrders
     .filter(o => ['PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(o.status))
-    .reduce((sum, item) => sum + Number(item.riderEarning || Math.round((item.total || 0) * 0.08)), 0)
+    .reduce((sum, item) => sum + riderPayable(item), 0)
   return {
     today: { earned: 184, trips: 2 },
     week: { earned: 960, trips: 11 },
@@ -622,7 +630,7 @@ const api = {
           id: `hist-${Date.now()}`,
           orderCode: delivered.orderCode,
           shopName: delivered.shop?.name || 'NearNow Shop',
-          earning: delivered.riderEarning || Math.round((delivered.total || 0) * 0.08),
+          earning: riderPayable(delivered),
           total: delivered.total,
           paymentMethod: delivered.paymentMethod || 'online',
           codDueAmount: delivered.codDueAmount || ((delivered.paymentMethod || '').toLowerCase() === 'cod' ? delivered.total : 0),
@@ -656,7 +664,7 @@ const api = {
         id: `hist-${Date.now()}`,
         orderCode: order.orderCode,
         shopName: order.shop?.name || 'NearNow Shop',
-        earning: order.riderEarning || Math.round((order.total || 0) * 0.08),
+        earning: riderPayable(order),
         total: order.total,
         paymentMethod: order.paymentMethod || 'online',
         codDueAmount: order.codDueAmount || ((order.paymentMethod || '').toLowerCase() === 'cod' ? order.total : 0),
@@ -1872,7 +1880,7 @@ function HomeTab({
               </div>
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>{o.deliveryAddress?.substring(0, 55)}...</div>
               <div style={{ marginTop: 10, display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
-                <div style={{ fontWeight: 900, fontSize: 18, color: '#3fb950', fontFamily: 'var(--font)' }}>+Rs {o.riderEarning || Math.round(o.total * 0.08)} earning</div>
+                <div style={{ fontWeight: 900, fontSize: 18, color: '#1d6fb8', fontFamily: 'var(--font)' }}>+Rs {riderPayable(o)} earning</div>
                 <span style={{ fontSize:12, fontWeight:800, color:'var(--green2)' }}>Open details</span>
               </div>
             </button>
@@ -2015,7 +2023,7 @@ function NearbyTab({ isOnline, loc, showToast, onAccepted, deliveryRangeKm, orde
                 {o.items?.length > 2 && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>+{o.items.length - 2} more</div>}
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 900, fontSize: 22, color: '#3fb950', fontFamily: 'var(--font)' }}>+Rs {Math.round(o.total * 0.08)}</div>
+                <div style={{ fontWeight: 900, fontSize: 22, color: '#1d6fb8', fontFamily: 'var(--font)' }}>+Rs {riderPayable(o)}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 11 }}>your earning</div>
               </div>
             </div>
@@ -2236,8 +2244,8 @@ function ActiveTab({ showToast, riderLoc }) {
 
             <div className="mobile-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap:10 }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
-                <div style={{ fontWeight: 900, fontSize: 17, color: '#3fb950', fontFamily: 'var(--font)' }}>
-                  +Rs {o.riderEarning || Math.round(o.total * 0.08)} <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>earning</span>
+                <div style={{ fontWeight: 900, fontSize: 17, color: '#1d6fb8', fontFamily: 'var(--font)' }}>
+                  +Rs {riderPayable(o)} <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>earning</span>
                 </div>
 {o.placedAt && <DeliveryCountdownSync placedAt={o.placedAt} deadline={o.deliveryDeadline||o.countdown?.deadline} serverNow={o.countdown?.serverNow} compact={true} />}
               </div>

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, func, inspect, select, text
 
@@ -9,10 +9,24 @@ from database import Base
 
 
 ROOT = Path(__file__).resolve().parent
-SQLITE_URL = f"sqlite:///{(ROOT / 'dott.db').as_posix()}"
-POSTGRES_URL = (
-    f"postgresql+psycopg://postgres:{quote_plus('Sai@2002')}@localhost:5432/DOTT"
-)
+
+
+def normalize_postgres_url(value: str) -> str:
+    raw = (value or "").strip()
+    if raw.startswith("postgres://"):
+        return "postgresql+psycopg://" + raw[len("postgres://"):]
+    if raw.startswith("postgresql://"):
+        return "postgresql+psycopg://" + raw[len("postgresql://"):]
+    return raw
+
+
+SQLITE_URL = os.getenv("SQLITE_URL", f"sqlite:///{(ROOT / 'dott.db').as_posix()}")
+POSTGRES_URL = normalize_postgres_url(os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL") or "")
+
+if not POSTGRES_URL:
+    raise SystemExit(
+        "Set POSTGRES_URL or DATABASE_URL to your Render PostgreSQL external connection string."
+    )
 
 
 def reset_postgres_sequences(conn) -> None:

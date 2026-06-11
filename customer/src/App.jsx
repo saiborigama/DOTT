@@ -284,6 +284,29 @@ async function reverseGeocodeDeliveryAddress(userLoc){
   }
   return label
 }
+async function searchLocationPlaces(query){
+  const q = String(query || '').trim()
+  if(q.length < 2) return []
+  const cacheKey = `dott_place_search_${q.toLowerCase()}`
+  try{
+    const cached = sessionStorage.getItem(cacheKey)
+    if(cached) return JSON.parse(cached)
+  }catch{}
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}&limit=6&addressdetails=1&accept-language=en`
+  const res = await fetch(url, { headers:{ Accept:'application/json', 'Accept-Language':'en' } })
+  if(!res.ok) throw new Error('Location search failed')
+  const rows = await res.json()
+  const places = (Array.isArray(rows) ? rows : [])
+    .map(item=>({
+      label: sanitizeAddressText(item.display_name || item.name || q),
+      lat: Number(item.lat),
+      lng: Number(item.lon),
+      type: item.type || item.class || 'place',
+    }))
+    .filter(item=>Number.isFinite(item.lat) && Number.isFinite(item.lng) && item.label)
+  try{sessionStorage.setItem(cacheKey, JSON.stringify(places))}catch{}
+  return places
+}
 function geolocationNeedsSecureContext(){
   if(typeof window === 'undefined') return false
   const host = window.location?.hostname || ''
@@ -2011,6 +2034,22 @@ img{display:block}
 }
 .auth-tab-row{background:#edf5ff}
 .auth-tab.on{color:var(--bl2)}
+.acct-shell .btn-or,
+.acct-shell .btn-nv{
+  background:linear-gradient(135deg,#69bbff,#4aa8ff)!important;
+  color:#fff!important;
+  box-shadow:0 14px 34px rgba(74,168,255,.22)!important
+}
+.acct-shell .btn-or:hover,
+.acct-shell .btn-nv:hover{
+  box-shadow:0 18px 36px rgba(74,168,255,.28)!important
+}
+.acct-shell .acct-stat-card,
+.acct-shell .acct-style-card,
+.acct-shell .acct-card{
+  border-color:rgba(207,230,251,.92)!important;
+  background:linear-gradient(135deg,#fff,#f4fbff)!important
+}
 .search-kicker,
 .hero-kicker,
 .banner-badge,
@@ -2087,6 +2126,47 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
   .deal-grid{grid-template-columns:1fr!important}
   .btn,.auth-submit-btn{font-size:12px}
   .auth-otp-input{width:34px;height:46px}
+}
+
+/* FINAL MOBILE HOME/AUTH FIXES */
+.home-time-strip{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 18px;background:rgba(255,255,255,.94);border-bottom:1px solid rgba(207,230,251,.9);
+  box-shadow:0 10px 24px rgba(35,135,232,.06);position:relative;z-index:190
+}
+.home-time-main{display:flex;align-items:baseline;gap:8px;min-width:0}
+.home-time-clock{font-size:18px;font-weight:900;color:var(--nv);letter-spacing:-.2px;white-space:nowrap}
+.home-time-date{font-size:11px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.35px;white-space:nowrap}
+.home-time-meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;font-size:11px;font-weight:800;color:var(--bl2);white-space:nowrap}
+.home-time-meta span{display:inline-flex;align-items:center;border:1px solid rgba(207,230,251,.92);background:#f8fcff;border-radius:999px;padding:5px 8px}
+.home-time-location{max-width:180px;overflow:hidden;text-overflow:ellipsis}
+
+@media(max-width:720px){
+  .auth-page{display:flex!important;align-items:center!important;justify-content:center!important;min-height:100svh!important;height:100svh!important;overflow:auto!important;padding:0!important}
+  .auth-right{min-height:100svh!important;height:auto!important;align-items:center!important;justify-content:center!important;padding:14px!important;overflow:visible!important}
+  .auth-form-box{height:auto!important;min-height:0!important;align-items:center!important;justify-content:center!important;padding:0!important}
+  .auth-card{min-height:auto!important;max-height:calc(100svh - 28px)!important;overflow:auto!important;margin:auto!important}
+}
+
+@media(max-width:600px){
+  .topnav{position:sticky!important;top:0!important;z-index:500!important;padding:8px 8px 6px!important;background:linear-gradient(180deg,#eaf6ff,#dff1ff)!important;box-shadow:0 12px 28px rgba(35,135,232,.14)!important}
+  .topnav.topnav-compact .topnav-loc{max-height:none!important;opacity:1!important;margin-top:0!important;padding-bottom:6px!important;transform:none!important;pointer-events:auto!important}
+  .topnav-inner{grid-template-columns:auto minmax(0,1fr) auto!important;min-height:58px!important;background:#fff!important;border:1px solid rgba(207,230,251,.95)!important;box-shadow:0 10px 24px rgba(56,73,89,.08)!important}
+  .search-box{display:flex!important;min-height:42px!important;border:1px solid rgba(207,230,251,.95)!important;box-shadow:none!important}
+  .search-cat{display:block!important;min-width:58px!important;width:58px!important;padding:0 6px!important;font-size:11px!important}
+  .search-inp{font-size:13px!important}
+  .nav-acts .nav-act:not(:first-child):not(:last-child){display:none!important}
+  .catbar{position:sticky!important;top:132px!important;z-index:450!important;background:rgba(255,255,255,.96)!important;border-bottom:1px solid rgba(207,230,251,.9)!important;box-shadow:0 12px 26px rgba(35,135,232,.08)!important}
+  .catbar.compact{top:132px!important;max-height:none!important;padding:0!important;border-radius:0!important;max-width:100%!important}
+  .catbar-inner{padding:0 10px!important;gap:6px!important}
+  .cat-btn{min-height:42px!important;padding:9px 12px!important;border-bottom-width:2px!important}
+  .cat-label{font-size:12px!important;font-weight:900!important}
+  .home-time-strip{padding:8px 12px;align-items:flex-start;flex-direction:column;gap:6px}
+  .home-time-clock{font-size:17px}
+  .home-time-meta{width:100%;justify-content:flex-start;overflow-x:auto;scrollbar-width:none}
+  .home-time-meta::-webkit-scrollbar{display:none}
+  .home-time-location{max-width:220px}
+  .banner-wrap{margin-top:10px!important}
 }
 
 `
@@ -2263,6 +2343,36 @@ function LiveOrderMap({order, riderLocation}){
         <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#1d6fb8',boxShadow:'var(--sh0)'}}>S Shop</span>
         <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#16a34a',boxShadow:'var(--sh0)'}}>H Home</span>
         <span style={{padding:'7px 10px',borderRadius:999,background:'rgba(255,255,255,.92)',fontSize:11,fontWeight:900,color:'#f97316',boxShadow:'var(--sh0)'}}>{hasRider?'Bike Rider live':'Bike Waiting for GPS'}</span>
+      </div>
+    </div>
+  )
+}
+
+function useLiveClock(){
+  const [now,setNow]=useState(()=>new Date())
+  useEffect(()=>{
+    const tick=()=>setNow(new Date())
+    tick()
+    const timer=setInterval(tick,1000)
+    return()=>clearInterval(timer)
+  },[])
+  return now
+}
+
+function HomeTimeStrip({locationLabel='', shopCount=0, productCount=0}){
+  const now=useLiveClock()
+  const time=now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})
+  const date=now.toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short'})
+  return(
+    <div className="home-time-strip">
+      <div className="home-time-main">
+        <span className="home-time-clock">{time}</span>
+        <span className="home-time-date">{date}</span>
+      </div>
+      <div className="home-time-meta">
+        <span>{shopCount || 0} shops</span>
+        <span>{productCount || 0} products</span>
+        {locationLabel&&<span className="home-time-location">{locationLabel}</span>}
       </div>
     </div>
   )
@@ -2536,6 +2646,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
   const[otpDigits,setOtpDigits]=useState(['','','','','',''])
   const[otpSending,setOtpSending]=useState(false)
   const[otpPreview,setOtpPreview]=useState('')
+  const[otpDelivery,setOtpDelivery]=useState('')
   const[otpTimer,setOtpTimer]=useState(0)
   const[loc,setLoc]=useState(null)
   const[showPass,setShowPass]=useState(false)
@@ -2570,12 +2681,14 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
       if(phone.length!==10){setErr('Enter your 10-digit phone number');return}
       if(String(form.password||'').length<6){setErr('Password must be at least 6 characters');return}
     }
-    setOtpSending(true);setErr('');setOtpPreview('')
+    setOtpSending(true);setErr('');setOtpPreview('');setOtpDelivery('')
     try{
       const r=await api.sendOtp(email)
       const demoOtp = r.data?.devOtp || r.data?.otp || ''
+      const delivery = r.data?.delivery || ''
       setOtpPreview(demoOtp)
-      if(demoOtp) setErr(`Email OTP is not configured. Demo OTP: ${demoOtp}`)
+      setOtpDelivery(delivery)
+      if(demoOtp) setErr(`Email OTP is not configured on the server. Demo OTP: ${demoOtp}`)
       setOtpStep('otp');startTimer()
       setTimeout(()=>otpRefs[0].current?.focus(),100)
     }catch(e){setErr(e.response?.data?.detail||e.message||'OTP failed')}
@@ -2619,7 +2732,7 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
     setLoading(false)
   }
 
-  const switchTab=(t)=>{setTab(t);setOtpStep('form');setOtpDigits(['','','','','','']);setOtpPreview('');setErr('');setLoginMethod('otp');setShowPass(false);setForm({name:'',email:'',phone:'',password:'',totpCode:''})}
+  const switchTab=(t)=>{setTab(t);setOtpStep('form');setOtpDigits(['','','','','','']);setOtpPreview('');setOtpDelivery('');setErr('');setLoginMethod('otp');setShowPass(false);setForm({name:'',email:'',phone:'',password:'',totpCode:''})}
 
   const FEATURES=[
     {icon:<Ic.Shop  width={18} height={18} stroke="var(--or)"/>, text:'Shop from local fashion stores'},
@@ -2733,8 +2846,8 @@ function AuthModal({onSuccess,onClose,initialTab='login',onExploreTag}){
             <div className="auth-scroll-panel" style={{animation:'slideRight .3s ease'}}>
               <div style={{textAlign:'center',padding:'20px',background:'linear-gradient(135deg,var(--orl),#fffbeb)',borderRadius:'var(--r12)',border:'2px solid var(--orm)',marginBottom:20}}>
                 <div style={{width:56,height:56,borderRadius:14,background:'var(--orl)',border:'2px solid var(--orm)',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 10px'}}><svg width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='var(--ord)' strokeWidth='2' strokeLinecap='round'><rect x='5' y='2' width='14' height='20' rx='2' ry='2'/><line x1='12' y1='18' x2='12.01' y2='18'/></svg></div>
-                <div style={{fontWeight:800,fontSize:16,color:'var(--ord)'}}>OTP sent to {form.email}</div>
-                <div style={{fontSize:12,color:'var(--mu)',marginTop:4}}>Enter the 6-digit code below</div>
+                <div style={{fontWeight:800,fontSize:16,color:'var(--ord)'}}>{otpDelivery==='email' ? `OTP sent to ${form.email}` : 'Demo OTP generated'}</div>
+                <div style={{fontSize:12,color:'var(--mu)',marginTop:4}}>{otpDelivery==='email' ? 'Enter the 6-digit code from your email' : 'Configure SMTP on Render to send real email OTPs'}</div>
                 {otpPreview&&<div style={{fontSize:13,color:'var(--nv)',marginTop:8,fontWeight:800}}>Demo OTP: {otpPreview}</div>}
               </div>
 
@@ -6279,14 +6392,6 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
         ])
         let shopsData=Array.isArray(sr.data)?sr.data:[]
         let sourceProducts=Array.isArray(pr.data)?pr.data:[]
-        if(sourceProducts.length===0 && userLoc?.lat!=null && userLoc?.lng!=null){
-          const fallback=await api.getProducts()
-          sourceProducts=Array.isArray(fallback.data)?fallback.data:[]
-        }
-        if(shopsData.length===0 && userLoc?.lat!=null && userLoc?.lng!=null){
-          const fallback=await api.getShops()
-          shopsData=Array.isArray(fallback.data)?fallback.data:[]
-        }
         const prods=sourceProducts.map(p=>{
           const linkedShop=shopsData.find(s=>s.id===p.shopId)
           return {
@@ -6429,7 +6534,7 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
 
   return(
     <div>
-      <BannerCarousel onCtaClick={onProductSearch||onSearchPage}/>
+      <HomeTimeStrip locationLabel={userLoc ? 'Near your selected location' : 'Set delivery location'} shopCount={shops.length} productCount={products.length}/>
 
       {/* Category bar */}
       <div className="catbar">
@@ -6443,6 +6548,8 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
           ))}
         </div>
       </div>
+
+      <BannerCarousel onCtaClick={onProductSearch||onSearchPage}/>
 
       <div className="wrap">
         {/* Clothes first */}
@@ -6583,6 +6690,9 @@ function MapLocationModal({currentLat,currentLng,radius,onSave,onClose,savedAddr
   const[locating,setLocating]=useState(false)
   const[locErr,setLocErr]=useState('')
   const[locInfo,setLocInfo]=useState('')
+  const[placeQuery,setPlaceQuery]=useState('')
+  const[placeLoading,setPlaceLoading]=useState(false)
+  const[placeResults,setPlaceResults]=useState([])
   const savedLocationChoices = Array.isArray(savedAddresses)
     ? savedAddresses.filter(a=>a?.lat != null && a?.lng != null).slice(0,3)
     : []
@@ -6612,6 +6722,23 @@ function MapLocationModal({currentLat,currentLng,radius,onSave,onClose,savedAddr
       .finally(()=>setLocating(false))
   },[])
 
+  const runPlaceSearch=useCallback(()=>{
+    const q = String(placeQuery || '').trim()
+    if(q.length < 2){
+      setLocErr('Type at least 2 letters to search a location')
+      return
+    }
+    setPlaceLoading(true)
+    setLocErr('')
+    searchLocationPlaces(q)
+      .then(results=>{
+        setPlaceResults(results)
+        if(results.length===0) setLocErr('No location found. Try area, city, or pincode.')
+      })
+      .catch(()=>setLocErr('Location search failed. Try again.'))
+      .finally(()=>setPlaceLoading(false))
+  },[placeQuery])
+
   useEffect(()=>{
     if(currentLat == null || currentLng == null) detectCurrentLocation()
   },[currentLat,currentLng,detectCurrentLocation])
@@ -6625,6 +6752,44 @@ function MapLocationModal({currentLat,currentLng,radius,onSave,onClose,savedAddr
             {lockSelection&&<div style={{fontSize:12,color:'var(--mu)',marginTop:4}}>Choose your delivery area first to see nearby shops and products.</div>}
           </div>
           {!lockSelection&&<button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:'var(--mu)'}}>x</button>}
+        </div>
+
+        <div style={{marginBottom:12}}>
+          <div style={{display:'flex',gap:8,alignItems:'stretch'}}>
+            <input
+              value={placeQuery}
+              onChange={e=>setPlaceQuery(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter') runPlaceSearch()}}
+              placeholder="Search area, city, pincode"
+              style={{flex:1,minWidth:0,border:'1.5px solid var(--br)',borderRadius:14,padding:'12px 13px',fontSize:14,fontWeight:700,outline:'none',background:'#fff'}}
+            />
+            <button className="btn btn-or" style={{minWidth:92,justifyContent:'center'}} onClick={runPlaceSearch} disabled={placeLoading}>
+              {placeLoading ? '...' : 'Search'}
+            </button>
+          </div>
+          {placeResults.length>0&&(
+            <div style={{display:'grid',gap:7,marginTop:9,maxHeight:168,overflow:'auto',paddingRight:2}}>
+              {placeResults.map((place,idx)=>(
+                <button
+                  key={`${place.lat}-${place.lng}-${idx}`}
+                  type="button"
+                  onClick={()=>{
+                    setLat(place.lat)
+                    setLng(place.lng)
+                    setLocInfo(`Selected: ${place.label}`)
+                    setPlaceResults([])
+                  }}
+                  style={{display:'flex',alignItems:'center',gap:10,textAlign:'left',padding:'10px 11px',borderRadius:13,border:'1px solid rgba(207,230,251,.95)',background:'#f8fcff',cursor:'pointer'}}
+                >
+                  <span style={{width:30,height:30,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',background:'#eaf6ff',color:'#1d73b9',flexShrink:0}}><Ic.Map width={15} height={15}/></span>
+                  <span style={{minWidth:0}}>
+                    <span style={{display:'block',fontSize:12,fontWeight:900,color:'var(--nv)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{place.label}</span>
+                    <span style={{display:'block',fontSize:10,color:'var(--mu)',marginTop:2}}>{place.lat.toFixed(4)}, {place.lng.toFixed(4)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <MapPicker lat={lat} lng={lng} onPinMove={(la,lo)=>{setLat(la);setLng(lo)}} height={280}/>

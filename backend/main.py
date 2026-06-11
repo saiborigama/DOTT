@@ -230,6 +230,9 @@ def cap_rider_earning(amount: Optional[float], delivery_fee: Optional[float]) ->
     delivery_fee = max(0.0, float(delivery_fee or 0.0))
     return round(min(amount, delivery_fee), 2)
 
+def payable_rider_earning(order: "Order") -> float:
+    return cap_rider_earning(getattr(order, "rider_earning", 0.0), getattr(order, "delivery_fee", 0.0))
+
 def calc_rider_earning(km: float, delivery_fee: Optional[float] = None) -> float:
     """Rider gets base + per-km rate."""
     earning = 20.0 if km <= 0 else round(20 + km * 8, 1)
@@ -2366,10 +2369,41 @@ def user_dict(u: User, dist=None):
     if dist is not None: d["distanceKm"] = round(dist, 1)
     return d
 
+def public_asset_url(value: Optional[str]) -> Optional[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith(("http://", "https://", "data:", "blob:")):
+        return raw
+    if raw.startswith("/"):
+        return f"{settings.public_base_url}{raw}"
+    if raw.startswith("uploads/"):
+        return f"{settings.public_base_url}/{raw}"
+    return raw
+
+def public_asset_list(values):
+    if not isinstance(values, list):
+        return []
+    return [url for url in (public_asset_url(item) for item in values) if url]
+
+def public_color_assets(colors):
+    if not isinstance(colors, list):
+        return []
+    normalized = []
+    for color in colors:
+        if not isinstance(color, dict):
+            normalized.append(color)
+            continue
+        item = dict(color)
+        item["imageUrl"] = public_asset_url(item.get("imageUrl"))
+        item["images"] = public_asset_list(item.get("images") or [])
+        normalized.append(item)
+    return normalized
+
 def shop_dict(s: Shop, dist=None):
     d = {"id":s.id,"name":s.name,"description":s.description,"category":s.category,
          "address":s.address,"city":s.city,"pincode":s.pincode,"phone":s.phone,
-         "lat":s.lat,"lng":s.lng,"imageUrl":s.image_url,"openTime":s.open_time,
+         "lat":s.lat,"lng":s.lng,"imageUrl":public_asset_url(s.image_url),"openTime":s.open_time,
          "closeTime":s.close_time,"deliveryTime":s.delivery_time,"minOrder":s.min_order,
          "isOpen":s.is_open,"isSuspended":s.is_suspended,"isActive":s.is_active,"totalOrders":s.total_orders,
          "rating":round(s.rating, 1) if s.rating else 0.0,"ratingCount":s.rating_count,
@@ -2426,17 +2460,17 @@ def product_dict(p: Product, include_reviews=False):
     total_stock = sum(s.get("stock",0) for s in sizes_list) if (p.has_sizes and sizes_list) else p.stock
     shop = getattr(p, "shop", None)
     d = {"id":p.id,"shopId":p.shop_id,"name":p.name,"description":p.description,
-         "price":p.price,"category":p.category,"imageUrl":p.image_url,
+         "price":p.price,"category":p.category,"imageUrl":public_asset_url(p.image_url),
          "title":getattr(p, "title", None),
          "productType":getattr(p, "product_type", None),
          "color":getattr(p, "color", None),
-         "images":images_list,"colors":colors_list,
+         "images":public_asset_list(images_list),"colors":public_color_assets(colors_list),
          "brand":getattr(p,'brand',None),"material":getattr(p,'material',None),
          "fabric":getattr(p,'fabric',None),"gender":getattr(p,'gender',None),
          "pattern":getattr(p,'pattern',None),"fit":getattr(p,'fit',None),
          "occasion":getattr(p,'occasion',None),"sleeveType":getattr(p,'sleeve_type',None),
          "length":getattr(p,'length',None),"tags":tags_list,
-         "processedImageUrl":getattr(p, "processed_image_url", None),
+         "processedImageUrl":public_asset_url(getattr(p, "processed_image_url", None)),
          "imageAiMeta":json_loads_safe(getattr(p, "image_ai_meta", "{}"), {}),
          "visualIndexed":bool(getattr(p, "visual_embedding", None)),
          "visualEmbeddingModel":getattr(p, "visual_embedding_model", None),
@@ -2489,7 +2523,7 @@ def order_dict(o: Order):
         "gstRate":getattr(o, "gst_rate", 0.05),
         "gstAmount":getattr(o, "gst_amount", 0.0),
         "freeDeliveryDiscount":getattr(o, "free_delivery_discount", 0.0),
-        "discount":o.discount,"total":o.total,"riderEarning":cap_rider_earning(o.rider_earning, o.delivery_fee),
+        "discount":o.discount,"total":o.total,"riderEarning":payable_rider_earning(o),
         "tryAndReturnEligible":getattr(o, "try_and_return_eligible", False),
         "returnWindowHours":getattr(o, "return_window_hours", 48),
         "refundAmount":getattr(o, "refund_amount", 0.0),
@@ -2520,7 +2554,7 @@ def order_dict(o: Order):
         "pickupOtpVerified": bool(getattr(o, "pickup_otp_used", False)),
         "pickupOtpVerifiedAt": o.pickup_otp_verified_at.isoformat() if getattr(o, "pickup_otp_verified_at", None) else None,
         "items":[{"id":i.id,"productId":i.product_id,"name":i.name,
-                  "price":i.price,"qty":i.qty,"size":i.size,"imageUrl":i.image_url} for i in o.items],
+                  "price":i.price,"qty":i.qty,"size":i.size,"imageUrl":public_asset_url(i.image_url)} for i in o.items],
         "returnRequest": ret,
     }
 
@@ -2805,7 +2839,7 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(get_cu
     with open(filepath, "wb") as f:
         f.write(contents)
     url = f"/uploads/{filename}"
-    return {"url": url, "filename": filename}
+    return {"url": public_asset_url(url), "path": url, "filename": filename}
 
 @app.post("/api/upload/product-image-transform")
 async def upload_product_image_transform(
@@ -3227,7 +3261,18 @@ def vendor_reject(order_id: int, user: User = Depends(get_current_user), db: Ses
 @app.get("/api/orders/rider/available")
 def rider_available(lat: Optional[float]=None, lng: Optional[float]=None, radius: Optional[float]=8.0,
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    orders = db.query(Order).filter(Order.status == OrderStatusEnum.CONFIRMED, Order.rider_id == None).all()
+    cutoff = utc_now() - timedelta(hours=24)
+    orders = (
+        db.query(Order)
+        .filter(
+            Order.status == OrderStatusEnum.CONFIRMED,
+            Order.rider_id == None,
+            Order.confirmed_at != None,
+            Order.confirmed_at >= cutoff,
+        )
+        .order_by(Order.confirmed_at.desc())
+        .all()
+    )
     result = []
     for o in orders:
         dist = haversine(lat, lng, o.shop.lat, o.shop.lng) if (lat and lng and o.shop) else None
@@ -3622,7 +3667,7 @@ def rider_return_pickups(lat: Optional[float]=None, lng: Optional[float]=None, r
             "customerLng": order.delivery_lng if order else None,
             "customerAddress": order.delivery_address if order else None,
             "shopName": shop.name if shop else None,
-            "productDetails": [{"name": i.name, "qty": i.qty, "size": i.size, "imageUrl": i.image_url} for i in (order.items if order else [])],
+            "productDetails": [{"name": i.name, "qty": i.qty, "size": i.size, "imageUrl": public_asset_url(i.image_url)} for i in (order.items if order else [])],
             "pickupTimeWindow": rr.pickup_eta,
             "reason": rr.reason,
             "distanceKm": round(dist, 1) if dist is not None else None,
@@ -3701,7 +3746,7 @@ def active_return_pickups(user: User = Depends(get_current_user), db: Session = 
             "customerLng": order.delivery_lng if order else None,
             "pickupStatus": rr.pickup_status,
             "pickupTimeWindow": rr.pickup_eta,
-            "productDetails": [{"name": i.name, "qty": i.qty, "size": i.size, "imageUrl": i.image_url} for i in (order.items if order else [])],
+            "productDetails": [{"name": i.name, "qty": i.qty, "size": i.size, "imageUrl": public_asset_url(i.image_url)} for i in (order.items if order else [])],
         })
     return result
 
@@ -4583,7 +4628,7 @@ def rider_performance(user: User = Depends(get_current_user), db: Session = Depe
     ratings = db.query(RiderRating).filter(RiderRating.rider_id == user.id).all()
     avg_rating = round(sum(r.rating for r in ratings)/len(ratings), 1) if ratings else 0
     rows = db.query(Order).filter(Order.rider_id == user.id, Order.status == OrderStatusEnum.DELIVERED).all()
-    total_earned = sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows)
+    total_earned = sum(payable_rider_earning(o) for o in rows)
     on_time = sum(1 for o in rows if not getattr(o, "is_delayed", False))
     late = sum(1 for o in rows if getattr(o, "is_delayed", False))
     total_bonus = sum(getattr(o, "rider_bonus", 0.0) or 0.0 for o in rows)
@@ -4758,7 +4803,7 @@ def sync_settlement_invoices(db: Session):
         if entity_type == "vendor":
             product_value = round(sum(vendor_settlement_product_value(o) for o in rows), 2)
             delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
-            rider_earning_amount = round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 2)
+            rider_earning_amount = round(sum(payable_rider_earning(o) for o in rows), 2)
             total_sales = product_value
             commission_pct = float(_commission_rate.get("vendor_commission_pct", 0))
             commission_amount = round(product_value * commission_pct / 100.0, 2)
@@ -4767,7 +4812,7 @@ def sync_settlement_invoices(db: Session):
         else:
             product_value = round(sum(vendor_merchandise_total(o) for o in rows), 2)
             delivery_collected = round(sum((o.delivery_fee or 0.0) for o in rows), 2)
-            rider_earning_amount = round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 2)
+            rider_earning_amount = round(sum(payable_rider_earning(o) for o in rows), 2)
             total_sales = delivery_collected
             commission_pct = 0.0
             commission_amount = 0.0
