@@ -2128,19 +2128,6 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
   .auth-otp-input{width:34px;height:46px}
 }
 
-/* FINAL MOBILE HOME/AUTH FIXES */
-.home-time-strip{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:10px 18px;background:rgba(255,255,255,.94);border-bottom:1px solid rgba(207,230,251,.9);
-  box-shadow:0 10px 24px rgba(35,135,232,.06);position:relative;z-index:190
-}
-.home-time-main{display:flex;align-items:baseline;gap:8px;min-width:0}
-.home-time-clock{font-size:18px;font-weight:900;color:var(--nv);letter-spacing:-.2px;white-space:nowrap}
-.home-time-date{font-size:11px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.35px;white-space:nowrap}
-.home-time-meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;font-size:11px;font-weight:800;color:var(--bl2);white-space:nowrap}
-.home-time-meta span{display:inline-flex;align-items:center;border:1px solid rgba(207,230,251,.92);background:#f8fcff;border-radius:999px;padding:5px 8px}
-.home-time-location{max-width:180px;overflow:hidden;text-overflow:ellipsis}
-
 @media(max-width:720px){
   .auth-page{display:flex!important;align-items:center!important;justify-content:center!important;min-height:100svh!important;height:100svh!important;overflow:auto!important;padding:0!important}
   .auth-right{min-height:100svh!important;height:auto!important;align-items:center!important;justify-content:center!important;padding:14px!important;overflow:visible!important}
@@ -2161,11 +2148,6 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
   .catbar-inner{padding:0 10px!important;gap:6px!important}
   .cat-btn{min-height:42px!important;padding:9px 12px!important;border-bottom-width:2px!important}
   .cat-label{font-size:12px!important;font-weight:900!important}
-  .home-time-strip{padding:8px 12px;align-items:flex-start;flex-direction:column;gap:6px}
-  .home-time-clock{font-size:17px}
-  .home-time-meta{width:100%;justify-content:flex-start;overflow-x:auto;scrollbar-width:none}
-  .home-time-meta::-webkit-scrollbar{display:none}
-  .home-time-location{max-width:220px}
   .banner-wrap{margin-top:10px!important}
 }
 
@@ -2348,35 +2330,6 @@ function LiveOrderMap({order, riderLocation}){
   )
 }
 
-function useLiveClock(){
-  const [now,setNow]=useState(()=>new Date())
-  useEffect(()=>{
-    const tick=()=>setNow(new Date())
-    tick()
-    const timer=setInterval(tick,1000)
-    return()=>clearInterval(timer)
-  },[])
-  return now
-}
-
-function HomeTimeStrip({locationLabel='', shopCount=0, productCount=0}){
-  const now=useLiveClock()
-  const time=now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})
-  const date=now.toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short'})
-  return(
-    <div className="home-time-strip">
-      <div className="home-time-main">
-        <span className="home-time-clock">{time}</span>
-        <span className="home-time-date">{date}</span>
-      </div>
-      <div className="home-time-meta">
-        <span>{shopCount || 0} shops</span>
-        <span>{productCount || 0} products</span>
-        {locationLabel&&<span className="home-time-location">{locationLabel}</span>}
-      </div>
-    </div>
-  )
-}
 function LazySection({children,minHeight=180,rootMargin='200px 0px'}){
   const [visible,setVisible]=useState(false)
   const ref=useRef(null)
@@ -6534,8 +6487,6 @@ function HomePage({user,userLoc,radius,cart,onCartUpdate,onShopOpen,onProductCli
 
   return(
     <div>
-      <HomeTimeStrip locationLabel={userLoc ? 'Near your selected location' : 'Set delivery location'} shopCount={shops.length} productCount={products.length}/>
-
       {/* Category bar */}
       <div className="catbar">
         <div className="catbar-inner">
@@ -7054,36 +7005,8 @@ export default function App(){
 
   useEffect(()=>{
     if(typeof window==='undefined' || typeof document==='undefined') return
-    let compact = false
-    let ticking = false
-    const setCompactClass = next => {
-      if(compact === next) return
-      compact = next
-      document.querySelectorAll('.topnav').forEach(el=>el.classList.toggle('topnav-compact', next))
-      document.querySelectorAll('.catbar').forEach(el=>el.classList.toggle('compact', next))
-    }
-    const apply = () => {
-      ticking = false
-      if(page !== 'home' || showCart || showCheckout){
-        setCompactClass(false)
-        return
-      }
-      const y = window.scrollY || document.documentElement.scrollTop || 0
-      setCompactClass(compact ? y > 28 : y > 120)
-    }
-    const onScroll = () => {
-      if(ticking) return
-      ticking = true
-      window.requestAnimationFrame(apply)
-    }
-    apply()
-    window.addEventListener('scroll', onScroll, { passive:true })
-    window.addEventListener('resize', onScroll)
-    return()=>{
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-      setCompactClass(false)
-    }
+    document.querySelectorAll('.topnav').forEach(el=>el.classList.remove('topnav-compact'))
+    document.querySelectorAll('.catbar').forEach(el=>el.classList.remove('compact'))
   },[page,showCart,showCheckout])
 
   useEffect(()=>{
