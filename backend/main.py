@@ -230,15 +230,21 @@ def cap_rider_earning(amount: Optional[float], delivery_fee: Optional[float]) ->
     delivery_fee = max(0.0, float(delivery_fee or 0.0))
     return round(min(amount, delivery_fee), 2)
 
+def delivery_fee_rider_payout(delivery_fee: Optional[float]) -> float:
+    return round(max(0.0, float(delivery_fee or 0.0)), 2)
+
 def payable_rider_earning(order: "Order") -> float:
-    return cap_rider_earning(getattr(order, "rider_earning", 0.0), getattr(order, "delivery_fee", 0.0))
+    delivery_fee = delivery_fee_rider_payout(getattr(order, "delivery_fee", 0.0))
+    if delivery_fee > 0:
+        return delivery_fee
+    return round(max(0.0, float(getattr(order, "rider_earning", 0.0) or 0.0)), 2)
 
 def calc_rider_earning(km: float, delivery_fee: Optional[float] = None) -> float:
-    """Rider gets base + per-km rate."""
+    """Rider payout follows the delivery fee charged to the customer."""
+    if delivery_fee is not None:
+        return delivery_fee_rider_payout(delivery_fee)
     earning = 20.0 if km <= 0 else round(20 + km * 8, 1)
-    if delivery_fee is None:
-        return earning
-    return cap_rider_earning(earning, delivery_fee)
+    return earning
 
 def calc_surge_fee(now: Optional[datetime] = None, weather: Optional[str] = None) -> tuple[float, list[str]]:
     now = now or utc_now()
@@ -375,10 +381,7 @@ def finalize_delivery_timing(order: Order):
     order.rider_bonus = 0.0 if is_delayed else RIDER_ON_TIME_BONUS
     order.rider_penalty = RIDER_DELAY_PENALTY if is_delayed else 0.0
     order.countdown_alert_level = "DELAYED" if is_delayed else "COMPLETED"
-    order.rider_earning = cap_rider_earning(
-        (order.rider_earning or 0.0) + order.rider_bonus - order.rider_penalty,
-        order.delivery_fee,
-    )
+    order.rider_earning = delivery_fee_rider_payout(order.delivery_fee)
 
 # ── OTP helpers ────────────────────────────────────────────────────
 def generate_otp() -> str:
@@ -3895,7 +3898,7 @@ def rider_earnings(rangeKey: Optional[str] = "last2days", startDate: Optional[st
         ).all()
         return {
             "trips": len(rows),
-            "earned": round(sum(cap_rider_earning(o.rider_earning, o.delivery_fee) for o in rows), 1),
+            "earned": round(sum(payable_rider_earning(o) for o in rows), 1),
             "totalKm": round(sum(o.delivery_km or 0 for o in rows), 1),
         }
 
@@ -3922,7 +3925,7 @@ def rider_history(user: User = Depends(get_current_user), db: Session = Depends(
     return [{"id":o.id,"orderCode":o.order_code,"shopName":o.shop.name,
              "deliveryAddress":o.delivery_address,"total":o.total,
              "deliveryKm":round(o.delivery_km or 0,1),
-             "earning":round(cap_rider_earning(o.rider_earning, o.delivery_fee),1),
+             "earning":round(payable_rider_earning(o),1),
              "deliveredAt":o.delivered_at.isoformat() if o.delivered_at else None} for o in orders]
 
 @app.get("/api/riders/cod-settlement")

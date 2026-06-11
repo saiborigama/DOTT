@@ -2138,6 +2138,7 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
 @media(max-width:600px){
   .topnav{position:fixed!important;top:0!important;left:0!important;right:0!important;width:100%!important;z-index:700!important;padding:8px 8px 6px!important;background:linear-gradient(180deg,#eaf6ff,#dff1ff)!important;box-shadow:0 12px 28px rgba(35,135,232,.14)!important}
   .topnav + main{padding-top:102px!important}
+  .topnav.topnav-scrolled .topnav-loc{display:none!important}
   .topnav.topnav-compact .topnav-loc{max-height:none!important;opacity:1!important;margin-top:0!important;padding-bottom:6px!important;transform:none!important;pointer-events:auto!important}
   .topnav-inner{grid-template-columns:auto minmax(0,1fr) auto!important;min-height:58px!important;background:#fff!important;border:1px solid rgba(207,230,251,.95)!important;box-shadow:0 10px 24px rgba(56,73,89,.08)!important}
   .topnav-loc{margin-top:4px!important;padding:0 8px 4px!important;max-height:32px!important}
@@ -2152,8 +2153,8 @@ main,.wrap,.page,.sec-wrap,.auth-page,.auth-card,.co-modal,.pd-modal,.cart-drawe
   .search-cat{display:block!important;min-width:58px!important;width:58px!important;padding:0 6px!important;font-size:11px!important}
   .search-inp{font-size:13px!important}
   .nav-acts .nav-act:not(:first-child):not(:last-child){display:none!important}
-  .catbar{position:sticky!important;top:102px!important;z-index:450!important;background:rgba(255,255,255,.96)!important;border-bottom:1px solid rgba(207,230,251,.9)!important;box-shadow:0 12px 26px rgba(35,135,232,.08)!important}
-  .catbar.catbar-floating{position:fixed!important;left:0!important;right:0!important;top:102px!important;z-index:650!important;max-width:100%!important;margin:0!important;border-radius:0!important}
+  .catbar{position:sticky!important;top:102px!important;z-index:450!important;background:rgba(255,255,255,.96)!important;border:1px solid rgba(207,230,251,.9)!important;box-shadow:0 12px 26px rgba(35,135,232,.08)!important;border-radius:16px!important}
+  .catbar.catbar-floating{position:fixed!important;left:8px!important;right:8px!important;top:70px!important;z-index:650!important;max-width:none!important;margin:0!important;padding-top:0!important;border-top:none!important;border-radius:0 0 18px 18px!important}
   .catbar.catbar-floating + .wrap{padding-top:38px!important}
   .catbar.compact{top:102px!important;max-height:none!important;padding:0!important;border-radius:0!important;max-width:100%!important}
   .catbar-inner{padding:0 10px!important;gap:18px!important}
@@ -7020,7 +7021,10 @@ export default function App(){
     if(typeof window==='undefined' || typeof document==='undefined') return
     const syncFloatingCategory = () => {
       const shouldFloat = page === 'home' && !showCart && !showCheckout && (window.scrollY || document.documentElement.scrollTop || 0) > 40
-      document.querySelectorAll('.topnav').forEach(el=>el.classList.remove('topnav-compact'))
+      document.querySelectorAll('.topnav').forEach(el=>{
+        el.classList.remove('topnav-compact')
+        el.classList.toggle('topnav-scrolled', shouldFloat)
+      })
       document.querySelectorAll('.catbar').forEach(el=>{
         el.classList.remove('compact')
         el.classList.toggle('catbar-floating', shouldFloat)
@@ -7032,6 +7036,7 @@ export default function App(){
     return()=>{
       window.removeEventListener('scroll', syncFloatingCategory)
       window.removeEventListener('resize', syncFloatingCategory)
+      document.querySelectorAll('.topnav').forEach(el=>el.classList.remove('topnav-scrolled'))
       document.querySelectorAll('.catbar').forEach(el=>el.classList.remove('catbar-floating'))
     }
   },[page,showCart,showCheckout])

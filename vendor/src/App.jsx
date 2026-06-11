@@ -127,7 +127,7 @@ function saveDemoVendorDb(db) {
 function getDemoAnalytics(db) {
   const delivered = db.orders.filter(o => o.status === 'DELIVERED')
   const active = db.orders.filter(o => !['DELIVERED', 'CANCELLED'].includes(o.status))
-  const totalRevenue = delivered.reduce((sum, o) => sum + Number(o.subtotal || o.total || 0), 0)
+  const totalRevenue = delivered.reduce((sum, o) => sum + merchandiseTotal(o), 0)
   return {
     today: { revenue: 2498, orders: 2 },
     week: { revenue: 6840, orders: 6 },
@@ -140,13 +140,20 @@ function getDemoAnalytics(db) {
 
 function getDemoEarnings(db) {
   const analytics = getDemoAnalytics(db)
+  const delivered = db.orders.filter(o => o.status === 'DELIVERED')
+  const productValue = delivered.reduce((sum, o) => sum + merchandiseTotal(o), 0)
+  const pendingAmount = analytics.month.revenue
   return {
-    totalRevenue: analytics.allTime.revenue,
-    netEarnings: analytics.allTime.revenue,
+    productValue,
+    totalRevenue: productValue || analytics.allTime.revenue,
+    netEarnings: productValue || analytics.allTime.revenue,
     thisMonth: { revenue: analytics.month.revenue, orders: analytics.month.orders },
     totalOrders: analytics.allTime.orders,
     platformFees: 0,
-    pendingPayout: analytics.month.revenue,
+    pendingAmount,
+    pendingPayout: pendingAmount,
+    invoices: [],
+    paymentHistory: [],
   }
 }
 
@@ -869,7 +876,8 @@ function merchandiseTotal(order) {
   if (total > 0 && nonVendorCharges > 0 && (subtotal <= 0 || Math.abs(subtotal - total) < 0.01 || subtotal > total)) {
     return adjustedTotal
   }
-  return subtotal > 0 ? subtotal : adjustedTotal
+  if (subtotal > 0) return subtotal
+  return adjustedTotal > 0 ? adjustedTotal : total
 }
 
 /* -- ICONS -- */

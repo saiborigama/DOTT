@@ -319,6 +319,7 @@ class SettlementRulesTest(unittest.TestCase):
         )
 
         self.assertEqual(m.cap_rider_earning(order.rider_earning, order.delivery_fee), 30)
+        self.assertEqual(m.payable_rider_earning(order), 30)
         m.sync_settlement_invoices(self.db)
         rider_invoice = self.db.query(m.SettlementInvoice).filter_by(entity_type="rider", user_id=self.rider.id).one()
         self.assertEqual(rider_invoice.delivery_collected, 30)
@@ -329,6 +330,27 @@ class SettlementRulesTest(unittest.TestCase):
         rider_row = dashboard["riders"][0]
         self.assertEqual(rider_row["netAdminPayable"], 30)
         self.assertEqual(rider_row["netRiderOwes"], 0)
+
+    def test_rider_payout_matches_customer_delivery_fee_even_when_stored_lower(self):
+        m = self.main
+        delivered_at = utc_now() - timedelta(hours=1)
+
+        order = self.add_order(
+            "DELIVERY-FEE-MATCH",
+            status=m.OrderStatusEnum.DELIVERED,
+            payment="upi",
+            product_value=500,
+            delivery_fee=35,
+            rider_earning=20,
+            delivered_at=delivered_at,
+        )
+
+        self.assertEqual(m.payable_rider_earning(order), 35)
+        m.sync_settlement_invoices(self.db)
+        rider_invoice = self.db.query(m.SettlementInvoice).filter_by(entity_type="rider", user_id=self.rider.id).one()
+        self.assertEqual(rider_invoice.delivery_collected, 35)
+        self.assertEqual(rider_invoice.gross_earnings, 35)
+        self.assertEqual(rider_invoice.pending_amount, 35)
 
 
 if __name__ == "__main__":

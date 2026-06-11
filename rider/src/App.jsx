@@ -275,9 +275,8 @@ function formatRiderMoney(value) {
 function riderPayable(order = {}) {
   const deliveryFee = Number(order.deliveryFee ?? order.deliveryCharge ?? 0)
   const earning = Number(order.riderEarning ?? order.earning ?? 0)
-  if (deliveryFee <= 0) return Math.max(0, earning)
-  if (earning <= 0) return deliveryFee
-  return Math.min(earning, deliveryFee)
+  if (deliveryFee > 0) return deliveryFee
+  return Math.max(0, earning)
 }
 
 function formatRiderDate(value) {
